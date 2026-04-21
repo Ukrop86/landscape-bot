@@ -1,7 +1,17 @@
 node_modules/
-.env
 dist/
 build/
 coverage/
 *.log
 credentials.json
+
+# generated TS files in src and scripts
+src/**/*.js
+src/**/*.js.map
+src/**/*.d.ts
+src/**/*.d.ts.map
+
+scripts/**/*.js
+scripts/**/*.js.map
+scripts/**/*.d.ts
+scripts/**/*.d.ts.map
