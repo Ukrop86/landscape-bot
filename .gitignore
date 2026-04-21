@@ -14,4 +14,7 @@ src/**/*.d.ts.map
 scripts/**/*.js
 scripts/**/*.js.map
 scripts/**/*.d.ts
-scripts/**/*.d.ts.map
+scripts/**/*.d.ts.map  
+
+
+
