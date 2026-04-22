@@ -97,7 +97,6 @@ export async function startBulkQtyForObject(params: {
   date: string;
   foremanTgId: number;
 
-  // ✅ ДОДАТИ
   s: any;
   callbackQueryId?: string;
 
@@ -1006,7 +1005,6 @@ export function buildBulkQtyScreen(st: any, cb: any) {
     lines.push(`${mark} ${it.workName}${isActive}\n   ${qtyLine}`);
   }
 
-  // ✅ блок активної роботи
   lines.push(`\n*Активна робота:* ${active.workName}`);
   if ((active.sessionsCount ?? 0) > 0 || (active.sec ?? 0) > 0) {
     lines.push(
@@ -1288,6 +1286,41 @@ if (showActions) {
   return lines.join("\n");
 }
 
+export function buildRoadApprovedShortText(
+  ev: any,
+  opts?: { title?: string },
+) {
+  let payload: any = {};
+  try {
+    payload = ev.payload ? JSON.parse(String(ev.payload)) : {};
+  } catch {}
+
+  const esc = (s: any) => String(s ?? "").replace(/([_*`\[])/g, "\\$1");
+  const fmt2 = (n: any) =>
+    Number.isFinite(Number(n)) ? Number(n).toFixed(2) : "0.00";
+
+  const totalPeople = Array.isArray(payload.riders) ? payload.riders.length : 0;
+  const workTotal = Number(payload.workGrandTotal ?? 0);
+  const roadTotal = Number(payload.amount ?? 0);
+  const totalToPay = Number(payload.totalToPay ?? (workTotal + roadTotal));
+  const carTitle = String(payload.carName ?? "").trim();
+
+  return [
+    opts?.title ? String(opts.title) : "✅ *День затверджено*",
+    `📅 Дата: ${esc(ev.date)}`,
+    `🚗 Авто: ${carTitle ? esc(carTitle) : "—"}`,
+    "",
+    `📏 Км за день: *${esc(fmt2(payload.kmDay ?? 0))}*`,
+    `👥 Людей: *${esc(totalPeople)}*`,
+    "",
+    `💼 Роботи: *${esc(fmt2(workTotal))}*`,
+    `🛣 Дорога: *${esc(fmt2(roadTotal))}*`,
+    `💰 *Разом: ${esc(fmt2(totalToPay))}*`,
+  ].join("\n");
+}
+
+
+
 // -------------------- Events compute --------------------
 
 export function csvToIds(csv: string): string[] {
@@ -1448,6 +1481,57 @@ export async function fetchEventsSafe(date: string, foremanTgId: number) {
     return await (fetchEvents as any)(date, foremanTgId);
   }
 }
+
+
+export async function findCarBusyByAnotherForeman(params: {
+  date: string;
+  carId: string;
+  selfForemanTgId: number;
+}) {
+  const [evs, users] = await Promise.all([
+    fetchEvents({
+      date: params.date,
+      foremanTgId: "",
+    } as any).catch(() => []),
+    fetchUsers().catch(() => []),
+  ]);
+console.log("CAR BUSY EVS:", evs);
+  const userNameByTgId = new Map(
+    (users ?? []).map((u: any) => [
+      Number(u.tgId ?? 0),
+      String(u.name ?? u.fullName ?? u.username ?? u.tgId ?? ""),
+    ]),
+  );
+
+  const hit = (evs ?? [])
+    .filter((e: any) => String(e.type ?? "") === "RTS_SETUP_CAR")
+    .filter((e: any) => String(e.carId ?? "") === String(params.carId))
+    .filter(
+      (e: any) =>
+        Number(e.foremanTgId ?? 0) > 0 &&
+        Number(e.foremanTgId ?? 0) !== Number(params.selfForemanTgId),
+    )
+    .sort((a: any, b: any) =>
+      String(b.updatedAt ?? b.ts ?? "").localeCompare(
+        String(a.updatedAt ?? a.ts ?? ""),
+      ),
+    )[0];
+
+  if (!hit) return null;
+  return {
+    foremanTgId: Number(hit.foremanTgId ?? 0),
+    foremanName:
+      userNameByTgId.get(Number(hit.foremanTgId ?? 0)) ||
+      `Бригадир ${hit.foremanTgId}`,
+  };
+}
+
+
+
+
+
+
+
 
 export function parsePayload(x: any) {
   try {

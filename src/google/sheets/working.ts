@@ -269,12 +269,12 @@ const events = await fetchEvents(filter);
 }
 
 
-export type FetchEventsFilter = {
+type FetchEventsFilter = {
   date: string;
   foremanTgId: number;
   types?: string[];
   objectId?: string;
-  status?: EventRow["status"];
+  status?: string;
 };
 
 export async function fetchEvents(filter: FetchEventsFilter): Promise<EventRow[]> {
@@ -285,7 +285,7 @@ export async function fetchEvents(filter: FetchEventsFilter): Promise<EventRow[]
     [
       EVENTS_HEADERS.eventId,
       EVENTS_HEADERS.ts,
-      EVENTS_HEADERS.date,
+      EVENTS_HEADERS.date,  
       EVENTS_HEADERS.foremanTgId,
       EVENTS_HEADERS.type,
       EVENTS_HEADERS.status,
@@ -327,7 +327,16 @@ export async function fetchEvents(filter: FetchEventsFilter): Promise<EventRow[]
     const foremanTgId = Number(s(row[idx(EVENTS_HEADERS.foremanTgId)]) || 0);
 
     if (date !== filter.date) continue;
-    if (foremanTgId !== filter.foremanTgId) continue;
+
+    // ✅ фільтруємо по бригадиру тільки якщо він реально переданий
+    if (
+      filter.foremanTgId !== undefined &&
+      filter.foremanTgId !== null &&
+      String(filter.foremanTgId).trim() !== "" &&
+      foremanTgId !== Number(filter.foremanTgId)
+    ) {
+      continue;
+    }
 
     const type = s(row[idx(EVENTS_HEADERS.type)]);
     if (filter.types?.length && !filter.types.includes(type)) continue;
@@ -344,21 +353,14 @@ export async function fetchEvents(filter: FetchEventsFilter): Promise<EventRow[]
       date,
       foremanTgId,
       type,
-
-      // тут можна залишити як string (пусто = "")
-      objectId: objectId, // або objectId || "" якщо хочеш гарантовано
+      objectId,
       carId: s(row[idx(EVENTS_HEADERS.carId)]),
       employeeIds: s(row[idx(EVENTS_HEADERS.employeeIds)]),
       payload: s(row[idx(EVENTS_HEADERS.payload)]),
-
-      // ✅ number|undefined (бо в типі так і є)
       chatId: toNumU(row[idx(EVENTS_HEADERS.chatId)]) ?? 0,
       msgId: toNumU(row[idx(EVENTS_HEADERS.msgId)]) ?? 0,
-      // ✅ ВАЖЛИВО: refEventId як string, без undefined
       refEventId: s(row[idx(EVENTS_HEADERS.refEventId)]),
-
       status,
-      // якщо updatedAt в типі string — теж як string
       updatedAt: s(row[idx(EVENTS_HEADERS.updatedAt)]),
     });
   }

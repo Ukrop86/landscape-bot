@@ -149,7 +149,7 @@ export type RoadMember = {
 export type State = FlowBaseState & {
   step: Step;
   date: string;
-
+  foremanName?: string;
   pendingBulkCoef?: {
   objectId: string;
   employeeIds: string[];

@@ -236,13 +236,11 @@ await setDayStatus({
     return true;
   }
 
-  const { buildRoadAdminTextFromEventPayload, sendLongHtml } = await import("./roadTimesheet.utils.js");
+const { buildRoadApprovedShortText, sendLongHtml } = await import("./roadTimesheet.utils.js");
 
-  const approvedText = buildRoadAdminTextFromEventPayload(evUpdated, {
-    hideMoney: false,
-    showActions: false,
-    title: "✅ *День затверджено. Підсумок:*",
-  });
+const approvedText = buildRoadApprovedShortText(evUpdated, {
+  title: "✅ *День затверджено*",
+});
 
   try {
     await sendLongHtml(bot, targetChatId, approvedText, {

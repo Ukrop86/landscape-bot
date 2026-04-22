@@ -17,7 +17,8 @@ import {  canStartDay,  canPause,  canResume,  canFinishDay,  canStartReturn,  c
 import {  ensureEmployees,  ensureObjectState,  objectName,  carName,  empName,  joinEmpNames,  findOpen,  openKey,
   fileIdFromPhoto,  now,  uniq,  fmtNum,  parseKm,  parseQty,  mdEscapeSimple,  roundToQuarterHours,  askNextMessage,  buildBulkQtyScreen,  sendLongHtml,  sendSaveScreen,
   getAdminTgIds,  pickBrigadierFromPeople,  isSenior,  buildRoadAdminTextFromEventPayload,  computeFromRts,  computeRoadSecondsFromRts,  writeEvent,  safeEditMessageText,
-  hasOpenSessionForEmployeeOnObject,  startBulkQtyForObject,  fetchEventsSafe,  parsePayload, ensureStateReady } from "./roadTimesheet.utils.js";
+  hasOpenSessionForEmployeeOnObject,  startBulkQtyForObject,  fetchEventsSafe,  parsePayload, ensureStateReady, 
+  buildRoadApprovedShortText, findCarBusyByAnotherForeman } from "./roadTimesheet.utils.js";
 
 import {  appendEvents,  refreshDayChecklist,  upsertTimesheetRow,  upsertAllowanceRows,  upsertOdometerDay,  getEventById,  updateEventById,
 } from "../../google/sheets/working.js";
@@ -36,20 +37,70 @@ function isLocked(status?: string) {
   return s === "ЗДАНО" || s === "ЗАТВЕРДЖЕНО";
 }
 
+
+function getForemanNameByTgId(root: Record<number, State>, foremanTgId: number) {
+  const st = root[foremanTgId];
+  return st?.foremanName || `Бригадир ${foremanTgId}`;
+}
+
+function findCarOwner(
+  root: Record<number, State>,
+  carId: string,
+  selfForemanTgId: number, 
+) {
+  for (const [key, otherState] of Object.entries(root)) {
+    const otherForemanTgId = Number(key);
+    if (!otherForemanTgId || otherForemanTgId === selfForemanTgId) continue;
+    if (String(otherState?.carId ?? "") === String(carId)) {
+      return {
+        foremanTgId: otherForemanTgId,
+        foremanName: getForemanNameByTgId(root, otherForemanTgId),
+      };
+    }
+  }
+  return null;
+}
+
+function findEmployeeOwner(
+  root: Record<number, State>,
+  employeeId: string,
+  selfForemanTgId: number,
+) {
+  for (const [key, otherState] of Object.entries(root)) {
+    const otherForemanTgId = Number(key);
+    if (!otherForemanTgId || otherForemanTgId === selfForemanTgId) continue;
+
+    const inCarIds = otherState?.inCarIds ?? [];
+    if (inCarIds.includes(employeeId)) {
+      return {
+        foremanTgId: otherForemanTgId,
+        foremanName: getForemanNameByTgId(root, otherForemanTgId),
+      };
+    }
+  }
+  return null;
+}
+
 async function render(
   bot: TelegramBot,
   chatId: number,
   s: any,
   foremanTgId = 0,
 ) {
-  const st = getFlowState<State>(s, FLOW) as State | undefined;
+
+
+  
+if (!foremanTgId) {
+  foremanTgId = Number((s as any)?.userId ?? (s as any)?.tgId ?? chatId ?? 0);
+}
+
+const root = getFlowState<Record<number, State>>(s, FLOW) || {};
+const st = root[foremanTgId] as State | undefined;
+
   if (st) {
     await ensureStateReady(st);
   }
 
-  if (!foremanTgId && st) {
-  foremanTgId = Number((s as any)?.userId ?? (s as any)?.tgId ?? 0);
-}
 
     let savePreviewText = "";
 
@@ -330,7 +381,19 @@ savePreviewText = buildRoadAdminTextFromEventPayload(
 );
   }
 
-  return renderFlow<State>(bot, chatId, s, FLOW, (x: State) => {
+  const x = st;
+if (!x) {
+  return renderFlow<State>(bot, chatId, s, FLOW, () => ({
+    text: "⚠️ Сесію не знайдено.",
+    kb: {
+      inline_keyboard: [
+        [{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }],
+      ],
+    },
+  }));
+}
+
+return renderFlow<State>(bot, chatId, s, FLOW, () => {
     
     const date = x.date || todayISO();
 
@@ -540,15 +603,23 @@ if ((x.step as any) === "OBJ_MONITOR_OBJECT") {
     if (x.step === "PICK_CAR") {
       const cars = x.carsMeta ?? [];
       const slice = cars.slice(0, 24);
-      const rows: TelegramBot.InlineKeyboardButton[][] = slice.map((c) => {
-        const selected = x.carId === c.id;
-        return [
-          {
-            text: `${selected ? "☑️ " : ""}${c.name}`.slice(0, 60),
-            callback_data: `${cb.CAR}${c.id}`,
-          },
-        ];
-      });
+const rows: TelegramBot.InlineKeyboardButton[][] = slice.map((c) => {
+  const selected = x.carId === c.id;
+  const owner = findCarOwner(root, String(c.id), foremanTgId);
+
+  const label = selected
+    ? `☑️ ${c.name}`
+    : owner
+      ? `🔒 ${c.name} — ${owner.foremanName}`
+      : `${c.name}`;
+
+  return [
+    {
+      text: label.slice(0, 60),
+      callback_data: `${cb.CAR}${c.id}`,
+    },
+  ];
+});
 
       rows.push([
         { text: TEXTS.ui.buttons.back, callback_data: `${cb.BACK}start` },
@@ -597,12 +668,23 @@ if ((x.step as any) === "OBJ_MONITOR_OBJECT") {
       const emps = x.employees ?? [];
       const slice = emps.slice(0, 40);
       const inCar = new Set(x.inCarIds);
-      const rows: TelegramBot.InlineKeyboardButton[][] = slice.map((e) => [
-        {
-          text: `${inCar.has(e.id) ? "✅ " : "▫️ "}${e.name}`.slice(0, 60),
-          callback_data: `${cb.EMP_TOGGLE}${e.id}`,
-        },
-      ]);
+const rows: TelegramBot.InlineKeyboardButton[][] = slice.map((e) => {
+  const owner = findEmployeeOwner(root, e.id, foremanTgId);
+  const isMine = inCar.has(e.id);
+
+  const label = isMine
+    ? `✅ ${e.name}`
+    : owner
+      ? `🔒 ${e.name} — ${owner.foremanName}`
+      : `▫️ ${e.name}`;
+
+  return [
+    {
+      text: label.slice(0, 60),
+      callback_data: `${cb.EMP_TOGGLE}${e.id}`,
+    },
+  ];
+});
 
       rows.push([{ text: "✅ Готово", callback_data: cb.PEOPLE_DONE }]);
       rows.push([
@@ -1303,8 +1385,11 @@ export const RoadTimesheetFlow: FlowModule = {
   menuText: TEXTS.buttons.roadTimesheet,
   cbPrefix: PREFIX,
 
-  start: async (bot, chatId, s) => {
-    const existing = getFlowState<State>(s, FLOW) as any;
+start: async (bot, chatId, s) => {
+  const foremanTgId = Number((s as any)?.userId ?? (s as any)?.tgId ?? chatId ?? 0);
+
+  const root = getFlowState<Record<number, State>>(s, FLOW) || {};
+  const existing = root[foremanTgId] as any;
     
     if (existing) {
       existing.date = existing.date || todayISO();
@@ -1321,7 +1406,7 @@ export const RoadTimesheetFlow: FlowModule = {
 
       s.mode = "FLOW"; 
       s.flow = FLOW;
-      return render(bot, chatId, s);
+      return render(bot, chatId, s, foremanTgId);
     }
 
     const st: State = {
@@ -1335,12 +1420,19 @@ export const RoadTimesheetFlow: FlowModule = {
       driveActive: false,
       returnActive: false,
       qtyUnlocked: false,
+      foremanName: String(
+    (s as any)?.userName ??
+    (s as any)?.name ??
+    (s as any)?.fullName ??
+    `Бригадир ${foremanTgId}`
+  ),
     };
 
-    setFlowState(s, FLOW, st);
+    root[foremanTgId] = st;
+    setFlowState(s, FLOW, root);
     s.mode = "FLOW";
     s.flow = FLOW;
-    return render(bot, chatId, s);
+    return render(bot, chatId, s, foremanTgId);
   },
 
   render: async (bot, chatId, s) => render(bot, chatId, s),
@@ -1352,13 +1444,16 @@ export const RoadTimesheetFlow: FlowModule = {
     const msgId = q.message?.message_id;
     if (typeof chatId !== "number" || typeof msgId !== "number") return true;
 
-    const foremanTgId = q.from?.id ?? 0;
+const foremanTgId = q.from?.id ?? 0;
+
+const root = getFlowState<Record<number, State>>(s, FLOW) || {};
+s.flow = FLOW;
 
     const handledAdmin = await handleRoadAdminCallbacks({ bot, q, data });
 if (handledAdmin) return true;
 
     const ensureStatsState = (): State => {
-      const existing = getFlowState<State>(s, FLOW);
+      const existing = root[foremanTgId];
       if (existing) return existing;
 
       const fresh: State = {
@@ -1374,7 +1469,8 @@ if (handledAdmin) return true;
         qtyUnlocked: false,
       };
 
-      setFlowState(s, FLOW, fresh);
+      root[foremanTgId] = fresh;
+setFlowState(s, FLOW, root);
       return fresh;
     };
 
@@ -1393,10 +1489,11 @@ if (handledAdmin) return true;
     });
 
 if (handledStats) {
-  setFlowState(s, FLOW, stStats);
+  root[foremanTgId] = stStats;
+  setFlowState(s, FLOW, root);
 
   if ((stStats as any).step === "START") {
-    await render(bot, chatId, s);
+    await render(bot, chatId, s, foremanTgId);
   }
   return true;
 }
@@ -1591,10 +1688,8 @@ if (handledStats) {
           updatedAt: nowIso,
         });
 
-const approvedText = buildRoadAdminTextFromEventPayload(ev, {
-  hideMoney: false,
-  showActions: false,
-  title: "✅ *День затверджено. Підсумок:*",
+const approvedText = buildRoadApprovedShortText(ev, {
+  title: "✅ *День затверджено*",
 });
 
 try {
@@ -1643,13 +1738,13 @@ try {
         return true;
       }
 
-      const st = getFlowState<State>(s, FLOW);
+      const st = root[foremanTgId];
 if (!st) return true;
 await ensureStateReady(st);
       return true;
     }
 
-    const st = getFlowState<State>(s, FLOW);
+    const st = root[foremanTgId];
     if (!st) return true;
     await ensureStateReady(st);
     const date = st.date;
@@ -1664,29 +1759,33 @@ await ensureStateReady(st);
 if (data === cb.GO_DRIVE) {
   if (st.phase === "DRIVE_DAY" && st.driveActive) {
     st.step = "RUN_DRIVE";
-    setFlowState(s, FLOW, st);
-    await render(bot, chatId, s);
+    root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+    await render(bot, chatId, s, foremanTgId);
     return true;
   }
 
   if (st.phase === "RETURN_DRIVE" && st.returnActive) {
     st.step = "RETURN_MENU";
-    setFlowState(s, FLOW, st);
-    await render(bot, chatId, s);
+    root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+    await render(bot, chatId, s, foremanTgId);
     return true;
   }
 
   if (st.phase === "WAIT_RETURN") {
     st.step = "RETURN_MENU";
-    setFlowState(s, FLOW, st);
-    await render(bot, chatId, s); 
+    root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+    await render(bot, chatId, s, foremanTgId); 
     return true;
   }
 
   if (st.phase === "PAUSED_AT_OBJECT" || st.phase === "WORKING_AT_OBJECT") {
     st.step = st.arrivedObjectId ? "AT_OBJECT_MENU" : "PAUSED_PICK_OBJECT";
-    setFlowState(s, FLOW, st);
-    await render(bot, chatId, s);
+    root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+    await render(bot, chatId, s, foremanTgId);
     return true;
   }
 
@@ -1707,8 +1806,9 @@ if (data.startsWith(cb.MONITOR_ADD_WORKS)) {
   st.returnAfterPlanWorksArrivedObjectId = st.arrivedObjectId ?? oid;
 
   st.step = "PLAN_WORKS_PICK";
-  setFlowState(s, FLOW, st);
-  await render(bot, chatId, s);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
@@ -1716,8 +1816,9 @@ if (data.startsWith(cb.MONITOR_ADD_WORKS)) {
 if (data === cb.OBJ_MONITOR) {
   st.step = "QTY_MENU"; 
   st.step = "OBJ_MONITOR_MENU" as any;
-  setFlowState(s, FLOW, st);
-  await render(bot, chatId, s);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
@@ -1729,8 +1830,9 @@ if (data.startsWith(cb.OBJ_MONITOR_PICK)) {
 
   st.step = "OBJ_MONITOR_OBJECT" as any;
 
-  setFlowState(s, FLOW, st);
-  await render(bot, chatId, s);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
@@ -1795,7 +1897,8 @@ if (data.startsWith(cb.EMP_SESSIONS)) {
       });
     }
     st.qtyUnlocked = true;
-    setFlowState(s, FLOW, st);
+    root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 
     await bot.answerCallbackQuery(q.id, {
       text: `⏹ Зупинено: ${empName(st, empId)}`,
@@ -1805,8 +1908,9 @@ if (data.startsWith(cb.EMP_SESSIONS)) {
 
 
 st.step = (isMonitorContext ? ("OBJ_MONITOR_OBJECT" as any) : "AT_OBJECT_RUN");
-setFlowState(s, FLOW, st);
-await render(bot, chatId, s);
+root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+await render(bot, chatId, s, foremanTgId);
 return true;
   }
 
@@ -1880,14 +1984,15 @@ return true;
   st.phase = "WORKING_AT_OBJECT";
   st.step = "AT_OBJECT_RUN";
 
-  setFlowState(s, FLOW, st);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 
   await bot.answerCallbackQuery(q.id, {
     text: `▶️ Запущено: ${empName(st, empId)}`,
     show_alert: false,
   });
 
-  await render(bot, chatId, s);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
     
@@ -1978,7 +2083,8 @@ return true;
       } as any;
 
       st.step = "BULK_QTY";
-      setFlowState(s, FLOW, st);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 
       const scr = buildBulkQtyScreen(st, cb);
       await safeEditMessageText(bot, chatId, msgId, scr.text, {
@@ -1997,8 +2103,9 @@ if (data === cb.MENU) {
   delete (st as any)._managePeopleContext;
 
   st.step = "START";
-  setFlowState(s, FLOW, st);
-  await render(bot, chatId, s);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
@@ -2012,8 +2119,9 @@ if (data === cb.QTY_MENU) {
   }
 
   st.step = "QTY_MENU";
-  setFlowState(s, FLOW, st);
-  await render(bot, chatId, s);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
@@ -2025,7 +2133,8 @@ if (data === cb.QTY_MENU) {
 
   (st.pendingBulkQty as any).activeWorkId = workId;
 
-  setFlowState(s, FLOW, st);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 
   const scr = buildBulkQtyScreen(st, cb);
   await safeEditMessageText(bot, chatId, msgId, scr.text, {
@@ -2049,7 +2158,8 @@ if (data === cb.QTY_MENU) {
       if (!it || !Number.isFinite(delta)) return true;
 
       it.qty = Math.max(0, Math.round((it.qty + delta) * 100) / 100);
-      setFlowState(s, FLOW, st);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 
       const scr = buildBulkQtyScreen(st, cb);
       await safeEditMessageText(bot, chatId, msgId, scr.text, {
@@ -2063,8 +2173,9 @@ if (data === cb.QTY_MENU) {
     if (data === cb.BULK_QTY_BACK) {
       const backTo = (st.pendingBulkQty?.backStep as Step) ?? "AT_OBJECT_MENU";
       st.step = backTo;
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -2134,9 +2245,10 @@ if (data === cb.QTY_MENU) {
 
 st.step = "BULK_COEF_DISC" as any;
 
-setFlowState(s, FLOW, st);
+root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 await bot.answerCallbackQuery(q.id, { text: "✅ Обсяги збережено" });
-await render(bot, chatId, s);
+await render(bot, chatId, s, foremanTgId);
 return true;    }
 
 if (data.startsWith(cb.BULK_DISC_DEC) || data.startsWith(cb.BULK_DISC_INC)) {
@@ -2151,8 +2263,9 @@ if (data.startsWith(cb.BULK_DISC_DEC) || data.startsWith(cb.BULK_DISC_INC)) {
   const next = Math.max(0, Math.round((cur + (isInc ? 0.1 : -0.1)) * 10) / 10);
 
   p.values[empId] = next;
-  setFlowState(s, FLOW, st);
-  await render(bot, chatId, s);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
@@ -2168,8 +2281,9 @@ if (data.startsWith(cb.BULK_PROD_DEC) || data.startsWith(cb.BULK_PROD_INC)) {
   const next = Math.max(0, Math.round((cur + (isInc ? 0.1 : -0.1)) * 10) / 10);
 
   p.values[empId] = next;
-  setFlowState(s, FLOW, st);
-  await render(bot, chatId, s);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
@@ -2199,9 +2313,10 @@ if (data === cb.BULK_COEF_DISC_SAVE) {
 
   st.step = "BULK_COEF_PROD" as any;
 
-  setFlowState(s, FLOW, st);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
   await bot.answerCallbackQuery(q.id, { text: "✅ Дисципліну збережено" });
-  await render(bot, chatId, s);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
@@ -2226,17 +2341,19 @@ if (data === cb.BULK_COEF_PROD_SAVE) {
 
   st.step = afterSave;
 
-  setFlowState(s, FLOW, st);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
   await bot.answerCallbackQuery(q.id, { text: "✅ Коефіцієнти збережено" });
-  await render(bot, chatId, s);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
 if (data === cb.BULK_COEF_BACK) {
   if (st.step === ("BULK_COEF_DISC" as any)) {
     st.step = "BULK_QTY";
-    setFlowState(s, FLOW, st);
-    await render(bot, chatId, s);
+    root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+    await render(bot, chatId, s, foremanTgId);
     return true;
   }
 
@@ -2261,8 +2378,9 @@ if (data === cb.BULK_COEF_BACK) {
     }
 
     st.step = "BULK_COEF_DISC" as any;
-    setFlowState(s, FLOW, st);
-    await render(bot, chatId, s);
+    root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+    await render(bot, chatId, s, foremanTgId);
     return true;
   }
 }
@@ -2279,8 +2397,9 @@ if (data === cb.BULK_COEF_BACK) {
       else if (tag === "odo_end") st.step = "ODO_END";
       else st.step = "START";
 
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -2288,31 +2407,46 @@ if (data === cb.BULK_COEF_BACK) {
       (st as any)._afterPickCarStep = st.step;
 
       st.step = "PICK_CAR";
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
-    if (data.startsWith(cb.CAR)) {
-      const carId = data.slice(cb.CAR.length);
-      if (!carId) return true;
+if (data.startsWith(cb.CAR)) {
+  const carId = data.slice(cb.CAR.length);
+  if (!carId) return true;
 
-      if (st.carId === carId) {
-        delete (st as any).carId;
-      } else {
-        st.carId = carId;
-      }
+  if (st.carId === carId) {
+    delete (st as any).carId;
+  } else {
+    const busy = await findCarBusyByAnotherForeman({
+      date,
+      carId,
+      selfForemanTgId: foremanTgId,
+    });
 
-      await writeEvent({
-        bot,
-        chatId,
-        msgId,
-        date,
-        foremanTgId,
-        carId: st.carId ?? "",
-        type: "RTS_SETUP_CAR",
-        payload: { carId: st.carId ?? null },
+    if (busy) {
+      await bot.answerCallbackQuery(q.id, {
+        text: `⛔ Це авто вже обрав ${busy.foremanName}`,
+        show_alert: true,
       });
+      return true;
+    }
+
+    st.carId = carId;
+  }
+
+  await writeEvent({
+    bot,
+    chatId,
+    msgId,
+    date,
+    foremanTgId,
+    carId: st.carId ?? "",
+    type: "RTS_SETUP_CAR",
+    payload: { carId: st.carId ?? null },
+  });
 
       let nextStep: Step = ((st as any)._afterPickCarStep as Step) ?? "START";
       delete (st as any)._afterPickCarStep;
@@ -2322,18 +2456,26 @@ if (data === cb.BULK_COEF_BACK) {
       }
 
       st.step = nextStep;
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
+
+
+
+
+
+    
     if (data === cb.ODO_START) {
       if (!st.carId) {
         await gate(TEXTS.roadFlow.guards.needCar);
         return true;
       }
       st.step = "ODO_START";
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -2370,7 +2512,8 @@ if (data === cb.BULK_COEF_BACK) {
             payload: { odoStartKm: km },
           });
 
-          setFlowState(s, FLOW, st);
+          root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 
           try {
             await bot.editMessageReplyMarkup(
@@ -2467,7 +2610,8 @@ if (data === cb.BULK_COEF_BACK) {
           });
 
           st.step = "START";
-          setFlowState(s, FLOW, st);
+          root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 
           await bot.sendMessage(chatId, "✅ Фото початкового показника спідометра прийнято 📷", {
             reply_markup: {
@@ -2499,26 +2643,40 @@ if (data === cb.BULK_COEF_BACK) {
       st.odoStartPhotoFileId = st.odoStartPhotoFileId ?? "";
       st.step = "START";
 
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
     if (data === cb.PICK_PEOPLE) {
       st.step = "PICK_PEOPLE";
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
-    if (data.startsWith(cb.EMP_TOGGLE)) {
-      const empId = data.slice(cb.EMP_TOGGLE.length);
-      if (!empId) return true;
+if (data.startsWith(cb.EMP_TOGGLE)) {
+  const empId = data.slice(cb.EMP_TOGGLE.length);
+  if (!empId) return true;
 
-      const has = st.inCarIds.includes(empId);
-      st.inCarIds = has
-        ? st.inCarIds.filter((x) => x !== empId)
-        : uniq([...st.inCarIds, empId]);
+  const has = st.inCarIds.includes(empId);
+
+  if (!has) {
+    const owner = findEmployeeOwner(root, empId, foremanTgId);
+    if (owner) {
+      await bot.answerCallbackQuery(q.id, {
+        text: `⛔ Цю людину вже обрав ${owner.foremanName}`,
+        show_alert: true,
+      });
+      return true;
+    }
+  }
+
+  st.inCarIds = has
+    ? st.inCarIds.filter((x) => x !== empId)
+    : uniq([...st.inCarIds, empId]);
 
       const ts = now();
       if (!has) {
@@ -2554,23 +2712,26 @@ if (data === cb.BULK_COEF_BACK) {
       }
 
       st.step = "PICK_PEOPLE";
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
     if (data === cb.PEOPLE_DONE) {
       st.step = "START";
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
     if (data === cb.PICK_OBJECTS || data === cb.ADD_OBJECTS) {
       if (!st.carId) return (gate(TEXTS.roadFlow.guards.needCar), true);
       st.step = "PICK_OBJECTS";
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -2595,15 +2756,17 @@ if (data === cb.BULK_COEF_BACK) {
         payload: { plannedObjectIds: st.plannedObjectIds },
       });
 
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
     if (data === cb.OBJECTS_DONE) {
       st.step = "START";
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -2619,8 +2782,9 @@ if (data === cb.BULK_COEF_BACK) {
         return (gate("Спочатку обери обʼєкти."), true);
 
       st.step = "OBJECT_PLAN_MENU";
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -2628,8 +2792,9 @@ if (data === cb.BULK_COEF_BACK) {
       if (!st.plannedObjectIds.length)
         return (gate("Спочатку обери обʼєкти."), true);
       st.step = "OBJECT_PLAN_MENU";
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -2641,8 +2806,9 @@ if (data === cb.BULK_COEF_BACK) {
       ensureObjectState(st, oid);
 
       st.step = "PLAN_WORKS_PICK";
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -2730,7 +2896,8 @@ if (data === cb.BULK_COEF_BACK) {
         payload: { objectId: oid, works: obj.works },
       });
 
-      setFlowState(s, FLOW, st);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
       return RoadTimesheetFlow.onCallback!(bot, q, s, cb.PLAN_WORKS);
     }
 
@@ -2748,15 +2915,17 @@ if (data === cb.BULK_COEF_BACK) {
         if (backPhase) st.phase = backPhase;
         if (backArrived) st.arrivedObjectId = backArrived;
 
-        setFlowState(s, FLOW, st);
+        root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 
-        await render(bot, chatId, s);
+        await render(bot, chatId, s, foremanTgId);
         return true;
       }
 
 st.step = "OBJECT_PLAN_MENU"; 
-setFlowState(s, FLOW, st);
-await render(bot, chatId, s);
+root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+await render(bot, chatId, s, foremanTgId);
 return true;
     }
 
@@ -2789,8 +2958,9 @@ return true;
         },
       });
 
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -2808,11 +2978,18 @@ if (data === cb.MANAGE_PEOPLE) {
   const backTag = isReturn ? "return_menu" : "run_drive";
 
   (st as any)._managePeopleContext = { backTag };
-  setFlowState(s, FLOW, st);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 
-  const rows = emps.slice(0, 40).map((e: { id: string; name: string }) => {
-    const inCar = st.inCarIds.includes(e.id);
-    const label = inCar ? `➖ ${e.name}` : `➕ ${e.name}`;
+const rows = emps.slice(0, 40).map((e: { id: string; name: string }) => {
+  const inCar = st.inCarIds.includes(e.id);
+  const owner = findEmployeeOwner(root, e.id, foremanTgId);
+
+  const label = inCar
+    ? `➖ ${e.name}`
+    : owner
+      ? `🔒 ${e.name} — ${owner.foremanName}`
+      : `➕ ${e.name}`;
     return [
       {
         text: label.slice(0, 60),
@@ -2839,14 +3016,23 @@ if (data === cb.MANAGE_PEOPLE) {
   return true;
 }
 
-    if (data.startsWith(cb.TOGGLE_IN_CAR)) {
-      const empId = data.slice(cb.TOGGLE_IN_CAR.length);
-      if (!empId) return true;
+if (data.startsWith(cb.TOGGLE_IN_CAR)) {
+  const empId = data.slice(cb.TOGGLE_IN_CAR.length);
+  if (!empId) return true;
 
-      const inCar = st.inCarIds.includes(empId);
+  const inCar = st.inCarIds.includes(empId);
 
-      if (!inCar) {
-        st.inCarIds.push(empId);
+  if (!inCar) {
+    const owner = findEmployeeOwner(root, empId, foremanTgId);
+    if (owner) {
+      await bot.answerCallbackQuery(q.id, {
+        text: `⛔ Цю людину вже обрав ${owner.foremanName}`,
+        show_alert: true,
+      });
+      return true;
+    }
+
+    st.inCarIds.push(empId);
         st.inCarIds = uniq(st.inCarIds);
 
         const ts = now();
@@ -2900,7 +3086,8 @@ if (data === cb.MANAGE_PEOPLE) {
         });
       }
 
-      setFlowState(s, FLOW, st);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 
       const ctx = (st as any)._managePeopleContext;
       if (ctx?.backTag) {
@@ -2908,15 +3095,16 @@ if (data === cb.MANAGE_PEOPLE) {
       }
 
       if (st.step === "AT_OBJECT_DROP_PICK") {
-        await render(bot, chatId, s);
+        await render(bot, chatId, s, foremanTgId);
         return true;
       }
 
       if (q.message) {
         st.step =
           st.phase === "DRIVE_DAY" ? "RUN_DRIVE" : (st.step ?? "RUN_DRIVE");
-        setFlowState(s, FLOW, st);
-        await render(bot, chatId, s);
+        root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+        await render(bot, chatId, s, foremanTgId);
         return true;
       }
 
@@ -2943,8 +3131,9 @@ if (data === cb.MANAGE_PEOPLE) {
         payload: { at: st.driveStoppedAt },
       });
 
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -2973,8 +3162,9 @@ if (data === cb.MANAGE_PEOPLE) {
       });
 
       st.step = "AT_OBJECT_MENU";
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -3032,8 +3222,9 @@ if (data.startsWith(cb.AT_OBJ_TOGGLE)) {
   }
 
   st.step = "AT_OBJECT_DROP_PICK";
-  setFlowState(s, FLOW, st);
-  await render(bot, chatId, s);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
@@ -3042,8 +3233,9 @@ if (data.startsWith(cb.AT_OBJ_TOGGLE)) {
       if (!st.arrivedObjectId)
         return (gate("Спочатку обери обʼєкт прибуття."), true);
       st.step = "AT_OBJECT_DROP_PICK";
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -3102,8 +3294,9 @@ if (data === cb.PICKUP_ALL_FROM_OBJECT) {
   obj.leftOnObjectIds = [];
 
   st.step = "AT_OBJECT_DROP_PICK";
-  setFlowState(s, FLOW, st);
-  await render(bot, chatId, s);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
@@ -3143,15 +3336,17 @@ if (data === cb.PICKUP_ALL_FROM_OBJECT) {
         payload: { at: ts, dropAll: true },
       });
 
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
     if (data === cb.ARRIVE_CONFIRM) {
       st.step = "AT_OBJECT_MENU";
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -3233,8 +3428,9 @@ if (data === cb.PICKUP_ALL_FROM_OBJECT) {
       st.phase = "WORKING_AT_OBJECT";
       st.step = "AT_OBJECT_RUN";
 
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -3338,8 +3534,9 @@ if (data === cb.PICKUP_ALL_FROM_OBJECT) {
         },
       });
 
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -3372,7 +3569,8 @@ if (data === cb.PICKUP_ALL_FROM_OBJECT) {
         startedAt: opened.startedAt,
       };
 
-      setFlowState(s, FLOW, st);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 
       await askNextMessage(
         bot,
@@ -3390,7 +3588,7 @@ if (data === cb.PICKUP_ALL_FROM_OBJECT) {
             return;
           }
 
-          const st2 = getFlowState<State>(s, FLOW) as State;
+          const st2 = root[foremanTgId] as State;
           const pending = st2.pendingQty;
           if (!pending) {
             await bot.sendMessage(
@@ -3404,9 +3602,10 @@ if (data === cb.PICKUP_ALL_FROM_OBJECT) {
           const opened2 = findOpen(obj2, pending.employeeId, pending.workId);
           if (!opened2) {
             delete st2.pendingQty;
-            setFlowState(s, FLOW, st2);
+            root[foremanTgId] = st2;
+setFlowState(s, FLOW, root);
             await bot.sendMessage(chatId, "⚠️ Сесія вже закрита.");
-            await render(bot, chatId, s);
+            await render(bot, chatId, s, foremanTgId);
             return;
           }
 
@@ -3439,8 +3638,9 @@ if (data === cb.PICKUP_ALL_FROM_OBJECT) {
           });
 
           delete st2.pendingQty;
-          setFlowState(s, FLOW, st2);
-          await render(bot, chatId, s);
+          root[foremanTgId] = st2;
+setFlowState(s, FLOW, root);
+          await render(bot, chatId, s, foremanTgId);
         },
         5 * 60 * 1000,
       );
@@ -3599,7 +3799,8 @@ if (data.startsWith(cb.STOP_OBJ_WORK)) {
   st.arrivedObjectId = oid;
   st.step = "BULK_QTY";
 
-  setFlowState(s, FLOW, st);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 
   const scr = buildBulkQtyScreen(st, cb);
   await safeEditMessageText(bot, chatId, msgId, scr.text, {
@@ -3629,7 +3830,8 @@ if (data === cb.RESUME) {
   st.driveStartedAt = st.driveStartedAt ?? now();
   st.step = "RUN_DRIVE";
 
-  setFlowState(s, FLOW, st);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 
   await bot.answerCallbackQuery(q.id, { text: "🟢 Рух продовжено" }).catch(() => {});
   try {
@@ -3646,7 +3848,7 @@ if (data === cb.RESUME) {
   } catch (e) {
   }
 
-  await render(bot, chatId, s);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
@@ -3669,8 +3871,9 @@ if (data === cb.RESUME) {
         payload: { at: now(), lastObjectId: st.arrivedObjectId ?? null },
       });
 
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -3680,8 +3883,9 @@ if (data === cb.RETURN_PICK_OBJECT) {
   delete (st as any)._pickupBackPhase;
 
   st.step = "RETURN_PICK_OBJECT";
-  setFlowState(s, FLOW, st);
-  await render(bot, chatId, s);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
@@ -3696,8 +3900,9 @@ if (data.startsWith(cb.RETURN_OBJ)) {
   ensureObjectState(st, oid);
 
   st.step = "RETURN_PICKUP_DROP";
-  setFlowState(s, FLOW, st);
-  await render(bot, chatId, s);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
@@ -3772,8 +3977,9 @@ if (backStep) {
   }
 }
 
-setFlowState(s, FLOW, st);
-await render(bot, chatId, s);
+root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+await render(bot, chatId, s, foremanTgId);
 return true;
     }
     if (data.startsWith(cb.RETURN_TOGGLE_PICKUP)) {
@@ -3847,8 +4053,9 @@ if ((obj.leftOnObjectIds ?? []).length === 0) {
   }
 }
 
-setFlowState(s, FLOW, st);
-await render(bot, chatId, s);
+root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+await render(bot, chatId, s, foremanTgId);
 return true;
     }
 
@@ -3859,14 +4066,15 @@ if (data === cb.START_RETURN) {
     delete (st as any)._pickupBackPhase;
 
     st.step = "RETURN_MENU";
-    setFlowState(s, FLOW, st);
+    root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 
     await bot.answerCallbackQuery(q.id, {
       text: "Повернення зараз не можна стартувати. Перевір людей у машині.",
       show_alert: true,
     });
 
-    await render(bot, chatId, s);
+    await render(bot, chatId, s, foremanTgId);
     return true;
   }
 
@@ -3891,8 +4099,9 @@ if (data === cb.START_RETURN) {
     payload: { at: st.returnStartedAt },
   });
 
-  setFlowState(s, FLOW, st);
-  await render(bot, chatId, s);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
@@ -3915,8 +4124,9 @@ if (data === cb.START_RETURN) {
         payload: { at: st.returnStoppedAt },
       });
 
-      setFlowState(s, FLOW, st);
-      await render(bot, chatId, s);
+      root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+      await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
@@ -3954,7 +4164,8 @@ if (data === cb.START_RETURN) {
             payload: { odoEndKm: km },
           });
 
-          setFlowState(s, FLOW, st);
+          root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
           try {
             await bot.editMessageReplyMarkup(
               { inline_keyboard: [] },
@@ -4039,7 +4250,8 @@ if (data === cb.START_RETURN) {
           });
 
           st.step = "SAVE";
-          setFlowState(s, FLOW, st);
+          root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
 
           await bot.sendMessage(chatId, "✅ Фото кінцевого показника спідометра прийнято 📷");
           await uiSave(bot, chatId, foremanTgId, st);
@@ -4060,8 +4272,9 @@ if (data === cb.SKIP_ODO_END_PHOTO) {
 
   st.odoEndPhotoFileId = st.odoEndPhotoFileId ?? "";
   st.step = "SAVE";
-  setFlowState(s, FLOW, st);
-  await render(bot, chatId, s);
+  root[foremanTgId] = st;
+setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
   return true;
 }
 
@@ -4558,8 +4771,9 @@ await sendLongHtml(bot, adminId, adminText, {
         returnActive: false,
         qtyUnlocked: false,
       };
-      setFlowState(s, FLOW, fresh);
-      await render(bot, chatId, s);
+root[foremanTgId] = fresh;
+setFlowState(s, FLOW, root);
+await render(bot, chatId, s, foremanTgId);
       return true;
     }
 
