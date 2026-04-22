@@ -46,6 +46,5 @@ export const cb = {
   DISC_INC: `${PREFIX}disc_inc:`,
   PROD_DEC: `${PREFIX}prod_dec:`,
   PROD_INC: `${PREFIX}prod_inc:`,
-
   SAVE: `${PREFIX}save`,
 } as const;
