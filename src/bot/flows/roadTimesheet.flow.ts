@@ -18,9 +18,10 @@ import {  ensureEmployees,  ensureObjectState,  objectName,  carName,  empName, 
   fileIdFromPhoto,  now,  uniq,  fmtNum,  parseKm,  parseQty,  mdEscapeSimple,  roundToQuarterHours,  askNextMessage,  buildBulkQtyScreen,  sendLongHtml,  sendSaveScreen,
   getAdminTgIds,  pickBrigadierFromPeople,  isSenior,  buildRoadAdminTextFromEventPayload,  computeFromRts,  computeRoadSecondsFromRts,  writeEvent,  safeEditMessageText,
   hasOpenSessionForEmployeeOnObject,  startBulkQtyForObject,  fetchEventsSafe,  parsePayload, ensureStateReady, 
-  buildRoadApprovedShortText, findCarBusyByAnotherForeman } from "./roadTimesheet.utils.js";
+  buildRoadApprovedShortText, findCarBusyByAnotherForeman, buildBusyCarsMap } from "./roadTimesheet.utils.js";
 
-import {  appendEvents,  refreshDayChecklist,  upsertTimesheetRow,  upsertAllowanceRows,  upsertOdometerDay,  getEventById,  updateEventById,
+import {  appendEvents,  refreshDayChecklist,  upsertTimesheetRow,  upsertAllowanceRows,  upsertOdometerDay,  
+  getEventById,  updateEventById, fetchEvents
 } from "../../google/sheets/working.js";
 
 import { getDayStatusRow } from "../../google/sheets/checklist.js";
@@ -393,6 +394,24 @@ if (!x) {
   }));
 }
 
+let busyByCarId = new Map<string, { foremanTgId: number; foremanName: string }>();
+
+if (x?.step === "PICK_CAR") {
+  const [evsForCars, usersForCars] = await Promise.all([
+    fetchEvents({
+      date: x.date,
+      foremanTgId: "" as any,
+    }).catch(() => []),
+    fetchUsers().catch(() => []),
+  ]);
+
+  busyByCarId = buildBusyCarsMap({
+    evs: evsForCars,
+    users: usersForCars,
+    selfForemanTgId: foremanTgId,
+  });
+}
+
 return renderFlow<State>(bot, chatId, s, FLOW, () => {
     
     const date = x.date || todayISO();
@@ -600,37 +619,38 @@ if ((x.step as any) === "OBJ_MONITOR_OBJECT") {
       };
     }
 
-    if (x.step === "PICK_CAR") {
-      const cars = x.carsMeta ?? [];
-      const slice = cars.slice(0, 24);
-const rows: TelegramBot.InlineKeyboardButton[][] = slice.map((c) => {
-  const selected = x.carId === c.id;
-  const owner = findCarOwner(root, String(c.id), foremanTgId);
+if (x.step === "PICK_CAR") {
+  const cars = x.carsMeta ?? [];
+  const slice = cars.slice(0, 24);
 
-  const label = selected
-    ? `☑️ ${c.name}`
-    : owner
-      ? `🔒 ${c.name} — ${owner.foremanName}`
-      : `${c.name}`;
+  const rows: TelegramBot.InlineKeyboardButton[][] = slice.map((c) => {
+    const selected = x.carId === c.id;
+    const busy = busyByCarId.get(String(c.id));
 
-  return [
-    {
-      text: label.slice(0, 60),
-      callback_data: `${cb.CAR}${c.id}`,
-    },
-  ];
-});
+    const label = selected
+      ? `☑️ ${c.name}`
+      : busy
+        ? `🔒 ${c.name} — ${busy.foremanName}`
+        : `${c.name}`;
 
-      rows.push([
-        { text: TEXTS.ui.buttons.back, callback_data: `${cb.BACK}start` },
-      ]);
-      rows.push([{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }]);
+    return [
+      {
+        text: label.slice(0, 60),
+        callback_data: `${cb.CAR}${c.id}`,
+      },
+    ];
+  });
 
-      return {
-        text: `🚗 Обери авто\n\nПоказую перші ${slice.length} з ${cars.length}.`,
-        kb: { inline_keyboard: rows },
-      };
-    }
+  rows.push([
+    { text: TEXTS.ui.buttons.back, callback_data: `${cb.BACK}start` },
+  ]);
+  rows.push([{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }]);
+
+  return {
+    text: `🚗 Обери авто\n\nПоказую перші ${slice.length} з ${cars.length}.`,
+    kb: { inline_keyboard: rows },
+  };
+}
 
     if (x.step === "ODO_START") {
       return {
@@ -2427,11 +2447,18 @@ if (data.startsWith(cb.CAR)) {
     });
 
     if (busy) {
-      await bot.answerCallbackQuery(q.id, {
-        text: `⛔ Це авто вже обрав ${busy.foremanName}`,
-        show_alert: true,
-      });
-      return true;
+await bot.answerCallbackQuery(q.id); // щоб кнопка "не зависала"
+
+const msg = await bot.sendMessage(
+  chatId,
+  `⛔ Це авто вже обрав ${busy.foremanName}`
+);
+
+setTimeout(() => {
+  bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+}, 4000);
+
+return true;
     }
 
     st.carId = carId;
@@ -2448,19 +2475,19 @@ if (data.startsWith(cb.CAR)) {
     payload: { carId: st.carId ?? null },
   });
 
-      let nextStep: Step = ((st as any)._afterPickCarStep as Step) ?? "START";
-      delete (st as any)._afterPickCarStep;
+  let nextStep: Step = ((st as any)._afterPickCarStep as Step) ?? "START";
+  delete (st as any)._afterPickCarStep;
 
-      if (st.carId && st.odoStartKm === undefined) {
-        nextStep = "ODO_START";
-      }
+  if (st.carId && st.odoStartKm === undefined) {
+    nextStep = "ODO_START";
+  }
 
-      st.step = nextStep;
-      root[foremanTgId] = st;
-setFlowState(s, FLOW, root);
-      await render(bot, chatId, s, foremanTgId);
-      return true;
-    }
+  st.step = nextStep;
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
 
 
 

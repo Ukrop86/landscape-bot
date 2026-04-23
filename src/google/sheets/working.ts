@@ -192,6 +192,11 @@ export async function fetchMissingReports(args: {
   return out;
 }
 
+function clearEventsSheetCache() {
+  eventsSheetCache = null;
+}
+
+
 /**
  * D2: апдейтнути qty/статус по ключу "date||objectId||foremanTgId||workId"
  */
@@ -217,12 +222,13 @@ export async function updateReportQty(args: {
       [REPORTS_HEADERS.updatedAt]: nowISO(), // якщо колонки нема — прибери цей рядок
     }
   );
+  clearEventsSheetCache();
 }
 
 
 
 export async function fetchEventById(eventId: string) {
-  const sh = await loadSheet(SHEET_NAMES.events);
+  const sh = await loadEventsSheetCached();
 
   requireHeaders(
     sh.map,
@@ -230,7 +236,9 @@ export async function fetchEventById(eventId: string) {
     SHEET_NAMES.events
   );
 
-  const row = sh.data.find((r) => String(getCell(r, sh.map, EVENTS_HEADERS.eventId)) === String(eventId));
+  const row = sh.data.find((r: any) =>
+  String(getCell(r, sh.map, EVENTS_HEADERS.eventId)) === String(eventId)
+);
   if (!row) return null;
 
   // якщо в тебе є тип EventRow — поверни його як у інших fetch
@@ -255,6 +263,9 @@ const filter: FetchEventsFilter = {
   ...(objectId ? { objectId } : {}),
 };
 
+
+
+
 const events = await fetchEvents(filter);
 
 
@@ -271,14 +282,39 @@ const events = await fetchEvents(filter);
 
 type FetchEventsFilter = {
   date: string;
-  foremanTgId: number;
+  foremanTgId?: number | string;
   types?: string[];
   objectId?: string;
-  status?: string;
+  status?: EventRow["status"];
 };
 
+
+let eventsSheetCache: any = null;
+
+async function loadEventsSheetCached() {
+  const now = Date.now();
+
+  if (eventsSheetCache && now - eventsSheetCache.ts < 5000) {
+    return {
+      map: eventsSheetCache.map,
+      data: eventsSheetCache.data,
+    };
+  }
+
+  const sh = await loadSheet(SHEET_NAMES.events); // ✅ ВАЖЛИВО
+
+  eventsSheetCache = {
+    ts: now,
+    map: sh.map,
+    data: sh.data,
+  };
+
+  return sh;
+}
+
+
 export async function fetchEvents(filter: FetchEventsFilter): Promise<EventRow[]> {
-  const { map, data } = await loadSheet(SHEET_NAMES.events);
+  const { map, data } = await loadEventsSheetCached();
 
   requireHeaders(
     map,
@@ -326,17 +362,16 @@ export async function fetchEvents(filter: FetchEventsFilter): Promise<EventRow[]
     const date = s(row[idx(EVENTS_HEADERS.date)]);
     const foremanTgId = Number(s(row[idx(EVENTS_HEADERS.foremanTgId)]) || 0);
 
-    if (date !== filter.date) continue;
+if (date !== filter.date) continue;
 
-    // ✅ фільтруємо по бригадиру тільки якщо він реально переданий
-    if (
-      filter.foremanTgId !== undefined &&
-      filter.foremanTgId !== null &&
-      String(filter.foremanTgId).trim() !== "" &&
-      foremanTgId !== Number(filter.foremanTgId)
-    ) {
-      continue;
-    }
+if (
+  filter.foremanTgId !== undefined &&
+  filter.foremanTgId !== null &&
+  String(filter.foremanTgId).trim() !== "" &&
+  foremanTgId !== Number(filter.foremanTgId)
+) {
+  continue;
+}
 
     const type = s(row[idx(EVENTS_HEADERS.type)]);
     if (filter.types?.length && !filter.types.includes(type)) continue;
@@ -368,8 +403,6 @@ export async function fetchEvents(filter: FetchEventsFilter): Promise<EventRow[]
   out.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
   return out;
 }
-
-
 
 export async function refreshDayChecklist(date: string, objectId: string, foremanTgId: number) {
   const existing = await getDayStatusRow(date, objectId, foremanTgId);
@@ -542,6 +575,7 @@ export async function appendEvents(events: EventRow[]) {
   );
 
   await appendRows(SHEET_NAMES.events, rows, "USER_ENTERED");
+clearEventsSheetCache();
 }
 
 
@@ -621,6 +655,7 @@ export async function upsertEvent(e: EventRow) {
       [EVENTS_HEADERS.msgId]: e.msgId ?? "",
     }
   );
+  clearEventsSheetCache();
 }
 
 
@@ -859,7 +894,7 @@ export async function appendToolMoves(rows: ToolMoveRow[]) {
 export async function getEventById(eventId: string): Promise<EventRow | null> {
   if (!eventId) return null;
 
-  const { map, data } = await loadSheet(SHEET_NAMES.events);
+  const { map, data } = await loadEventsSheetCached();
 
   requireHeaders(
     map,

@@ -1491,20 +1491,25 @@ export async function findCarBusyByAnotherForeman(params: {
   const [evs, users] = await Promise.all([
     fetchEvents({
       date: params.date,
-      foremanTgId: "",
-    } as any).catch(() => []),
+      foremanTgId: "" as any,
+    }).catch(() => []),
     fetchUsers().catch(() => []),
   ]);
-console.log("CAR BUSY EVS:", evs);
+
   const userNameByTgId = new Map(
     (users ?? []).map((u: any) => [
       Number(u.tgId ?? 0),
-      String(u.name ?? u.fullName ?? u.username ?? u.tgId ?? ""),
+      String(
+        u.fullName ||
+        u.name ||
+        u.firstName ||
+        u.username ||
+        `Бригадир ${u.tgId}`
+      ),
     ]),
   );
 
-  const hit = (evs ?? [])
-    .filter((e: any) => String(e.type ?? "") === "RTS_SETUP_CAR")
+  const rows = (evs ?? [])
     .filter((e: any) => String(e.carId ?? "") === String(params.carId))
     .filter(
       (e: any) =>
@@ -1515,19 +1520,103 @@ console.log("CAR BUSY EVS:", evs);
       String(b.updatedAt ?? b.ts ?? "").localeCompare(
         String(a.updatedAt ?? a.ts ?? ""),
       ),
-    )[0];
+    );
 
-  if (!hit) return null;
+  const latest = rows[0];
+  if (!latest) return null;
+
+  const latestType = String(latest.type ?? "");
+
+  const FREE_TYPES = new Set([
+    "RTS_RETURN_STOP",
+    "RTS_ODO_END",
+    "RTS_ODO_END_PHOTO",
+    "ROAD_END",
+    "RTS_SAVE",
+  ]);
+
+  if (FREE_TYPES.has(latestType)) {
+    return null;
+  }
+
   return {
-    foremanTgId: Number(hit.foremanTgId ?? 0),
+    foremanTgId: Number(latest.foremanTgId ?? 0),
     foremanName:
-      userNameByTgId.get(Number(hit.foremanTgId ?? 0)) ||
-      `Бригадир ${hit.foremanTgId}`,
+      userNameByTgId.get(Number(latest.foremanTgId ?? 0)) ||
+      `Бригадир ${latest.foremanTgId}`,
   };
 }
+export function buildBusyCarsMap(params: {
+  evs: any[];
+  users: any[];
+  selfForemanTgId: number;
+}) {
+  const userNameByTgId = new Map(
+    (params.users ?? []).map((u: any) => [
+      Number(u.tgId ?? 0),
+      String(
+        u.fullName ||
+        u.name ||
+        u.firstName ||
+        u.username ||
+        `Бригадир ${u.tgId}`
+      ),
+    ]),
+  );
 
+  const grouped = new Map<string, any[]>();
 
+  for (const e of params.evs ?? []) {
+    const carId = String(e.carId ?? "").trim();
+    if (!carId) continue;
 
+    if (!grouped.has(carId)) grouped.set(carId, []);
+    grouped.get(carId)!.push(e);
+  }
+
+  const FREE_TYPES = new Set([
+    "RTS_RETURN_STOP",
+    "RTS_ODO_END",
+    "RTS_ODO_END_PHOTO",
+    "ROAD_END",
+    "RTS_SAVE",
+  ]);
+
+  const busyByCarId = new Map<
+    string,
+    { foremanTgId: number; foremanName: string }
+  >();
+
+  for (const [carId, events] of grouped.entries()) {
+    const rows = (events ?? [])
+      .filter(
+        (e: any) =>
+          Number(e.foremanTgId ?? 0) > 0 &&
+          Number(e.foremanTgId ?? 0) !== Number(params.selfForemanTgId),
+      )
+      .sort((a: any, b: any) =>
+        String(b.updatedAt ?? b.ts ?? "").localeCompare(
+          String(a.updatedAt ?? a.ts ?? ""),
+        ),
+      );
+
+    const latest = rows[0];
+    if (!latest) continue;
+
+    const latestType = String(latest.type ?? "");
+    if (FREE_TYPES.has(latestType)) continue;
+
+    const foremanTgId = Number(latest.foremanTgId ?? 0);
+
+    busyByCarId.set(carId, {
+      foremanTgId,
+      foremanName:
+        userNameByTgId.get(foremanTgId) || `Бригадир ${foremanTgId}`,
+    });
+  }
+
+  return busyByCarId;
+}
 
 
 
