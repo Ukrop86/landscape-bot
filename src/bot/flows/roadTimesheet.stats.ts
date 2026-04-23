@@ -454,7 +454,7 @@ async function buildObjectView(params: {
   const peopleLines =
     Object.entries(obj?.secByEmployee ?? {})
       .sort((a, b) => Number(b[1]) - Number(a[1]))
-      .map(([empId, sec]) => `• ${mdEscapeSimple(empName(st, empId))}: *${fmtNum(Number(sec) / 3600)} год*`)
+      .map(([empId, sec]) => `• ${mdEscapeSimple(empName(st, empId))}: *${(Number(sec) / 3600).toFixed(2)} год*`)
       .join("\n") || "—";
 
   const carLines =
@@ -466,19 +466,32 @@ async function buildObjectView(params: {
   const wr = workRows.filter((x) => String(x.objectId ?? "") === String(objectId));
   const totalAmount = wr.reduce((a, x) => a + Number(x.amount ?? 0), 0);
 
-  const text =
-    `🏗 *Статистика обʼєкта*\n\n` +
-    `Обʼєкт: *${mdEscapeSimple(objectName(st, objectId))}*\n` +
-    `📅 ${mdEscapeSimple(date)}\n` +
-    `Статус дня: *${mdEscapeSimple(obj?.statusDay || "—")}*\n` +
-    `Статус зараз: *${mdEscapeSimple(obj?.statusNow || "—")}*\n\n` +
-    `🚗 Машини:\n${carLines}\n\n` +
-    `👥 Люди / години:\n${peopleLines}\n\n` +
-    (
-      canShowMoney
-        ? `💰 Разом по роботах: *${fmtNum(totalAmount)}*`
-        : `💰 Разом по роботах: *приховано до затвердження*`
-    );
+const presentLines =
+  (obj?.presentEmployeeIds ?? [])
+    .map((empId) => `• ${mdEscapeSimple(empName(st, empId))}`)
+    .join("\n") || "—";
+
+const workingLines =
+  (obj?.workingEmployeeIds ?? [])
+    .map((empId) => `• ${mdEscapeSimple(empName(st, empId))}`)
+    .join("\n") || "—";
+
+
+const text =
+  `🏗 *Статистика обʼєкта*\n\n` +
+  `Обʼєкт: *${mdEscapeSimple(objectName(st, objectId))}*\n` +
+  `📅 ${mdEscapeSimple(date)}\n` +
+  `Статус дня: *${mdEscapeSimple(obj?.statusDay || "—")}*\n` +
+  `Статус зараз: *${mdEscapeSimple(obj?.statusNow || "—")}*\n\n` +
+  `🚗 Машини:\n${carLines}\n\n` +
+  `👥 Зараз на обʼєкті:\n${presentLines}\n\n` +
+  `🧱 Зараз працюють:\n${workingLines}\n\n` +
+  `⏱ Люди / години:\n${peopleLines}\n\n` +
+  (
+    canShowMoney
+      ? `💰 Разом по роботах: *${fmtNum(totalAmount)}*`
+      : `💰 Разом по роботах: *приховано до затвердження*`
+  );
 
   return {
     text,
@@ -510,7 +523,7 @@ async function buildPersonView(params: {
   const objLines =
     Object.entries(emp?.secByObject ?? {})
       .sort((a, b) => Number(b[1]) - Number(a[1]))
-      .map(([oid, sec]) => `• ${mdEscapeSimple(objectName(st, oid))}: *${fmtNum(Number(sec) / 3600)} год*`)
+      .map(([oid, sec]) => `• ${mdEscapeSimple(objectName(st, oid))}: *${(Number(sec) / 3600).toFixed(2)} год*`)
       .join("\n") || "—";
 
   const allApproved =
@@ -528,18 +541,24 @@ async function buildPersonView(params: {
         ? `🚗 ${carName(st, emp.whereNowCarId)}`
         : "—";
 
-  const text =
-    `👤 *Статистика працівника*\n\n` +
-    `Працівник: *${mdEscapeSimple(empName(st, employeeId))}*\n` +
-    `📅 ${mdEscapeSimple(date)}\n` +
-    `Статус зараз: *${mdEscapeSimple(emp?.statusNow || "—")}*\n` +
-    `Де зараз: *${mdEscapeSimple(nowWhere)}*\n\n` +
-    `🏗 Обʼєкти / години:\n${objLines}\n\n` +
-    (
-      allApproved
-        ? `💰 Разом по роботах: *${fmtNum(totalAmount)}*`
-        : `💰 Разом по роботах: *приховано до затвердження*`
-    );
+const nowWork =
+  emp?.currentWorkName
+    ? `🧱 ${emp.currentWorkName}`
+    : "—";
+
+const text =
+  `👤 *Статистика працівника*\n\n` +
+  `Працівник: *${mdEscapeSimple(empName(st, employeeId))}*\n` +
+  `📅 ${mdEscapeSimple(date)}\n` +
+  `Статус зараз: *${mdEscapeSimple(emp?.statusNow || "—")}*\n` +
+  `Де зараз: *${mdEscapeSimple(nowWhere)}*\n` +
+  `Що робить зараз: *${mdEscapeSimple(nowWork)}*\n\n` +
+  `🏗 Обʼєкти / години:\n${objLines}\n\n` +
+  (
+    allApproved
+      ? `💰 Разом по роботах: *${fmtNum(totalAmount)}*`
+      : `💰 Разом по роботах: *приховано до затвердження*`
+  );
 
   return {
     text,

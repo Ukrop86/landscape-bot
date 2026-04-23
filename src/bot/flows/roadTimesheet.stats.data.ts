@@ -12,6 +12,8 @@ type CarDayStat = {
   roadSec: number;
   statusNow: string;
   whereNowObjectId?: string;
+  lastEventType?: string;
+  isOnBase?: boolean;
 };
 
 type EmployeeDayStat = {
@@ -22,6 +24,9 @@ type EmployeeDayStat = {
   statusNow: string;
   whereNowObjectId?: string;
   whereNowCarId?: string;
+  currentWorkId?: string;
+  currentWorkName?: string;
+  lastEventType?: string;
 };
 
 type ObjectDayStat = {
@@ -31,6 +36,9 @@ type ObjectDayStat = {
   secByEmployee: Record<string, number>;
   statusDay: string;
   statusNow: string;
+  workingEmployeeIds: string[];
+  presentEmployeeIds: string[];
+  lastCarId?: string;
 };
 
 type LogisticsDayStat = {
@@ -84,17 +92,47 @@ function normalizeDayStatus(raw?: string) {
   return String(raw ?? "").trim().toUpperCase();
 }
 
-function detectNowStatusFromType(type: string): string {
+function detectCarStatusFromType(type: string): string {
   const t = String(type ?? "").trim().toUpperCase();
 
+  if (t === "RTS_SETUP_CAR") return "ПІДГОТОВКА";
   if (t === "RTS_ODO_START") return "В ДОРОЗІ";
+  if (t === "RTS_DRIVE_START") return "В ДОРОЗІ";
+  if (t === "RTS_DRIVE_RESUME") return "В ДОРОЗІ";
+  if (t === "RTS_DRIVE_PAUSE") return "НА ОБʼЄКТІ";
+  if (t === "RTS_ARRIVE_OBJECT") return "НА ОБʼЄКТІ";
+  if (t === "RTS_DAY_FINISH") return "ГОТОВА ДО ПОВЕРНЕННЯ";
+  if (t === "RTS_RETURN_START") return "ПОВЕРТАЄТЬСЯ НА БАЗУ";
+  if (t === "RTS_RETURN_STOP") return "НА БАЗІ";
+  if (t === "RTS_ODO_END") return "НА БАЗІ";
+  if (t === "ROAD_END") return "ДЕНЬ ЗАВЕРШЕНО";
+  if (t === "RTS_SAVE") return "ДЕНЬ ЗБЕРЕЖЕНО";
+  return "—";
+}
+
+function detectEmployeeStatusFromType(type: string): string {
+  const t = String(type ?? "").trim().toUpperCase();
+
+  if (t === "RTS_PICK_UP") return "В МАШИНІ";
   if (t === "RTS_DROP_OFF") return "НА ОБʼЄКТІ";
   if (t === "RTS_OBJ_WORK_START") return "ПРАЦЮЄ";
-  if (t === "RTS_OBJ_WORK_STOP") return "ЗАВЕРШИВ РОБОТУ";
-  if (t === "RTS_PICK_UP") return "ЗАБРАЛИ З ОБʼЄКТА";
-  if (t === "RTS_ODO_END") return "ДЕНЬ ЗАВЕРШЕНО";
+  if (t === "RTS_OBJ_WORK_STOP") return "НА ОБʼЄКТІ";
+  if (t === "RTS_RETURN_START") return "ПОВЕРТАЄТЬСЯ";
+  if (t === "RTS_RETURN_STOP") return "НА БАЗІ";
   if (t === "ROAD_END") return "ДЕНЬ ЗАВЕРШЕНО";
-  if (t === "ЛОГІСТИКА") return "ЛОГІСТИКА";
+  if (t === "RTS_SAVE") return "ДЕНЬ ЗБЕРЕЖЕНО";
+  return "—";
+}
+
+function detectObjectStatusFromType(type: string): string {
+  const t = String(type ?? "").trim().toUpperCase();
+
+  if (t === "RTS_ARRIVE_OBJECT") return "Є ЛЮДИ НА ОБʼЄКТІ";
+  if (t === "RTS_DROP_OFF") return "Є ЛЮДИ НА ОБʼЄКТІ";
+  if (t === "RTS_OBJ_WORK_START") return "ВИКОНУЮТЬ РОБОТИ";
+  if (t === "RTS_OBJ_WORK_STOP") return "РОБОТИ ПРИЗУПИНЕНО";
+  if (t === "RTS_PICK_UP") return "ЛЮДЕЙ ЗАБРАЛИ";
+  if (t === "ROAD_END") return "ДЕНЬ ЗАВЕРШЕНО";
   return "—";
 }
 
@@ -104,7 +142,10 @@ export async function buildRoadDayStats(args: {
 }) : Promise<RoadDayStats> {
   const { date, foremanTgId } = args;
 
-  const events = await fetchEvents({ date, foremanTgId });
+  const events = await fetchEvents({
+  date,
+  foremanTgId: "" as any,
+});
   const rows = [...(events ?? [])].sort((a, b) => getEventTsMs(a) - getEventTsMs(b));
 
   const cars: Record<string, CarDayStat> = {};
@@ -140,19 +181,21 @@ export async function buildRoadDayStats(args: {
     return employees[employeeId];
   };
 
-  const ensureObject = (objectId: string): ObjectDayStat => {
-    if (!objects[objectId]) {
-      objects[objectId] = {
-        objectId,
-        employeeIds: [],
-        carIds: [],
-        secByEmployee: {},
-        statusDay: "",
-        statusNow: "—",
-      };
-    }
-    return objects[objectId];
-  };
+const ensureObject = (objectId: string): ObjectDayStat => {
+  if (!objects[objectId]) {
+    objects[objectId] = {
+      objectId,
+      employeeIds: [],
+      carIds: [],
+      secByEmployee: {},
+      statusDay: "",
+      statusNow: "—",
+      workingEmployeeIds: [],
+      presentEmployeeIds: [],
+    };
+  }
+  return objects[objectId];
+};
 
   for (const e of rows) {
     const type = String(e.type ?? "");
@@ -170,45 +213,139 @@ export async function buildRoadDayStats(args: {
       ]),
     ];
 
-    if (carId) {
-      const car = ensureCar(carId);
-      if (objectId) uniqPush(car.objectIds, objectId);
-      for (const empId of employeeIds) uniqPush(car.employeeIds, empId);
-      car.statusNow = detectNowStatusFromType(type);
-      if (objectId && (type === "RTS_DROP_OFF" || type === "RTS_OBJ_WORK_START")) {
-        car.whereNowObjectId = objectId;
-      }
-      if (type === "RTS_ODO_START" && Number.isFinite(Number(payload?.odoStartKm))) {
-        car.odoStartKm = Number(payload.odoStartKm);
-      }
-      if (type === "RTS_ODO_END" && Number.isFinite(Number(payload?.odoEndKm))) {
-        car.odoEndKm = Number(payload.odoEndKm);
-      }
-    }
+if (carId) {
+  const car = ensureCar(carId);
 
-    if (objectId) {
-      const obj = ensureObject(objectId);
-      if (carId) uniqPush(obj.carIds, carId);
-      for (const empId of employeeIds) uniqPush(obj.employeeIds, empId);
-      obj.statusNow = detectNowStatusFromType(type);
-    }
+  if (objectId) uniqPush(car.objectIds, objectId);
+  for (const empId of employeeIds) uniqPush(car.employeeIds, empId);
 
-    for (const empId of employeeIds) {
-      const emp = ensureEmployee(empId);
-      if (objectId) uniqPush(emp.objectIds, objectId);
-      if (carId) uniqPush(emp.carIds, carId);
+  car.lastEventType = type;
+  car.statusNow = detectCarStatusFromType(type);
 
-      emp.statusNow = detectNowStatusFromType(type);
-      if (objectId && (type === "RTS_DROP_OFF" || type === "RTS_OBJ_WORK_START")) {
-        emp.whereNowObjectId = objectId;
-        if (carId) {
-  emp.whereNowCarId = carId;
+  if (
+    type === "RTS_ARRIVE_OBJECT" ||
+    type === "RTS_DROP_OFF" ||
+    type === "RTS_OBJ_WORK_START" ||
+    type === "RTS_OBJ_WORK_STOP"
+  ) {
+    if (objectId) car.whereNowObjectId = objectId;
+    car.isOnBase = false;
+  }
+
+  if (
+    type === "RTS_DRIVE_START" ||
+    type === "RTS_DRIVE_RESUME" ||
+    type === "RTS_RETURN_START" ||
+    type === "RTS_ODO_START"
+  ) {
+    delete car.whereNowObjectId;
+    car.isOnBase = false;
+  }
+
+  if (
+    type === "RTS_RETURN_STOP" ||
+    type === "RTS_ODO_END"
+  ) {
+    delete car.whereNowObjectId;
+    car.isOnBase = true;
+  }
+
+  if (type === "RTS_ODO_START" && Number.isFinite(Number(payload?.odoStartKm))) {
+    car.odoStartKm = Number(payload.odoStartKm);
+  }
+
+  if (type === "RTS_ODO_END" && Number.isFinite(Number(payload?.odoEndKm))) {
+    car.odoEndKm = Number(payload.odoEndKm);
+  }
 }
-      }
-      if (carId && type === "RTS_ODO_START") {
-        emp.whereNowCarId = carId;
-      }
-    }
+
+if (objectId) {
+  const obj = ensureObject(objectId);
+
+  if (carId) {
+    uniqPush(obj.carIds, carId);
+    obj.lastCarId = carId;
+  }
+
+  for (const empId of employeeIds) uniqPush(obj.employeeIds, empId);
+
+  obj.statusNow = detectObjectStatusFromType(type);
+
+  if (type === "RTS_DROP_OFF") {
+    for (const empId of employeeIds) uniqPush(obj.presentEmployeeIds, empId);
+  }
+
+  if (type === "RTS_PICK_UP") {
+    obj.presentEmployeeIds = obj.presentEmployeeIds.filter(
+      (id) => !employeeIds.includes(id),
+    );
+    obj.workingEmployeeIds = obj.workingEmployeeIds.filter(
+      (id) => !employeeIds.includes(id),
+    );
+  }
+
+  if (type === "RTS_OBJ_WORK_START") {
+    for (const empId of employeeIds) uniqPush(obj.presentEmployeeIds, empId);
+    for (const empId of employeeIds) uniqPush(obj.workingEmployeeIds, empId);
+  }
+
+  if (type === "RTS_OBJ_WORK_STOP") {
+    obj.workingEmployeeIds = obj.workingEmployeeIds.filter(
+      (id) => !employeeIds.includes(id),
+    );
+  }
+}
+
+for (const empId of employeeIds) {
+  const emp = ensureEmployee(empId);
+
+  if (objectId) uniqPush(emp.objectIds, objectId);
+  if (carId) uniqPush(emp.carIds, carId);
+
+  emp.lastEventType = type;
+  emp.statusNow = detectEmployeeStatusFromType(type);
+
+  if (type === "RTS_PICK_UP") {
+    if (carId) emp.whereNowCarId = carId;
+    delete emp.whereNowObjectId;
+    delete emp.currentWorkId;
+    delete emp.currentWorkName;
+  }
+
+  if (type === "RTS_DROP_OFF") {
+    if (objectId) emp.whereNowObjectId = objectId;
+    delete emp.whereNowCarId;
+    delete emp.currentWorkId;
+    delete emp.currentWorkName;
+  }
+
+  if (type === "RTS_OBJ_WORK_START") {
+    if (objectId) emp.whereNowObjectId = objectId;
+    delete emp.whereNowCarId;
+    emp.currentWorkId = String(payload?.workId ?? "");
+    emp.currentWorkName = String(payload?.workName ?? payload?.workId ?? "");
+  }
+
+  if (type === "RTS_OBJ_WORK_STOP") {
+    if (objectId) emp.whereNowObjectId = objectId;
+    delete emp.currentWorkId;
+    delete emp.currentWorkName;
+  }
+
+  if (type === "RTS_RETURN_START") {
+    if (carId) emp.whereNowCarId = carId;
+    delete emp.whereNowObjectId;
+    delete emp.currentWorkId;
+    delete emp.currentWorkName;
+  }
+
+  if (type === "RTS_RETURN_STOP" || type === "RTS_ODO_END") {
+    delete emp.whereNowCarId;
+    delete emp.whereNowObjectId;
+    delete emp.currentWorkId;
+    delete emp.currentWorkName;
+  }
+}
 
     if (type === "RTS_OBJ_WORK_START") {
       const workId = String(payload.workId ?? "");
@@ -291,6 +428,13 @@ export async function buildRoadDayStats(args: {
     }
   }
 
+
+
+
+
+
+
+
   const nowMs = Date.now();
   for (const [key, startMs] of openWork.entries()) {
     const [employeeId, objectId] = key.split("||");
@@ -316,6 +460,45 @@ export async function buildRoadDayStats(args: {
       }
     })
   );
+
+for (const car of Object.values(cars)) {
+  if (car.isOnBase) {
+    car.statusNow = "НА БАЗІ";
+  } else if (car.whereNowObjectId) {
+    if (
+      String(car.statusNow) === "НА ОБʼЄКТІ" ||
+      String(car.statusNow) === "ВИКОНУЮТЬ РОБОТИ"
+    ) {
+      car.statusNow = "НА ОБʼЄКТІ";
+    }
+  }
+}
+
+for (const emp of Object.values(employees)) {
+  if (emp.currentWorkId) {
+    emp.statusNow = "ПРАЦЮЄ";
+  } else if (emp.whereNowObjectId) {
+    emp.statusNow = "НА ОБʼЄКТІ";
+  } else if (emp.whereNowCarId) {
+    emp.statusNow = "В МАШИНІ";
+  } else if (
+    emp.lastEventType === "RTS_RETURN_STOP" ||
+    emp.lastEventType === "RTS_ODO_END"
+  ) {
+    emp.statusNow = "НА БАЗІ";
+  }
+}
+
+for (const obj of Object.values(objects)) {
+  if ((obj.workingEmployeeIds ?? []).length > 0) {
+    obj.statusNow = "ВИКОНУЮТЬ РОБОТИ";
+  } else if ((obj.presentEmployeeIds ?? []).length > 0) {
+    obj.statusNow = "Є ЛЮДИ НА ОБʼЄКТІ";
+  } else if (String(obj.statusDay ?? "").trim()) {
+    obj.statusNow = "РОБОТИ ЗАВЕРШЕНО";
+  }
+}
+
 
   return { events: rows, cars, employees, objects, logistics };
 }
