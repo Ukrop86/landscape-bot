@@ -18,7 +18,8 @@ import {  ensureEmployees,  ensureObjectState,  objectName,  carName,  empName, 
   fileIdFromPhoto,  now,  uniq,  fmtNum,  parseKm,  parseQty,  mdEscapeSimple,  roundToQuarterHours,  askNextMessage,  buildBulkQtyScreen,  sendLongHtml,  sendSaveScreen,
   getAdminTgIds,  pickBrigadierFromPeople,  isSenior,  buildRoadAdminTextFromEventPayload,  computeFromRts,  computeRoadSecondsFromRts,  writeEvent,  safeEditMessageText,
   hasOpenSessionForEmployeeOnObject,  startBulkQtyForObject,  fetchEventsSafe,  parsePayload, ensureStateReady, 
-  buildRoadApprovedShortText, findCarBusyByAnotherForeman, buildBusyCarsMap } from "./roadTimesheet.utils.js";
+  buildRoadApprovedShortText, findCarBusyByAnotherForeman, buildBusyCarsMap, buildBusyEmployeesMap,
+findEmployeeBusyByAnotherForeman } from "./roadTimesheet.utils.js";
 
 import {  appendEvents,  refreshDayChecklist,  upsertTimesheetRow,  upsertAllowanceRows,  upsertOdometerDay,  
   getEventById,  updateEventById, fetchEvents
@@ -394,6 +395,10 @@ if (!x) {
   }));
 }
 
+
+
+
+
 let busyByCarId = new Map<string, { foremanTgId: number; foremanName: string }>();
 
 if (x?.step === "PICK_CAR") {
@@ -412,7 +417,30 @@ if (x?.step === "PICK_CAR") {
   });
 }
 
+let busyByEmployeeId = new Map<string, { foremanTgId: number; foremanName: string }>();
+
+if (x?.step === "PICK_PEOPLE") {
+  const [evsForPeople, usersForPeople] = await Promise.all([
+    fetchEvents({
+      date: x.date,
+      foremanTgId: "" as any,
+    }).catch(() => []),
+    fetchUsers().catch(() => []),
+  ]);
+
+  busyByEmployeeId = buildBusyEmployeesMap({
+    evs: evsForPeople,
+    users: usersForPeople,
+    selfForemanTgId: foremanTgId,
+  });
+}
+
 return renderFlow<State>(bot, chatId, s, FLOW, () => {
+
+
+
+
+
     
     const date = x.date || todayISO();
 
@@ -689,13 +717,13 @@ if (x.step === "PICK_CAR") {
       const slice = emps.slice(0, 40);
       const inCar = new Set(x.inCarIds);
 const rows: TelegramBot.InlineKeyboardButton[][] = slice.map((e) => {
-  const owner = findEmployeeOwner(root, e.id, foremanTgId);
+  const busy = busyByEmployeeId.get(String(e.id));
   const isMine = inCar.has(e.id);
 
   const label = isMine
     ? `✅ ${e.name}`
-    : owner
-      ? `🔒 ${e.name} — ${owner.foremanName}`
+    : busy
+      ? `🔒 ${e.name} — ${busy.foremanName}`
       : `▫️ ${e.name}`;
 
   return [
@@ -2690,16 +2718,28 @@ if (data.startsWith(cb.EMP_TOGGLE)) {
 
   const has = st.inCarIds.includes(empId);
 
-  if (!has) {
-    const owner = findEmployeeOwner(root, empId, foremanTgId);
-    if (owner) {
-      await bot.answerCallbackQuery(q.id, {
-        text: `⛔ Цю людину вже обрав ${owner.foremanName}`,
-        show_alert: true,
-      });
-      return true;
-    }
+if (!has) {
+  const owner = await findEmployeeBusyByAnotherForeman({
+    date,
+    employeeId: empId,
+    selfForemanTgId: foremanTgId,
+  });
+
+  if (owner) {
+    await bot.answerCallbackQuery(q.id).catch(() => {});
+
+    const msg = await bot.sendMessage(
+      chatId,
+      `⛔ Цю людину вже обрав ${owner.foremanName}`
+    );
+
+    setTimeout(() => {
+      bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+    }, 4000);
+
+    return true;
   }
+}
 
   st.inCarIds = has
     ? st.inCarIds.filter((x) => x !== empId)
@@ -3008,9 +3048,23 @@ if (data === cb.MANAGE_PEOPLE) {
   root[foremanTgId] = st;
 setFlowState(s, FLOW, root);
 
+const [evsForPeople, usersForPeople] = await Promise.all([
+  fetchEvents({
+    date,
+    foremanTgId: "" as any,
+  }).catch(() => []),
+  fetchUsers().catch(() => []),
+]);
+
+const busyByEmployeeId = buildBusyEmployeesMap({
+  evs: evsForPeople,
+  users: usersForPeople,
+  selfForemanTgId: foremanTgId,
+});
+
 const rows = emps.slice(0, 40).map((e: { id: string; name: string }) => {
   const inCar = st.inCarIds.includes(e.id);
-  const owner = findEmployeeOwner(root, e.id, foremanTgId);
+  const owner = busyByEmployeeId.get(String(e.id));
 
   const label = inCar
     ? `➖ ${e.name}`
@@ -3049,15 +3103,27 @@ if (data.startsWith(cb.TOGGLE_IN_CAR)) {
 
   const inCar = st.inCarIds.includes(empId);
 
-  if (!inCar) {
-    const owner = findEmployeeOwner(root, empId, foremanTgId);
-    if (owner) {
-      await bot.answerCallbackQuery(q.id, {
-        text: `⛔ Цю людину вже обрав ${owner.foremanName}`,
-        show_alert: true,
-      });
-      return true;
-    }
+if (!inCar) {
+  const owner = await findEmployeeBusyByAnotherForeman({
+    date,
+    employeeId: empId,
+    selfForemanTgId: foremanTgId,
+  });
+
+  if (owner) {
+    await bot.answerCallbackQuery(q.id).catch(() => {});
+
+    const msg = await bot.sendMessage(
+      chatId,
+      `⛔ Цю людину вже обрав ${owner.foremanName}`
+    );
+
+    setTimeout(() => {
+      bot.deleteMessage(chatId, msg.message_id).catch(() => {});
+    }, 4000);
+
+    return true;
+  }
 
     st.inCarIds.push(empId);
         st.inCarIds = uniq(st.inCarIds);

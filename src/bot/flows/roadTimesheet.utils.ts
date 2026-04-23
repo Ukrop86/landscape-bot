@@ -1618,6 +1618,101 @@ export function buildBusyCarsMap(params: {
   return busyByCarId;
 }
 
+export function buildBusyEmployeesMap(params: {
+  evs: any[];
+  users: any[];
+  selfForemanTgId: number;
+}) {
+  const userNameByTgId = new Map(
+    (params.users ?? []).map((u: any) => [
+      Number(u.tgId ?? 0),
+      String(
+        u.fullName ||
+        u.name ||
+        u.firstName ||
+        u.username ||
+        `Бригадир ${u.tgId}`
+      ),
+    ]),
+  );
+
+  const grouped = new Map<string, any[]>();
+
+  for (const e of params.evs ?? []) {
+    const employeeIds = String(e.employeeIds ?? "")
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+
+    for (const employeeId of employeeIds) {
+      if (!grouped.has(employeeId)) grouped.set(employeeId, []);
+      grouped.get(employeeId)!.push(e);
+    }
+  }
+
+  const FREE_TYPES = new Set([
+    "RTS_DROP_OFF",
+    "ROAD_END",
+    "RTS_SAVE",
+  ]);
+
+  const busyByEmployeeId = new Map<
+    string,
+    { foremanTgId: number; foremanName: string }
+  >();
+
+  for (const [employeeId, events] of grouped.entries()) {
+    const rows = (events ?? [])
+      .filter(
+        (e: any) =>
+          Number(e.foremanTgId ?? 0) > 0 &&
+          Number(e.foremanTgId ?? 0) !== Number(params.selfForemanTgId),
+      )
+      .sort((a: any, b: any) =>
+        String(b.updatedAt ?? b.ts ?? "").localeCompare(
+          String(a.updatedAt ?? a.ts ?? ""),
+        ),
+      );
+
+    const latest = rows[0];
+    if (!latest) continue;
+
+    const latestType = String(latest.type ?? "");
+    if (FREE_TYPES.has(latestType)) continue;
+
+    const foremanTgId = Number(latest.foremanTgId ?? 0);
+
+    busyByEmployeeId.set(employeeId, {
+      foremanTgId,
+      foremanName:
+        userNameByTgId.get(foremanTgId) || `Бригадир ${foremanTgId}`,
+    });
+  }
+
+  return busyByEmployeeId;
+}
+
+export async function findEmployeeBusyByAnotherForeman(params: {
+  date: string;
+  employeeId: string;
+  selfForemanTgId: number;
+}) {
+  const [evs, users] = await Promise.all([
+    fetchEvents({
+      date: params.date,
+      foremanTgId: "" as any,
+    }).catch(() => []),
+    fetchUsers().catch(() => []),
+  ]);
+
+  const busyByEmployeeId = buildBusyEmployeesMap({
+    evs,
+    users,
+    selfForemanTgId: params.selfForemanTgId,
+  });
+
+  return busyByEmployeeId.get(String(params.employeeId)) ?? null;
+}
 
 
 
