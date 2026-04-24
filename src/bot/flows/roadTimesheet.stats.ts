@@ -22,6 +22,8 @@ import {
   ensureObjectsMeta,
   computeFromRts,
   computeRoadSecondsFromRts,
+  pickBrigadierFromPeople,
+  isSenior,
 } from "./roadTimesheet.utils.js";
 
 import { computeWorkMoneyFromRts } from "./roadTimesheet.compute.js";
@@ -439,6 +441,187 @@ async function buildCarView(params: {
   };
 }
 
+async function buildStatsPayMap(params: {
+  date: string;
+  foremanTgId: number;
+}) {
+  const { date, foremanTgId } = params;
+
+  const aggAll = await computeFromRts({ date, foremanTgId });
+  const workRows = (await computeWorkMoneyFromRts({ date, foremanTgId })) as any[];
+
+  const allEmployeeIds = uniq(
+    aggAll
+      .map((r: any) => String(r.employeeId ?? ""))
+      .filter(Boolean),
+  );
+
+  const brigadierEmployeeIds: string[] = [];
+
+  const oneBrigadier = await pickBrigadierFromPeople(allEmployeeIds);
+  if (oneBrigadier) {
+    brigadierEmployeeIds.push(String(oneBrigadier));
+  }
+
+  const seniorEmployeeIds: string[] = [];
+
+  for (const empId of allEmployeeIds) {
+    if (await isSenior(empId)) {
+      seniorEmployeeIds.push(String(empId));
+    }
+  }
+
+  const moneyByObject = new Map<string, number>();
+
+  for (const r of workRows) {
+    const oid = String(r.objectId ?? "");
+    moneyByObject.set(
+      oid,
+      (moneyByObject.get(oid) ?? 0) + Number(r.amount ?? 0),
+    );
+  }
+
+  const pointsByObjectEmp = new Map<string, number>();
+
+  for (const r of aggAll) {
+    const oid = String(r.objectId ?? "");
+    const empId = String(r.employeeId ?? "");
+    if (!oid || !empId) continue;
+
+    const hours = roundToQuarterHours(Number(r.sec ?? 0) / 3600);
+    const coef =
+      Number(r.disciplineCoef ?? 1.0) *
+      Number(r.productivityCoef ?? 1.0);
+
+    const points = Math.round(hours * coef * 100) / 100;
+    const key = `${oid}||${empId}`;
+
+    pointsByObjectEmp.set(
+      key,
+      (pointsByObjectEmp.get(key) ?? 0) + points,
+    );
+  }
+
+  const payByObjectEmp = new Map<string, number>();
+  const companyByObject = new Map<string, number>();
+  const roleSummaryByObject = new Map<
+    string,
+    {
+      workers: number;
+      brigadiers: number;
+      seniors: number;
+      company: number;
+    }
+  >();
+
+  for (const [objectId, objectTotal] of moneyByObject.entries()) {
+    const objectEmpRows = [...pointsByObjectEmp.entries()]
+      .filter(([key]) => key.startsWith(`${objectId}||`))
+      .map(([key, points]) => {
+        const empId = key.split("||")[1] ?? "";
+        return { empId, points };
+      })
+      .filter((r) => r.empId && r.points > 0);
+
+    const brigadierSet = new Set(brigadierEmployeeIds.map(String));
+    const seniorSet = new Set(seniorEmployeeIds.map(String));
+
+    const brigadierRows = objectEmpRows.filter((r) =>
+      brigadierSet.has(String(r.empId)),
+    );
+
+    const seniorRows = objectEmpRows.filter((r) =>
+      seniorSet.has(String(r.empId)),
+    );
+
+    const hasBrigadier = brigadierRows.length > 0;
+    const hasSenior = seniorRows.length > 0;
+
+    const workerPercent = hasBrigadier ? 0.7 : 0.9;
+    const brigadierPercent = hasBrigadier ? 0.2 : 0;
+    const seniorPercent = !hasBrigadier && hasSenior ? 0.1 : 0;
+    const companyPercent = hasBrigadier ? 0.1 : hasSenior ? 0 : 0.1;
+
+    const workerRows = objectEmpRows.filter((r) => {
+      const id = String(r.empId);
+
+      if (hasBrigadier && brigadierSet.has(id)) return false;
+      if (!hasBrigadier && hasSenior && seniorSet.has(id)) return false;
+
+      return true;
+    });
+
+    const sumWorkerPoints = workerRows.reduce(
+      (a, r) => a + Number(r.points ?? 0),
+      0,
+    );
+
+    const brigadierTotalPay = objectTotal * brigadierPercent;
+    const seniorTotalPay = objectTotal * seniorPercent;
+    const companyPay = objectTotal * companyPercent;
+
+    const brigadierOnePay =
+      brigadierRows.length > 0
+        ? brigadierTotalPay / brigadierRows.length
+        : 0;
+
+    const seniorOnePay =
+      seniorRows.length > 0
+        ? seniorTotalPay / seniorRows.length
+        : 0;
+
+    let workersTotalPay = 0;
+
+    for (const r of objectEmpRows) {
+      let pay = 0;
+
+      if (hasBrigadier && brigadierSet.has(String(r.empId))) {
+        pay = brigadierOnePay;
+      } else if (!hasBrigadier && hasSenior && seniorSet.has(String(r.empId))) {
+        pay = seniorOnePay;
+      } else {
+        pay =
+          sumWorkerPoints > 0
+            ? (objectTotal * workerPercent * Number(r.points ?? 0)) / sumWorkerPoints
+            : 0;
+
+        workersTotalPay += pay;
+      }
+
+      payByObjectEmp.set(
+        `${objectId}||${r.empId}`,
+        Math.round(pay * 100) / 100,
+      );
+    }
+
+    companyByObject.set(objectId, Math.round(companyPay * 100) / 100);
+
+    roleSummaryByObject.set(objectId, {
+      workers: Math.round(workersTotalPay * 100) / 100,
+      brigadiers: Math.round(brigadierTotalPay * 100) / 100,
+      seniors: Math.round(seniorTotalPay * 100) / 100,
+      company: Math.round(companyPay * 100) / 100,
+    });
+  }
+
+  return {
+    moneyByObject,
+    payByObjectEmp,
+    companyByObject,
+    roleSummaryByObject,
+  };
+}
+
+
+
+
+
+
+
+
+
+
+
 async function buildObjectView(params: {
   st: State;
   prefix: string;
@@ -462,9 +645,37 @@ async function buildObjectView(params: {
 
   const canShowMoney = String(obj?.statusDay ?? "") === "ЗАТВЕРДЖЕНО";
 
-  const workRows = (await computeWorkMoneyFromRts({ date, foremanTgId })) as any[];
-  const wr = workRows.filter((x) => String(x.objectId ?? "") === String(objectId));
-  const totalAmount = wr.reduce((a, x) => a + Number(x.amount ?? 0), 0);
+const payMap = await buildStatsPayMap({ date, foremanTgId });
+const totalAmount = payMap.moneyByObject.get(String(objectId)) ?? 0;
+
+const payLines =
+  [...payMap.payByObjectEmp.entries()]
+    .filter(([key]) => key.startsWith(`${objectId}||`))
+.map(([key, pay]) => {
+  const parts = key.split("||");
+  const empId = parts[1];
+
+  if (!empId) return null;
+
+  return `• ${mdEscapeSimple(empName(st, empId))}: *${fmtNum(pay)}*`;
+})
+.filter(Boolean)
+    .join("\n") || "—";
+
+    const roleSummary = payMap.roleSummaryByObject.get(String(objectId));
+
+const roleLines = roleSummary
+  ? [
+      `👷 Працівники: *${fmtNum(roleSummary.workers)}*`,
+      roleSummary.brigadiers > 0
+        ? `👨‍🔧 Бригадири: *${fmtNum(roleSummary.brigadiers)}*`
+        : "",
+      roleSummary.seniors > 0
+        ? `🌿 Старші садівники: *${fmtNum(roleSummary.seniors)}*`
+        : "",
+      `🏢 Фірма: *${fmtNum(roleSummary.company)}*`,
+    ].filter(Boolean).join("\n")
+  : "—";
 
 const presentLines =
   (obj?.presentEmployeeIds ?? [])
@@ -489,7 +700,7 @@ const text =
   `⏱ Люди / години:\n${peopleLines}\n\n` +
   (
     canShowMoney
-      ? `💰 Разом по роботах: *${fmtNum(totalAmount)}*`
+      ? `💰 Разом по роботах: *${fmtNum(totalAmount)}*\n\n📊 Розподіл:\n${roleLines}\n\n💵 Кому скільки:\n${payLines}`
       : `💰 Разом по роботах: *приховано до затвердження*`
   );
 
@@ -530,9 +741,54 @@ async function buildPersonView(params: {
     (emp?.objectIds ?? []).length > 0 &&
     (emp?.objectIds ?? []).every((oid) => String(day.objects[oid]?.statusDay ?? "") === "ЗАТВЕРДЖЕНО");
 
-  const workRows = (await computeWorkMoneyFromRts({ date, foremanTgId })) as any[];
-  const wr = workRows.filter((x) => String(x.employeeId ?? "") === String(employeeId));
-  const totalAmount = wr.reduce((a, x) => a + Number(x.amount ?? 0), 0);
+const payMap = await buildStatsPayMap({ date, foremanTgId });
+
+const totalAmount = [...payMap.payByObjectEmp.entries()]
+  .filter(([key]) => key.endsWith(`||${employeeId}`))
+  .reduce((a, [, pay]) => a + Number(pay ?? 0), 0);
+
+const payLines =
+  [...payMap.payByObjectEmp.entries()]
+    .filter(([key]) => key.endsWith(`||${employeeId}`))
+.map(([key, pay]) => {
+  const parts = key.split("||");
+  const objectId = parts[0];
+
+  if (!objectId) return null;
+
+  return `• ${mdEscapeSimple(objectName(st, objectId))}: *${fmtNum(pay)}*`;
+})
+.filter(Boolean)
+.join("\n") || "—";
+
+const roleTotals = {
+  workers: 0,
+  brigadiers: 0,
+  seniors: 0,
+  company: 0,
+};
+
+for (const [objectId, summary] of payMap.roleSummaryByObject.entries()) {
+  roleTotals.workers += summary.workers;
+  roleTotals.brigadiers += summary.brigadiers;
+  roleTotals.seniors += summary.seniors;
+  roleTotals.company += summary.company;
+}
+
+const roleLines = [
+  `👷 Працівники: *${fmtNum(roleTotals.workers)}*`,
+  roleTotals.brigadiers > 0
+    ? `👨‍🔧 Бригадири: *${fmtNum(roleTotals.brigadiers)}*`
+    : "",
+  roleTotals.seniors > 0
+    ? `🌿 Старші садівники: *${fmtNum(roleTotals.seniors)}*`
+    : "",
+  `🏢 Фірма: *${fmtNum(roleTotals.company)}*`,
+]
+  .filter(Boolean)
+  .join("\n");
+
+
 
   const nowWhere =
     emp?.whereNowObjectId
@@ -556,7 +812,7 @@ const text =
   `🏗 Обʼєкти / години:\n${objLines}\n\n` +
   (
     allApproved
-      ? `💰 Разом по роботах: *${fmtNum(totalAmount)}*`
+      ? `💰 Разом по роботах: *${fmtNum(totalAmount)}*\n\n📊 Загальний розподіл:\n${roleLines}\n\n💵 По обʼєктах:\n${payLines}`
       : `💰 Разом по роботах: *приховано до затвердження*`
   );
 
