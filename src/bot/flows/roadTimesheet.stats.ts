@@ -537,16 +537,16 @@ async function buildStatsPayMap(params: {
     const hasBrigadier = brigadierRows.length > 0;
     const hasSenior = seniorRows.length > 0;
 
-    const workerPercent = hasBrigadier ? 0.7 : 0.9;
-    const brigadierPercent = hasBrigadier ? 0.2 : 0;
-    const seniorPercent = !hasBrigadier && hasSenior ? 0.1 : 0;
-    const companyPercent = hasBrigadier ? 0.1 : hasSenior ? 0 : 0.1;
+const workerPercent = hasBrigadier ? 0.7 : 0.9;
+const brigadierPercent = hasBrigadier ? 0.2 : 0;
+const seniorPercent = hasSenior ? 0.1 : 0;
+const companyPercent = hasSenior ? 0 : 0.1;
 
     const workerRows = objectEmpRows.filter((r) => {
       const id = String(r.empId);
 
       if (hasBrigadier && brigadierSet.has(id)) return false;
-      if (!hasBrigadier && hasSenior && seniorSet.has(id)) return false;
+      if (hasSenior && seniorSet.has(id)) return false;
 
       return true;
     });
@@ -577,7 +577,7 @@ async function buildStatsPayMap(params: {
 
       if (hasBrigadier && brigadierSet.has(String(r.empId))) {
         pay = brigadierOnePay;
-      } else if (!hasBrigadier && hasSenior && seniorSet.has(String(r.empId))) {
+      } else if (hasSenior && seniorSet.has(String(r.empId))) {
         pay = seniorOnePay;
       } else {
         pay =
@@ -787,7 +787,6 @@ const roleLines = [
 ]
   .filter(Boolean)
   .join("\n");
-
 
 
   const nowWhere =

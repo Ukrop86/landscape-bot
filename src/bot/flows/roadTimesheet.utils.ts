@@ -1305,6 +1305,76 @@ export function buildRoadApprovedShortText(
   const totalToPay = Number(payload.totalToPay ?? (workTotal + roadTotal));
   const carTitle = String(payload.carName ?? "").trim();
 
+  const salaryPacks = Array.isArray(payload.salaryPacks)
+    ? payload.salaryPacks
+    : [];
+
+  const roleTotals = {
+    workers: 0,
+    brigadiers: 0,
+    seniors: 0,
+    company: 0,
+  };
+
+  const brigadierIds = new Set(
+    [
+      ...(Array.isArray(payload.brigadierEmployeeIds)
+        ? payload.brigadierEmployeeIds
+        : []),
+      payload.brigadierEmployeeId,
+    ]
+      .map((x) => String(x ?? "").trim())
+      .filter(Boolean),
+  );
+
+  const seniorIds = new Set(
+    [
+      ...(Array.isArray(payload.seniorEmployeeIds)
+        ? payload.seniorEmployeeIds
+        : []),
+      payload.seniorEmployeeId,
+    ]
+      .map((x) => String(x ?? "").trim())
+      .filter(Boolean),
+  );
+
+  for (const pack of salaryPacks) {
+    const objectTotal = Number(pack.objectTotal ?? 0);
+    const rows = Array.isArray(pack.rows) ? pack.rows : [];
+
+    let paidTotal = 0;
+
+    for (const r of rows) {
+      const empId = String(r.employeeId ?? "").trim();
+      const pay = Number(r.pay ?? 0);
+
+      paidTotal += pay;
+
+      if (brigadierIds.has(empId)) {
+        roleTotals.brigadiers += pay;
+      } else if (seniorIds.has(empId)) {
+        roleTotals.seniors += pay;
+      } else {
+        roleTotals.workers += pay;
+      }
+    }
+
+    roleTotals.company += Math.max(0, objectTotal - paidTotal);
+  }
+
+  const roleLines = [
+    `👷 Працівники: *${esc(fmt2(roleTotals.workers))}*`,
+    roleTotals.brigadiers > 0
+      ? `👨‍🔧 Бригадири: *${esc(fmt2(roleTotals.brigadiers))}*`
+      : "",
+    roleTotals.seniors > 0
+      ? `🌿 Старші садівники: *${esc(fmt2(roleTotals.seniors))}*`
+      : "",
+    `🏢 Фірма: *${esc(fmt2(roleTotals.company))}*`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
   return [
     opts?.title ? String(opts.title) : "✅ *День затверджено*",
     `📅 Дата: ${esc(ev.date)}`,
@@ -1316,11 +1386,14 @@ export function buildRoadApprovedShortText(
     `💼 Роботи: *${esc(fmt2(workTotal))}*`,
     `🛣 Дорога: *${esc(fmt2(roadTotal))}*`,
     `💰 *Разом: ${esc(fmt2(totalToPay))}*`,
+    "",
+    `📊 *Розподіл по роботах:*`,
+    roleLines,
   ].join("\n");
 }
 
 
-
+ 
 // -------------------- Events compute --------------------
 
 export function csvToIds(csv: string): string[] {
