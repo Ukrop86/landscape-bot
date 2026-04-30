@@ -668,20 +668,41 @@ export async function sendSaveScreen(
   await ensureObjectsMeta(st);
   await ensureEmployees(st);
 
-  const aggAll = await computeFromRts({
-    date,
-    foremanTgId,
-  }).catch(() => []);
+const sinceTs = st.driveStartedAt ?? st.members?.[0]?.joinedAt;
 
-  const roadAgg = await computeRoadSecondsFromRts({
-    date,
-    foremanTgId,
-  }).catch(() => []);
+let aggAll = await computeFromRts({
+  date,
+  foremanTgId,
+}).catch(() => []);
 
-  const workMoneyRows = await computeWorkMoneyFromRts({
-    date,
-    foremanTgId,
-  }).catch(() => []);
+let roadAgg = await computeRoadSecondsFromRts({
+  date,
+  foremanTgId,
+}).catch(() => []);
+
+const workMoneyRows = await computeWorkMoneyFromRts({
+  date,
+  foremanTgId,
+  ...(sinceTs ? { sinceTs } : {}),
+}).catch(() => []);
+
+if (sinceTs) {
+  const sinceMs = Date.parse(String(sinceTs));
+
+  if (Number.isFinite(sinceMs)) {
+    aggAll = aggAll.filter((r: any) => {
+      const ts = String(r.endedAt ?? r.startedAt ?? r.ts ?? "").trim();
+      const ms = Date.parse(ts);
+      return Number.isFinite(ms) ? ms >= sinceMs : true;
+    });
+
+    roadAgg = roadAgg.filter((r: any) => {
+      const ts = String(r.endedAt ?? r.startedAt ?? r.ts ?? "").trim();
+      const ms = Date.parse(ts);
+      return Number.isFinite(ms) ? ms >= sinceMs : true;
+    });
+  }
+}
 
   const kmDay = Math.max(
     0,
@@ -1302,6 +1323,7 @@ export function buildRoadApprovedShortText(
   const totalPeople = Array.isArray(payload.riders) ? payload.riders.length : 0;
   const workTotal = Number(payload.workGrandTotal ?? 0);
   const roadTotal = Number(payload.amount ?? 0);
+  const roadPerPerson = totalPeople > 0 ? roadTotal / totalPeople : 0;
   const totalToPay = Number(payload.totalToPay ?? (workTotal + roadTotal));
   const carTitle = String(payload.carName ?? "").trim();
 
@@ -1338,29 +1360,42 @@ export function buildRoadApprovedShortText(
       .filter(Boolean),
   );
 
-  for (const pack of salaryPacks) {
-    const objectTotal = Number(pack.objectTotal ?? 0);
-    const rows = Array.isArray(pack.rows) ? pack.rows : [];
+for (const pack of salaryPacks) {
+  const objectTotal = Number(pack.objectTotal ?? 0);
+  const rows = Array.isArray(pack.rows) ? pack.rows : [];
 
-    let paidTotal = 0;
+  const hasBrigadier = rows.some((r: any) =>
+    brigadierIds.has(String(r.employeeId ?? "").trim()),
+  );
 
-    for (const r of rows) {
-      const empId = String(r.employeeId ?? "").trim();
-      const pay = Number(r.pay ?? 0);
+  const hasSenior = rows.some((r: any) =>
+    seniorIds.has(String(r.employeeId ?? "").trim()),
+  );
 
-      paidTotal += pay;
+  if (hasBrigadier) {
+    roleTotals.workers += objectTotal * 0.7;
+    roleTotals.brigadiers += objectTotal * 0.2;
 
-      if (brigadierIds.has(empId)) {
-        roleTotals.brigadiers += pay;
-      } else if (seniorIds.has(empId)) {
-        roleTotals.seniors += pay;
-      } else {
-        roleTotals.workers += pay;
-      }
+    if (hasSenior) {
+      roleTotals.seniors += objectTotal * 0.1;
+      roleTotals.company += 0;
+    } else {
+      roleTotals.company += objectTotal * 0.1;
     }
-
-    roleTotals.company += Math.max(0, objectTotal - paidTotal);
+  } else if (hasSenior) {
+    roleTotals.workers += objectTotal * 0.9;
+    roleTotals.seniors += objectTotal * 0.1;
+    roleTotals.company += 0;
+  } else {
+    roleTotals.workers += objectTotal * 0.9;
+    roleTotals.company += objectTotal * 0.1;
   }
+}
+
+roleTotals.workers = Math.round(roleTotals.workers * 100) / 100;
+roleTotals.brigadiers = Math.round(roleTotals.brigadiers * 100) / 100;
+roleTotals.seniors = Math.round(roleTotals.seniors * 100) / 100;
+roleTotals.company = Math.round(roleTotals.company * 100) / 100;
 
   const roleLines = [
     `👷 Працівники: *${esc(fmt2(roleTotals.workers))}*`,
@@ -1384,7 +1419,7 @@ export function buildRoadApprovedShortText(
     `👥 Людей: *${esc(totalPeople)}*`,
     "",
     `💼 Роботи: *${esc(fmt2(workTotal))}*`,
-    `🛣 Дорога: *${esc(fmt2(roadTotal))}*`,
+    `🛣 Дорога: *${esc(fmt2(roadTotal))}* (${esc(fmt2(roadPerPerson))}/люд)`,
     `💰 *Разом: ${esc(fmt2(totalToPay))}*`,
     "",
     `📊 *Розподіл по роботах:*`,

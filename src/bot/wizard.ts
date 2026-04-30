@@ -9,13 +9,13 @@ import type { FlowModule } from "./core/flowTypes.js";
 import { makeMenuMap, getModuleByFlow, routeByPrefix } from "./core/flowRegistry.js";
 
 // flows
-import { LogisticsFlow } from "./flows/logistics.flow.js";
-import { RoadFlow } from "./flows/road.flow.js";
-import { StubFlow } from "./flows/stub.flow.js";
-import { DayStatusFlow } from "./flows/dayStatus.flow.js";
-import { CloseDayFlow } from "./flows/closeDay.flow.js";
-import { PeopleTimesheetFlow } from "./flows/peopleTimesheet.flow.js";
-import { AddWorkFlow } from "./flows/addWork.flow.js";
+//import { LogisticsFlow } from "./flows/logistics.flow.js";
+//import { RoadFlow } from "./flows/road.flow.js";
+//import { StubFlow } from "./flows/stub.flow.js";
+//import { DayStatusFlow } from "./flows/dayStatus.flow.js";
+//import { CloseDayFlow } from "./flows/closeDay.flow.js";
+//import { PeopleTimesheetFlow } from "./flows/peopleTimesheet.flow.js";
+//import { AddWorkFlow } from "./flows/addWork.flow.js";
 import { MaterialsFlow } from "./flows/materials.flow.js";
 import { ToolsFlow } from "./flows/tools.flow.js";
 import { RoadTimesheetFlow } from "./flows/roadTimesheet.flow.js";
@@ -30,19 +30,12 @@ import { getFlowState, setFlowState, todayISO } from "../bot/core/helpers.js";
  * Register modules
  */
 const FLOW_MODULES: FlowModule[] = [
-  LogisticsFlow,
-  RoadFlow,
-  DayStatusFlow,
-  CloseDayFlow,
-  PeopleTimesheetFlow,
-  AddWorkFlow,
+
   MaterialsFlow,
   ToolsFlow,
   RoadTimesheetFlow,
 
-  // решта поки заглушки
-  StubFlow("BRIGADE", TEXTS.buttons.brigade, "br:"),
-  StubFlow("EDIT_DELETE", TEXTS.buttons.editDelete, "ed:"),
+
 
 ];
 

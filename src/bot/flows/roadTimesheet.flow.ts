@@ -79,13 +79,13 @@ function buildSalaryPacksWithRoles(params: {
 
     const workerPercent = hasBrigadier ? 0.7 : 0.9;
     const brigadierPercent = hasBrigadier ? 0.2 : 0;
-    const seniorPercent = !hasBrigadier && hasSenior ? 0.1 : 0;
+   const seniorPercent = hasSenior ? 0.1 : 0;
 
     const workerRows = rowsSrc.filter((r) => {
       const id = String(r.employeeId);
 
       if (hasBrigadier && brigadierSet.has(id)) return false;
-      if (!hasBrigadier && hasSenior && seniorSet.has(id)) return false;
+      if (hasSenior && seniorSet.has(id)) return false;
 
       return true;
     });
@@ -113,7 +113,7 @@ function buildSalaryPacksWithRoles(params: {
 
       if (hasBrigadier && brigadierSet.has(id)) {
         pay = brigadierOnePay;
-      } else if (!hasBrigadier && hasSenior && seniorSet.has(id)) {
+      } else if (hasSenior && seniorSet.has(id)) {
         pay = seniorOnePay;
       } else {
         pay =
@@ -230,9 +230,12 @@ const roadAgg = await computeRoadSecondsFromRts({
   foremanTgId,
 }).catch(() => []);
 
+const sinceTs = x.driveStartedAt ?? x.members?.[0]?.joinedAt;
+
 const workMoneyRows = await computeWorkMoneyFromRts({
   date: x.date,
   foremanTgId,
+  ...(sinceTs ? { sinceTs } : {}),
 }).catch(() => []);
 
     const workTotalsByObj = new Map<
@@ -440,6 +443,8 @@ const salaryPacks: SalaryPack[] = buildSalaryPacksWithRoles({
       workMoneyRows,
       brigadierEmployeeId,
       seniorEmployeeId,
+      brigadierEmployeeIds,
+      seniorEmployeeIds,
       plannedObjectIds: x.plannedObjectIds ?? [],
       odoStartKm: x.odoStartKm,
       odoEndKm: x.odoEndKm,
@@ -4460,13 +4465,41 @@ setFlowState(s, FLOW, root);
 
     if (data === cb.SAVE) {
       if (!canSave(st)) return (gate("Спочатку ODO start/end."), true);
-      const aggAll = await computeFromRts({ date, foremanTgId });
+const sessionStartTs =
+  String(st.driveStartedAt ?? st.members?.[0]?.joinedAt ?? "").trim();
 
-      const roadAgg = await computeRoadSecondsFromRts({ date, foremanTgId });
-      const workMoneyRows = await computeWorkMoneyFromRts({
-        date,
-        foremanTgId,
-      });
+let aggAll = await computeFromRts({ date, foremanTgId });
+
+let roadAgg = await computeRoadSecondsFromRts({ date, foremanTgId });
+
+let workMoneyRows = await computeWorkMoneyFromRts({
+  date,
+  foremanTgId,
+});
+
+if (sessionStartTs) {
+  const startMs = Date.parse(sessionStartTs);
+
+  if (Number.isFinite(startMs)) {
+    aggAll = aggAll.filter((r: any) => {
+      const ts = String(r.endedAt ?? r.startedAt ?? r.ts ?? "").trim();
+      const ms = Date.parse(ts);
+      return Number.isFinite(ms) ? ms >= startMs : true;
+    });
+
+    roadAgg = roadAgg.filter((r: any) => {
+      const ts = String(r.endedAt ?? r.startedAt ?? r.ts ?? "").trim();
+      const ms = Date.parse(ts);
+      return Number.isFinite(ms) ? ms >= startMs : true;
+    });
+
+    workMoneyRows = workMoneyRows.filter((r: any) => {
+      const ts = String(r.endedAt ?? r.startedAt ?? r.ts ?? "").trim();
+      const ms = Date.parse(ts);
+      return Number.isFinite(ms) ? ms >= startMs : true;
+    });
+  }
+}
       const workTotalsByObj = new Map<
         string,
         { amount: number; qtyByUnit: Record<string, number> }
@@ -4780,6 +4813,8 @@ for (const oid of st.plannedObjectIds) {
         workMoneyRows,
         brigadierEmployeeId,
         seniorEmployeeId,
+        brigadierEmployeeIds,
+        seniorEmployeeIds,
         plannedObjectIds: st.plannedObjectIds,
         workedEmployeeIdsByObject,
         odoStartKm: st.odoStartKm,
