@@ -21,6 +21,9 @@ export const cb = {
   BULK_QTY_SAVE: `${PREFIX}bulk_qty_save`,
   BULK_QTY_BACK: `${PREFIX}bulk_qty_back`,
 
+  BULK_QTY_CAT: `${PREFIX}bulk_qty_cat:`,
+  BULK_QTY_ALL_CAT: `${PREFIX}bulk_qty_all_cat:`,
+
   ADM_APPROVE: `${PREFIX}adm:approve:`,
   ADM_RETURN: `${PREFIX}adm:return:`,
   ADM_RETURN_REASON: `${PREFIX}adm:return_reason:`, // ...:<eventId>:<code>
@@ -37,11 +40,14 @@ export const cb = {
   PICK_OBJECTS: `${PREFIX}pick_objs`,
   OBJ_TOGGLE: `${PREFIX}obj_toggle:`,
   OBJECTS_DONE: `${PREFIX}objs_done`,
+  
 
   PLAN_OBJECT_MENU: `${PREFIX}plan_obj_menu`,
   PLAN_OBJ: `${PREFIX}plan_obj:`,
   PLAN_WORKS: `${PREFIX}plan_works`,
   PLAN_WORK: `${PREFIX}plan_work:`,
+  PLAN_WORK_CAT: `${PREFIX}plan_work_cat:`,
+  PLAN_WORK_ALL_CAT: `${PREFIX}plan_work_all_cat:`,
   PLAN_WORKS_DONE: `${PREFIX}plan_works_done`,
   PLAN_ASSIGN_MENU: `${PREFIX}plan_assign_menu`,
   PLAN_ASSIGN_EMP: `${PREFIX}plan_assign_emp:`,

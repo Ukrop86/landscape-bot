@@ -195,8 +195,6 @@ async function render(
   foremanTgId = 0,
 ) {
 
-
-  
 if (!foremanTgId) {
   foremanTgId = Number((s as any)?.userId ?? (s as any)?.tgId ?? chatId ?? 0);
 }
@@ -1518,6 +1516,47 @@ if (x.step === "SAVE") {
     };
   });
 }
+
+function workCategoryOf(w: any) {
+  return String(
+    w.category ??
+      w.CATEGORY ??
+      w["Категорія"] ??
+      w["КАТЕГОРІЯ"] ??
+      w["Категория"] ??
+      w["КАТЕГОРИЯ"] ??
+      "Без категорії",
+  ).trim();
+}
+
+function getActiveWorks(st: State) {
+  return (st.worksMeta ?? []).filter(
+    (w: any) => String(w.active ?? "TRUE").toUpperCase() !== "FALSE",
+  );
+}
+
+function getWorkCategories(st: State) {
+  return uniq(getActiveWorks(st).map(workCategoryOf).filter(Boolean)).sort(
+    (a, b) => a.localeCompare(b),
+  );
+}
+
+function buildSelectedCategoriesText(st: State, oid: string) {
+  const obj = ensureObjectState(st, oid);
+  const picked = new Set(obj.works.map((w) => String(w.workId)));
+
+  const lines = getWorkCategories(st)
+    .map((cat) => {
+      const works = getActiveWorks(st).filter((w) => workCategoryOf(w) === cat);
+      const selected = works.filter((w) => picked.has(String(w.id))).length;
+      return selected > 0 ? `✅ ${cat}: ${selected}/${works.length}` : "";
+    })
+    .filter(Boolean);
+
+  return lines.length ? lines.join("\n") : "—";
+}
+
+
 
 export const RoadTimesheetFlow: FlowModule = {
   flow: FLOW,
@@ -2970,53 +3009,206 @@ setFlowState(s, FLOW, root);
       return true;
     }
 
-    if (data === cb.PLAN_WORKS) {
-      const oid = st.activeObjectId;
-      if (!oid) return (gate("Обери обʼєкт."), true);
+if (data === cb.PLAN_WORKS) {
+  await bot.answerCallbackQuery(q.id, {
+    text: "Відкриваю категорії...",
+    show_alert: false,
+  }).catch(() => {});
 
-      const obj = ensureObjectState(st, oid);
-      const dict = (st.worksMeta ?? []).slice();
-      const slice = dict.slice(0, 40);
-      const picked = new Set(obj.works.map((w) => w.workId));
+  const oid = st.activeObjectId;
+  if (!oid) return (gate("Обери обʼєкт."), true);
 
-      const rows: TelegramBot.InlineKeyboardButton[][] = slice.map((w) => {
-        const id = String(w.id);
-        const name = String(w.name ?? id);
-        const on = picked.has(id);
-        return [
-          {
-            text: `${on ? "✅ " : "▫️ "}${name} (${id})`.slice(0, 60),
-            callback_data: `${cb.PLAN_WORK}${id}`,
-          },
-        ];
-      });
+  const categories = getWorkCategories(st);
+  (st as any).workCategories = categories;
 
-      rows.push([{ text: "✅ Готово", callback_data: cb.PLAN_WORKS_DONE }]);
-      if (canStartDay(st)) {
-        rows.push([
-          {
-            text: TEXTS.roadFlow.buttons.startDay,
-            callback_data: cb.START_DAY,
-          },
-        ]);
-      }
-      rows.push([
-        { text: TEXTS.ui.buttons.back, callback_data: `${cb.BACK}plan_obj` },
-      ]);
-      rows.push([{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }]);
+  const obj = ensureObjectState(st, oid);
+  const picked = new Set(obj.works.map((w) => String(w.workId)));
 
-      await safeEditMessageText(
-        bot,
-        chatId,
-        msgId,
-        `📚 Довідник робіт — ${objectName(st, oid)}\n\nНатисни на роботу, щоб додати/прибрати.`,
-        {
-          reply_markup: { inline_keyboard: rows },
-        },
-      );
+  const rows: TelegramBot.InlineKeyboardButton[][] = categories.map((cat, index) => {
+    const works = getActiveWorks(st).filter((w) => workCategoryOf(w) === cat);
+    const selected = works.filter((w) => picked.has(String(w.id))).length;
 
-      return true;
-    }
+    return [
+      {
+        text: `${selected > 0 ? "✅" : "📁"} ${cat} (${selected}/${works.length})`.slice(0, 60),
+        callback_data: `${cb.PLAN_WORK_CAT}${index}`,
+      },
+    ];
+  });
+
+  rows.push([{ text: "✅ Готово", callback_data: cb.PLAN_WORKS_DONE }]);
+  rows.push([{ text: TEXTS.ui.buttons.back, callback_data: `${cb.BACK}plan_obj` }]);
+  rows.push([{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }]);
+
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+
+  await safeEditMessageText(
+    bot,
+    chatId,
+    msgId,
+    `📚 Категорії робіт — ${objectName(st, oid)}\n\n` +
+      `Обрано по категоріях:\n${buildSelectedCategoriesText(st, oid)}\n\n` +
+      `Обери категорію:`,
+    {
+      reply_markup: { inline_keyboard: rows },
+    },
+  );
+
+  return true;
+}
+
+if (data.startsWith(cb.PLAN_WORK_CAT)) {
+  const oid = st.activeObjectId;
+  if (!oid) return (gate("Обери обʼєкт."), true);
+
+const categoryIndex = Number(data.slice(cb.PLAN_WORK_CAT.length).trim());
+(st as any).activeWorkCategoryIndex = categoryIndex;
+const category = String((st as any).workCategories?.[categoryIndex] ?? "").trim();
+
+if (!category) {
+  await bot.answerCallbackQuery(q.id, {
+    text: "⚠️ Категорію не знайдено",
+    show_alert: true,
+  });
+  return true;
+}
+
+  const obj = ensureObjectState(st, oid);
+  const picked = new Set(obj.works.map((w) => String(w.workId)));
+
+  const dict = (st.worksMeta ?? [])
+    .filter((w: any) => String(w.active ?? "TRUE").toUpperCase() !== "FALSE")
+    .filter((w: any) => {
+      const cat = String(
+        w.category ??
+          w.CATEGORY ??
+          w["Категорія"] ??
+          w["КАТЕГОРІЯ"] ??
+          w["Категория"] ??
+          w["КАТЕГОРИЯ"] ??
+          "Без категорії",
+      ).trim();
+
+      return cat === category;
+    });
+
+  const rows: TelegramBot.InlineKeyboardButton[][] = [];
+
+  rows.push([
+    {
+      text: "✅ Обрати всі роботи в категорії",
+      callback_data: `${cb.PLAN_WORK_ALL_CAT}${categoryIndex}`,
+    },
+  ]);
+
+  for (const w of dict.slice(0, 40)) {
+    const id = String(w.id);
+    const name = String(w.name ?? id);
+    const on = picked.has(id);
+
+    rows.push([
+      {
+        text: `${on ? "✅ " : "▫️ "}${name} (${id})`.slice(0, 60),
+        callback_data: `${cb.PLAN_WORK}${id}`,
+      },
+    ]);
+  }
+
+  rows.push([{ text: "⬅️ До категорій", callback_data: cb.PLAN_WORKS }]);
+  rows.push([{ text: "✅ Готово", callback_data: cb.PLAN_WORKS_DONE }]);
+  rows.push([{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }]);
+
+  await safeEditMessageText(
+    bot,
+    chatId,
+    msgId,
+    `📁 ${category}\n\n🏗 ${objectName(st, oid)}\nОбери роботи:`,
+    {
+      reply_markup: { inline_keyboard: rows },
+    },
+  );
+
+  return true;
+}
+
+if (data.startsWith(cb.PLAN_WORK_ALL_CAT)) {
+  const oid = st.activeObjectId;
+  if (!oid) return (gate("Обери обʼєкт."), true);
+
+const categoryIndex = Number(data.slice(cb.PLAN_WORK_ALL_CAT.length).trim());
+const category = String((st as any).workCategories?.[categoryIndex] ?? "").trim();
+
+if (!category) {
+  await bot.answerCallbackQuery(q.id, {
+    text: "⚠️ Категорію не знайдено",
+    show_alert: true,
+  });
+  return true;
+}
+
+  const obj = ensureObjectState(st, oid);
+
+  const dict = (st.worksMeta ?? [])
+    .filter((w: any) => String(w.active ?? "TRUE").toUpperCase() !== "FALSE")
+    .filter((w: any) => {
+      const cat = String(
+        w.category ??
+          w.CATEGORY ??
+          w["Категорія"] ??
+          w["КАТЕГОРІЯ"] ??
+          w["Категория"] ??
+          w["КАТЕГОРИЯ"] ??
+          "Без категорії",
+      ).trim();
+
+      return cat === category;
+    });
+
+  for (const w of dict) {
+    const id = String(w.id ?? "").trim();
+    if (!id) continue;
+
+    const exists = obj.works.some((x) => String(x.workId) === id);
+    if (exists) continue;
+
+    obj.works.push({
+      workId: id,
+      name: String(w.name ?? id),
+      unit: String(w.unit ?? "од."),
+      rate: Number(w.rate ?? 0),
+    });
+  }
+
+  await writeEvent({
+    bot,
+    chatId,
+    msgId,
+    date,
+    foremanTgId,
+    objectId: oid,
+    carId: st.carId ?? "",
+    type: "RTS_PLAN_WORKS",
+    payload: { objectId: oid, works: obj.works },
+  });
+
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+
+return RoadTimesheetFlow.onCallback!(
+  bot,
+  q,
+  s,
+  `${cb.PLAN_WORK_CAT}${categoryIndex}`,
+);
+}
+
+
+
+
+
+
+
 
     if (data.startsWith(cb.PLAN_WORK)) {
       const wid = String(data.slice(cb.PLAN_WORK.length) ?? "").trim();
@@ -3054,9 +3246,22 @@ setFlowState(s, FLOW, root);
         payload: { objectId: oid, works: obj.works },
       });
 
-      root[foremanTgId] = st;
+root[foremanTgId] = st;
 setFlowState(s, FLOW, root);
-      return RoadTimesheetFlow.onCallback!(bot, q, s, cb.PLAN_WORKS);
+
+const categoryIndex = Number((st as any).activeWorkCategoryIndex ?? -1);
+
+if (Number.isFinite(categoryIndex) && categoryIndex >= 0) {
+  return RoadTimesheetFlow.onCallback!(
+    bot,
+    q,
+    s,
+    `${cb.PLAN_WORK_CAT}${categoryIndex}`,
+  );
+}
+
+await render(bot, chatId, s, foremanTgId);
+return true;
     }
 
     if (data === cb.PLAN_WORKS_DONE) {

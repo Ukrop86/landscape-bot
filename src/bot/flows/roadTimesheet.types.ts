@@ -74,7 +74,7 @@ export type RtsType =
 
 export type DictObject = { id: string; name: string };
 export type DictEmployee = { id: string; name: string };
-export type DictWork = { id: string; name: string; unit: string; rate: number; active: boolean };
+export type DictWork = { id: string; name: string; unit: string; rate: number; category?: string; active: boolean };
 export type WorkItem = { workId: string; name: string; unit: string; rate: number };
 
 export type PayrollEmpRow = {

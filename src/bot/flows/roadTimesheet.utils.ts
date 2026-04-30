@@ -342,6 +342,13 @@ export function normWorksFull(raw: any[]): DictWork[] {
       const id = String(w.id ?? w.ID ?? w.workId ?? w["ID"] ?? "").trim();
       const name = String(w.name ?? w.NAME ?? w.title ?? w["НАЗВА"] ?? w["НАЗВАНИЕ"] ?? "").trim();
       const unit = String(w.unit ?? w.UNIT ?? w["ОДИНИЦЯ"] ?? w["ЕДИНИЦА"] ?? "").trim();
+      const category = String(
+  w.category ??
+  w.CATEGORY ??
+  w.categoryName ??
+  w["КАТЕГОРІЯ"] ??
+  ""
+).trim();
 
       const rateRaw =
         w.rate ??
@@ -356,13 +363,14 @@ export function normWorksFull(raw: any[]): DictWork[] {
       const activeRaw = String(w.active ?? w.ACTIVE ?? w["АКТИВ"] ?? "TRUE").trim().toUpperCase();
       const active = activeRaw === "" || activeRaw === "TRUE" || activeRaw === "1" || activeRaw === "YES";
 
-      return {
-        id,
-        name: name || id,
-        unit: unit || "од.",
-        rate: Number.isFinite(rate) ? rate : 0,
-        active,
-      };
+return {
+  id,
+  name: name || id,
+  category: category || "Без категорії",
+  unit: unit || "од.",
+  rate: Number.isFinite(rate) ? rate : 0,
+  active,
+};
     })
     .filter((x) => x.id);
 }
@@ -1410,7 +1418,7 @@ roleTotals.company = Math.round(roleTotals.company * 100) / 100;
     .filter(Boolean)
     .join("\n");
 
-  return [
+  return [ 
     opts?.title ? String(opts.title) : "✅ *День затверджено*",
     `📅 Дата: ${esc(ev.date)}`,
     `🚗 Авто: ${carTitle ? esc(carTitle) : "—"}`,
