@@ -23,6 +23,8 @@ type State = {
   moveType?: MoveType;
   purpose?: string;
   category?: string;
+    objectName?: string;      // 👈 додай
+materialName?: string;    // 👈 додай
 };
 
 const FLOW = "MATERIALS";
@@ -60,13 +62,13 @@ function yesterdayISO() {
 }
 
 function fmt(st: State) {
-return [
-  `${TEXTS.materialsFlow.labels.date} *${st.date}*`,
-  `${TEXTS.materialsFlow.labels.object} *${st.objectId ?? TEXTS.ui.symbols.emptyDash}*`,
-  `${TEXTS.materialsFlow.labels.material} *${st.materialId ?? TEXTS.ui.symbols.emptyDash}*`,
-  `${TEXTS.materialsFlow.labels.qty} *${st.qty ?? TEXTS.ui.symbols.emptyDash}*`,
-  `${TEXTS.materialsFlow.labels.type} *${st.moveType ?? TEXTS.ui.symbols.emptyDash}*`,
-].join("\n");
+  return [
+    `${TEXTS.materialsFlow.labels.date} *${st.date}*`,
+    `${TEXTS.materialsFlow.labels.object} *${st.objectName ?? TEXTS.ui.symbols.emptyDash}*`,
+    `${TEXTS.materialsFlow.labels.material} *${st.materialName ?? TEXTS.ui.symbols.emptyDash}*`,
+    `${TEXTS.materialsFlow.labels.qty} *${st.qty ?? TEXTS.ui.symbols.emptyDash}*`,
+    `${TEXTS.materialsFlow.labels.type} *${st.moveType ?? TEXTS.ui.symbols.emptyDash}*`,
+  ].join("\n");
 }
 
 async function render(bot: TelegramBot, chatId: number, s: Session, st: State) {
@@ -341,19 +343,39 @@ setFlowState(s, FLOW as any, { ...st, date: yesterdayISO(), step: "PICK_OBJECT" 
 }
 
 
-    if (data.startsWith(ACT.OBJ)) {
-      const objectId = data.slice(ACT.OBJ.length);
-setFlowState(s, FLOW as any, { ...st, objectId, step: "PICK_CATEGORY" } as any);
-      await render(bot, chatId, s, getFlowState<State>(s, FLOW as any)!);
-      return true;
-    }
+if (data.startsWith(ACT.OBJ)) {
+  const objectId = data.slice(ACT.OBJ.length);
 
-    if (data.startsWith(ACT.MAT)) {
-      const materialId = data.slice(ACT.MAT.length);
-setFlowState(s, FLOW as any, { ...st, materialId, step: "ENTER_QTY" } as any);
-      await render(bot, chatId, s, getFlowState<State>(s, FLOW as any)!);
-      return true;
-    }
+  const objects = await fetchObjects();
+  const obj = objects.find((o: any) => String(o.id) === String(objectId));
+
+  setFlowState(s, FLOW as any, {
+    ...st,
+    objectId,
+    objectName: obj?.name ?? objectId,
+    step: "PICK_CATEGORY",
+  } as any);
+
+  await render(bot, chatId, s, getFlowState<State>(s, FLOW as any)!);
+  return true;
+}
+
+if (data.startsWith(ACT.MAT)) {
+  const materialId = data.slice(ACT.MAT.length);
+
+  const mats = await fetchMaterials(); // 👈 якщо вже є — ок
+  const mat = mats.find(m => m.id === materialId);
+
+  setFlowState(s, FLOW as any, {
+    ...st,
+    materialId,
+    materialName: mat?.name ?? materialId, // 👈 головне
+    step: "ENTER_QTY"
+  } as any);
+
+  await render(bot, chatId, s, getFlowState<State>(s, FLOW as any)!);
+  return true;
+}
 
     if (data.startsWith(ACT.TYPE)) {
       const moveType = data.slice(ACT.TYPE.length) as MoveType;

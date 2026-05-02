@@ -141,7 +141,7 @@ export async function handleMessage(bot: TelegramBot, msg: TelegramBot.Message) 
         driveActive: false,
         returnActive: false,
       };
-      setFlowState(s, FLOW, st);
+      setFlowState(s, FLOW, st); 
     }
 
     await openRoadStatsMenu({

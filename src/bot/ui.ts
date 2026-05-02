@@ -18,6 +18,7 @@ export const MAIN_MENU: TelegramBot.ReplyKeyboardMarkup = {
     [{ text: TEXTS.buttons.logistics }],
     [{ text: TEXTS.buttons.roadTimesheet }],
     [{ text: TEXTS.buttons.stats }],
+    [{ text: TEXTS.buttons.materials }],
   ],
   resize_keyboard: true,
   one_time_keyboard: false,
