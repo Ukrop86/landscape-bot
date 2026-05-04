@@ -1490,7 +1490,7 @@ function getActiveWorks(st: State) {
     (w: any) => String(w.active ?? "TRUE").toUpperCase() !== "FALSE",
   );
 }
-
+ 
 function getWorkCategories(st: State) {
   return uniq(getActiveWorks(st).map(workCategoryOf).filter(Boolean)).sort(
     (a, b) => a.localeCompare(b),
