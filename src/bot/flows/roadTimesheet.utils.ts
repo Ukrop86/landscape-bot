@@ -1,13 +1,13 @@
 // src/bot/flows/roadTimesheet.utils.ts
 import type TelegramBot from "node-telegram-bot-api";
 import { TEXTS } from "../texts.js";
-import { getFlowState, setFlowState, todayISO } from "../core/helpers.js";
+import { setFlowState, todayISO } from "../core/helpers.js";
 import { computeWorkMoneyFromRts } from "./roadTimesheet.compute.js";
 import { buildRoadDayStats } from "./roadTimesheet.stats.data.js";
 
 
 
-import type { PendingInput, OpenSession, ObjectTS, RoadMember, State, DictWork, AggRow, RtsType } from "./roadTimesheet.types.js";
+import type { PendingInput, OpenSession, ObjectTS, State, DictWork, AggRow, RtsType } from "./roadTimesheet.types.js";
 
 import { fetchCars, fetchEmployees } from "../../google/sheets/index.js";
 import { fetchObjects, fetchWorks, fetchUsers, getSettingNumber } from "../../google/sheets/dictionaries.js";
@@ -20,7 +20,6 @@ import { SHEET_NAMES } from "../../google/sheets/names.js";
 
 import {
   cb,
-  PREFIX,
   FLOW,
   DEFAULT_ROAD_ALLOWANCE_BY_CLASS,
 } from "./roadTimesheet.cb.js";
@@ -570,27 +569,12 @@ export async function sendStartScreen(bot: TelegramBot, chatId: number, st: Stat
   );
 }
 
-const inFlight = new Set<string>(); // key = `${chatId}:${messageId}`
-
-function isNotModified(err: any) {
-  const desc =
-    err?.response?.body?.description ??
-    err?.body?.description ??
-    err?.description ??
-    String(err);
-
-  return (
-    typeof desc === "string" &&
-    desc.includes("message is not modified")
-  );
-}
-
 const queues = new Map<string, Promise<void>>();
 
 function getDesc(err: any) {
   return (
     err?.response?.body?.description ??
-    err?.body?.description ??
+    err?.body?.description ??  
     err?.description ??
     String(err)
   );
@@ -1829,9 +1813,6 @@ export async function findEmployeeBusyByAnotherForeman(params: {
 
   return busyByEmployeeId.get(String(params.employeeId)) ?? null;
 }
-
-
-
 
 export function parsePayload(x: any) {
   try {

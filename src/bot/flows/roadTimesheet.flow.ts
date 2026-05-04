@@ -144,50 +144,6 @@ function buildSalaryPacksWithRoles(params: {
   });
 }
 
-
-function getForemanNameByTgId(root: Record<number, State>, foremanTgId: number) {
-  const st = root[foremanTgId];
-  return st?.foremanName || `Бригадир ${foremanTgId}`;
-}
-
-function findCarOwner(
-  root: Record<number, State>,
-  carId: string,
-  selfForemanTgId: number, 
-) {
-  for (const [key, otherState] of Object.entries(root)) {
-    const otherForemanTgId = Number(key);
-    if (!otherForemanTgId || otherForemanTgId === selfForemanTgId) continue;
-    if (String(otherState?.carId ?? "") === String(carId)) {
-      return {
-        foremanTgId: otherForemanTgId,
-        foremanName: getForemanNameByTgId(root, otherForemanTgId),
-      };
-    }
-  }
-  return null;
-}
-
-function findEmployeeOwner(
-  root: Record<number, State>,
-  employeeId: string,
-  selfForemanTgId: number,
-) {
-  for (const [key, otherState] of Object.entries(root)) {
-    const otherForemanTgId = Number(key);
-    if (!otherForemanTgId || otherForemanTgId === selfForemanTgId) continue;
-
-    const inCarIds = otherState?.inCarIds ?? [];
-    if (inCarIds.includes(employeeId)) {
-      return {
-        foremanTgId: otherForemanTgId,
-        foremanName: getForemanNameByTgId(root, otherForemanTgId),
-      };
-    }
-  }
-  return null;
-}
-
 async function render(
   bot: TelegramBot,
   chatId: number,
