@@ -9,7 +9,7 @@ import type { FlowModule } from "./core/flowTypes.js";
 import { makeMenuMap, getModuleByFlow, routeByPrefix } from "./core/flowRegistry.js";
 
 // flows
-//import { LogisticsFlow } from "./flows/logistics.flow.js";
+import { LogisticsFlow } from "./flows/logistics.flow.js";
 //import { RoadFlow } from "./flows/road.flow.js";
 //import { StubFlow } from "./flows/stub.flow.js";
 //import { DayStatusFlow } from "./flows/dayStatus.flow.js";
@@ -30,7 +30,7 @@ import { getFlowState, setFlowState, todayISO } from "../bot/core/helpers.js";
  * Register modules
  */
 const FLOW_MODULES: FlowModule[] = [
-
+  LogisticsFlow,
   MaterialsFlow,
   ToolsFlow,
   RoadTimesheetFlow,
