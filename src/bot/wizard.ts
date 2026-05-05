@@ -2,6 +2,7 @@ import TelegramBot from "node-telegram-bot-api";
 import { sendWelcome, showMainMenu } from "./ui.js";
 import { TEXTS } from "./texts.js";
 import { hydrateAuth } from "./core/auth.js";
+import { fetchUsers, addUserToSheet, updateUserRow } from "../google/sheets/dictionaries.js";
 
 import { CB } from "./core/cb.js";
 import { ensureSession, resetSession } from "./core/session.js";
@@ -49,15 +50,120 @@ async function openMenu(bot: TelegramBot, chatId: number) {
   await showMainMenu(bot, chatId);
 }
 
+
+
+async function notifyAdmins(bot: TelegramBot, user: TelegramBot.User) {
+  const users = await fetchUsers();
+
+  const admins = users.filter((u: any) => {
+    const role = String(u.role ?? "").trim().toUpperCase();
+    const active = String(u.active ?? "").trim().toUpperCase();
+
+    return (
+      active === "ТАК" &&
+      (
+        role === "АДМІНІСТРАТОР" ||
+        role === "АДМІН" ||
+        role === "ADMIN"
+      )
+    );
+  });
+
+  const text =
+    `🆕 Нова заявка\n\n` +
+    `👤 ${user.first_name ?? ""} ${user.last_name ?? ""}\n` +
+    `📛 @${user.username ?? "—"}\n` +
+    `🆔 ${user.id}`;
+
+  for (const admin of admins) {
+    await bot.sendMessage(Number(admin.tgId), text, {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "✅ Адмін", callback_data: `reg:admin:${user.id}` },
+            { text: "👷 Бригадир", callback_data: `reg:foreman:${user.id}` },
+          ],
+          [
+            { text: "❌ Відхилити", callback_data: `reg:reject:${user.id}` },
+          ],
+        ],
+      },
+    });
+  }
+}
+
 /**
  * Public API
  */
-export async function onStart(bot: TelegramBot, chatId: number) {
+export async function onStart(bot: TelegramBot, msg: TelegramBot.Message) {
+  const chatId = msg.chat.id;
+  const user = msg.from;
+  if (!user) return;
+
   resetSession(chatId);
-  await sendWelcome(bot, chatId);
+
+  const users = await fetchUsers();
+
+  const me = users.find((u: any) => Number(u.tgId) === Number(user.id));
+
+  // ✅ 1. Якщо вже є і активний — працює як зараз
+  if (me) {
+    const active = String(me.active ?? "").trim().toUpperCase();
+
+    if (active === "ТАК" || active === "TRUE" || active === "1") {
+      await sendWelcome(bot, chatId);
+      return;
+    }
+
+    // ⏳ Є але не активний
+    await bot.sendMessage(
+      chatId,
+      "⏳ Ваша заявка вже подана. Очікуйте підтвердження адміністратора."
+    );
+    return;
+  }
+
+  // ❗️ 2. Новий користувач → додаємо в таблицю
+await addUserToSheet([
+  user.id,
+  user.username ?? "",
+  `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim(),
+  "Очікує",
+  "Ні",
+  "Заявка на доступ",
+]);
+
+  // 📩 3. Пишемо адміну
+  await notifyAdmins(bot, user);
+
+  await bot.sendMessage(
+    chatId,
+    "✅ Заявку на доступ відправлено адміністратору.\nОчікуйте підтвердження."
+  );
+}
+
+async function updateUser(tgId: number, role: string, active: string) {
+  const users = await fetchUsers();
+
+  const index = users.findIndex((u: any) => Number(u.tgId) === Number(tgId));
+  if (index === -1) return;
+
+  const old = users[index] as any;
+  const rowNumber = index + 2;
+
+  await updateUserRow(rowNumber, [
+    old.tgId,
+    old.username ?? "",
+    old.pib ?? old.name ?? "",
+    role,
+    active,
+    role === "Відхилено" ? "Відхилено адміністратором" : "Підтверджено адміністратором",
+  ]);
 }
 
 export async function handleCallback(bot: TelegramBot, q: TelegramBot.CallbackQuery) {
+
+
 const chatId = q.message?.chat.id;
   if (!chatId) return;
 
@@ -70,6 +176,9 @@ const chatId = q.message?.chat.id;
   }
 
   const data = q.data || "";
+  if (data.startsWith("reg:")) {
+  return handleRegisterCallback(bot, q, data);
+}
 
   bot.answerCallbackQuery(q.id).catch(() => {});
 
@@ -185,4 +294,32 @@ export async function handleMessage(bot: TelegramBot, msg: TelegramBot.Message) 
       if (handled) return;
     }
   }
+}
+async function handleRegisterCallback(
+  bot: TelegramBot,
+  q: TelegramBot.CallbackQuery,
+  data: string
+) {
+  const chatId = q.message?.chat.id;
+  if (!chatId) return;
+
+  const [, action, tgIdRaw] = data.split(":");
+  const tgId = Number(tgIdRaw);
+
+  if (action === "admin") {
+    await updateUser(tgId, "Адміністратор", "Так");
+  }
+
+  if (action === "foreman") {
+    await updateUser(tgId, "Бригадир", "Так");
+  }
+
+  if (action === "reject") {
+    await updateUser(tgId, "Відхилено", "Ні");
+  }
+
+  await bot.editMessageText("✅ Оброблено", {
+    chat_id: chatId,
+    message_id: q.message?.message_id,
+  });
 }

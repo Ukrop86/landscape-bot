@@ -15,6 +15,10 @@ export const cb = {
   EMP_TOGGLE: `${PREFIX}emp_toggle:`,
   PEOPLE_DONE: `${PREFIX}people_done`,
 
+  REGISTER_ADMIN: "reg:admin:",
+  REGISTER_FOREMAN: "reg:foreman:",
+  REGISTER_REJECT: "reg:reject:",
+
   BULK_QTY_OPEN: `${PREFIX}bulk_qty_open`,
   BULK_QTY_WORK: `${PREFIX}bulk_qty_work:`,      // <workId>
   BULK_QTY_ADJ: `${PREFIX}bulk_qty_adj:`,        // <workId>:<delta>

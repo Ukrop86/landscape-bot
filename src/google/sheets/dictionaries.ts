@@ -24,8 +24,13 @@ import type {
   PayrollRole,
 } from "./types.js";
 
-import { loadSheet, requireHeaders, getCell } from "./core.js";
+import { loadSheet, requireHeaders, getCell, appendRows, updateRow } from "./core.js";
 import { parseNumber, toBool } from "./utils.js";
+
+import { config } from "../../config.js";
+
+
+
 
 export type LogisticRow = {
   id: string;
@@ -34,6 +39,8 @@ export type LogisticRow = {
   active: boolean;
   discountsByQty?: Record<number, number>;
 };
+
+
 
 function yes(v: unknown) {
   return String(v || "").trim().toLowerCase() === "так";
@@ -91,6 +98,16 @@ function normalizeCategory(v: string): string | undefined {
   const s = (v ?? "").trim();
   return s ? s : undefined;
 }
+
+
+export async function addUserToSheet(row: any[]) {
+  return appendRows(SHEET_NAMES.users, [row]);
+}
+
+export async function updateUserRow(rowIndex: number, values: any[]) {
+  return updateRow(SHEET_NAMES.users, rowIndex, values);
+}
+
 
 export async function fetchUsers(): Promise<UserRow[]> {
   const sh = await loadSheet(SHEET_NAMES.users);

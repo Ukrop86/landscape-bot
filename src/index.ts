@@ -5,7 +5,7 @@ import { onStart, handleCallback, handleMessage } from "./bot/wizard.js";
 const bot = new TelegramBot(config.botToken, { polling: true });
 
 bot.onText(/\/start/, async (msg) => {
-  await onStart(bot, msg.chat.id);
+  await onStart(bot, msg);
 });
 
 bot.on("message", async (msg) => {

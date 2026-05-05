@@ -1005,7 +1005,7 @@ export function buildBulkQtyScreen(st: any, cb: any) {
 
   const lines: string[] = [];
   lines.push(`✍️ *Обсяги робіт (об'єкт: ${mdEscapeSimple(String(b.objectName ?? "—"))})*`);
-  lines.push(`Натискай кнопки -10/-1/+1/+10, щоб виставити обсги робіт`);
+  lines.push(`Натискай кнопки -100/-10/-1/+1/+10/+100, щоб виставити обсяги робіт`);
   lines.push(`Потім натисни ✅ Зберегти.\n`);
 
   // ✅ список робіт з позначками заповнено/ні
@@ -1041,13 +1041,21 @@ export function buildBulkQtyScreen(st: any, cb: any) {
   }
 
   // ✅ керування qty для АКТИВНОЇ роботи
-  kb.push([
-    { text: "-10", callback_data: `${cb.BULK_QTY_ADJ}${active.workId}:-10` },
-    { text: "-1", callback_data: `${cb.BULK_QTY_ADJ}${active.workId}:-1` },
-    { text: `${active.qty}`, callback_data: "noop" },
-    { text: "+1", callback_data: `${cb.BULK_QTY_ADJ}${active.workId}:1` },
-    { text: "+10", callback_data: `${cb.BULK_QTY_ADJ}${active.workId}:10` },
-  ]);
+kb.push([
+  { text: "-100", callback_data: `${cb.BULK_QTY_ADJ}${active.workId}:-100` },
+  { text: "-10", callback_data: `${cb.BULK_QTY_ADJ}${active.workId}:-10` },
+  { text: "-1", callback_data: `${cb.BULK_QTY_ADJ}${active.workId}:-1` },
+]);
+
+kb.push([
+  { text: `${active.qty}`, callback_data: "noop" },
+]);
+
+kb.push([
+  { text: "+1", callback_data: `${cb.BULK_QTY_ADJ}${active.workId}:1` },
+  { text: "+10", callback_data: `${cb.BULK_QTY_ADJ}${active.workId}:10` },
+  { text: "+100", callback_data: `${cb.BULK_QTY_ADJ}${active.workId}:100` },
+]);
 
   kb.push([{ text: "✅ Зберегти обсяги", callback_data: cb.BULK_QTY_SAVE }]);
   kb.push([{ text: "⬅️ Назад", callback_data: cb.BULK_QTY_BACK }]);
