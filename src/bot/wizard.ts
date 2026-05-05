@@ -55,12 +55,15 @@ async function openMenu(bot: TelegramBot, chatId: number) {
 async function notifyAdmins(bot: TelegramBot, user: TelegramBot.User) {
   const users = await fetchUsers();
 
+  console.log("USERS:", users); // 👈 ДЕБАГ
+
   const admins = users.filter((u: any) => {
-    const role = String(u.role ?? "").trim().toUpperCase();
-    const active = String(u.active ?? "").trim().toUpperCase();
+    const role = String(u.role ?? u["РОЛЬ"] ?? "").trim().toUpperCase();
+    const active = String(u.active ?? u["АКТИВ"] ?? "").trim().toUpperCase();
 
     return (
-      active === "ТАК" &&
+      Number(u.tgId ?? u.TG_ID) > 0 &&
+      (active === "ТАК" || active === "TRUE" || active === "1") &&
       (
         role === "АДМІНІСТРАТОР" ||
         role === "АДМІН" ||
@@ -69,27 +72,31 @@ async function notifyAdmins(bot: TelegramBot, user: TelegramBot.User) {
     );
   });
 
+  console.log("ADMINS FOUND:", admins); // 👈 ДЕБАГ
+
   const text =
     `🆕 Нова заявка\n\n` +
     `👤 ${user.first_name ?? ""} ${user.last_name ?? ""}\n` +
     `📛 @${user.username ?? "—"}\n` +
     `🆔 ${user.id}`;
 
-  for (const admin of admins) {
-    await bot.sendMessage(Number(admin.tgId), text, {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "✅ Адмін", callback_data: `reg:admin:${user.id}` },
-            { text: "👷 Бригадир", callback_data: `reg:foreman:${user.id}` },
-          ],
-          [
-            { text: "❌ Відхилити", callback_data: `reg:reject:${user.id}` },
-          ],
+for (const admin of admins) {
+  const adminTgId = Number((admin as any).tgId ?? (admin as any).TG_ID);
+
+  await bot.sendMessage(adminTgId, text, {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "✅ Адмін", callback_data: `reg:admin:${user.id}` },
+          { text: "👷 Бригадир", callback_data: `reg:foreman:${user.id}` },
         ],
-      },
-    });
-  }
+        [
+          { text: "❌ Відхилити", callback_data: `reg:reject:${user.id}` },
+        ],
+      ],
+    },
+  });
+}
 }
 
 /**
