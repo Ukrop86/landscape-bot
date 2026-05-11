@@ -672,7 +672,7 @@ let roadAgg = await computeRoadSecondsFromRts({
   foremanTgId,
 }).catch(() => []);
 
-const workMoneyRows = await computeWorkMoneyFromRts({
+let workMoneyRows = await computeWorkMoneyFromRts({
   date,
   foremanTgId,
   ...(sinceTs ? { sinceTs } : {}),
@@ -722,7 +722,7 @@ if (sinceTs) {
     0,
   );
 
-  const roadTotalSec = roadAgg.reduce((a, r) => a + Number(r.sec ?? 0), 0);
+  let roadTotalSec = roadAgg.reduce((a, r) => a + Number(r.sec ?? 0), 0);
   const roadSecByEmp = new Map(
     roadAgg.map((r) => [String(r.employeeId), Number(r.sec ?? 0)]),
   );
@@ -740,6 +740,135 @@ if (sinceTs) {
     discByEmpObj.set(key, Number(r.disciplineCoef ?? 1.0));
     prodByEmpObj.set(key, Number(r.productivityCoef ?? 1.0));
   }
+
+  const editAddedPeopleIds = ((st as any).editAddedPeopleIds ?? []).map(String);
+
+const editRemovedPeopleIds = new Set(
+  ((st as any).editRemovedPeopleIds ?? []).map(String),
+);
+
+for (const key of [...workSecByEmpObj.keys()]) {
+  const [empId] = key.split("||");
+
+  if (editRemovedPeopleIds.has(String(empId))) {
+    workSecByEmpObj.delete(key);
+    discByEmpObj.delete(key);
+    prodByEmpObj.delete(key);
+  }
+}
+
+for (const removedEmpId of editRemovedPeopleIds) {
+  roadSecByEmp.delete(String(removedEmpId));
+}
+
+for (const newEmpId of editAddedPeopleIds) {
+  for (const oid of st.plannedObjectIds ?? []) {
+    const secs = [...workSecByEmpObj.entries()]
+      .filter(([key]) => key.endsWith(`||${oid}`))
+      .map(([, sec]) => Number(sec ?? 0))
+      .filter((sec) => sec > 0);
+
+    if (!secs.length) continue;
+
+    const avgSec =
+      secs.reduce((a, b) => a + b, 0) / secs.length;
+
+    const key = `${newEmpId}||${oid}`;
+
+    workSecByEmpObj.set(key, avgSec);
+    discByEmpObj.set(key, 1.0);
+    prodByEmpObj.set(key, 1.0);
+  }
+
+  const roadSecs = [...roadSecByEmp.values()]
+    .map((x) => Number(x ?? 0))
+    .filter((x) => x > 0);
+
+  if (roadSecs.length) {
+    const avgRoadSec =
+      roadSecs.reduce((a, b) => a + b, 0) / roadSecs.length;
+
+    roadSecByEmp.set(newEmpId, avgRoadSec);
+  }
+}
+
+if ((st as any).editReturned) {
+  workMoneyRows = workMoneyRows.filter(
+    (r: any) =>
+      !editRemovedPeopleIds.has(String(r.employeeId)),
+  );
+
+  const rebuiltWorkRows: any[] = [];
+
+  for (const oid of st.plannedObjectIds ?? []) {
+    const obj = ensureObjectState(st, oid);
+
+    for (const w of obj.works ?? []) {
+      const workId = String(w.workId ?? "");
+
+      const rows = workMoneyRows.filter(
+        (r: any) =>
+          String(r.objectId) === String(oid) &&
+          String(r.workId) === workId,
+      );
+
+      if (!rows.length) continue;
+
+      const totalQty = rows.reduce(
+        (a: number, r: any) => a + Number(r.qty ?? 0),
+        0,
+      );
+
+      const totalAmount = rows.reduce(
+        (a: number, r: any) => a + Number(r.amount ?? 0),
+        0,
+      );
+
+      const people = uniq([
+        ...rows.map((r: any) => String(r.employeeId)),
+        ...editAddedPeopleIds,
+      ])
+        .filter(Boolean)
+        .filter(
+          (id) =>
+            !editRemovedPeopleIds.has(String(id)),
+        );
+
+      if (!people.length) continue;
+
+      const qtyPerPerson = totalQty / people.length;
+
+      const amountPerPerson =
+        totalAmount / people.length;
+
+      const sample = rows[0];
+
+      for (const empId of people) {
+        rebuiltWorkRows.push({
+          ...sample,
+          employeeId: empId,
+          qty: Math.round(qtyPerPerson * 100) / 100,
+          amount:
+            Math.round(amountPerPerson * 100) / 100,
+          sec: Number(
+            workSecByEmpObj.get(
+              `${empId}||${oid}`,
+            ) ?? sample.sec ?? 0,
+          ),
+        });
+      }
+    }
+  }
+
+  if (rebuiltWorkRows.length) {
+    workMoneyRows = rebuiltWorkRows;
+  }
+}
+
+roadTotalSec = [...roadSecByEmp.values()].reduce(
+  (a, x) => a + Number(x ?? 0),
+  0,
+);
 
   const payrollPacks: any[] = [];
 
@@ -838,7 +967,20 @@ if (sinceTs) {
     });
   }
 
-  const riders = uniq((st.members ?? []).map((m: any) => m.employeeId)).filter(Boolean);
+  const riders = uniq([
+  ...(st.members ?? []).map((m: any) =>
+    String(m.employeeId),
+  ),
+  ...((st as any).editAddedPeopleIds ?? []).map(
+    String,
+  ),
+  ...(st.inCarIds ?? []).map(String),
+])
+  .filter(Boolean)
+  .filter(
+    (id) =>
+      !editRemovedPeopleIds.has(String(id)),
+  );
 
   const amount =
     (await getSettingNumber(`ROAD_ALLOWANCE_${tripClass}`)) ??
@@ -892,16 +1034,15 @@ if (sinceTs) {
 const workedEmployeeIdsByObject: Record<string, string[]> = {};
 
 for (const oid of st.plannedObjectIds ?? []) {
-  workedEmployeeIdsByObject[oid] = uniq(
-    aggAll
-      .filter(
-        (r) =>
-          String(r.objectId) === String(oid) &&
-          Number(r.sec ?? 0) > 0,
-      )
-      .map((r) => String(r.employeeId ?? ""))
-      .filter(Boolean),
-  );
+workedEmployeeIdsByObject[oid] = uniq(
+  workMoneyRows
+    .filter(
+      (r: any) =>
+        String(r.objectId) === String(oid),
+    )
+    .map((r: any) => String(r.employeeId))
+    .filter(Boolean),
+);
 }
 
   const totalToPay = Number(workGrandTotal ?? 0) + Number(amount ?? 0);

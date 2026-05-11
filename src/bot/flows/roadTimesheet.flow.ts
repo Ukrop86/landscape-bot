@@ -30,22 +30,8 @@ import {  makeEventId,  nowISO,  classifyTripByKm } from "../../google/sheets/ut
 import { computeWorkMoneyFromRts } from "./roadTimesheet.compute.js";
 import {  cb,  PREFIX,  FLOW,  DEFAULT_ROAD_ALLOWANCE_BY_CLASS } from "./roadTimesheet.cb.js";
 
-const uiSave = async (
-  bot: TelegramBot,
-  chatId: number,
-  foremanTgId: number,
-  st: State,
-  s?: any,
-) => {
-  return bot.sendMessage(chatId, "💾 Дані готові до перевірки. Натисни «Зберегти».", {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: TEXTS.ui.buttons.save, callback_data: cb.SAVE }],
-        [{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }],
-      ],
-    },
-  });
-};
+const uiSave = (bot: TelegramBot, chatId: number, foremanTgId: number, st: State) =>
+  sendSaveScreen(bot, chatId, foremanTgId, st, cb);
 
 function isLocked(status?: string) {
   const s = String(status || "").toUpperCase();
