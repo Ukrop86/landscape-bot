@@ -5365,9 +5365,9 @@ const workedEmployeeIdsByObject: Record<string, string[]> = {};
 
 for (const oid of st.plannedObjectIds) {
 workedEmployeeIdsByObject[oid] = uniq(
-  [...workSecByEmpObj.keys()]
-    .filter((key) => key.endsWith(`||${oid}`))
-    .map((key) => key.split("||")[0])
+  workMoneyRows
+    .filter((r: any) => String(r.objectId) === String(oid))
+    .map((r: any) => String(r.employeeId))
     .filter(Boolean),
 );
 }
