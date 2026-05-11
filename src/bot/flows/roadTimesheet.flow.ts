@@ -1598,8 +1598,8 @@ const foremanTgId = q.from?.id ?? 0;
 const root = getFlowState<Record<number, State>>(s, FLOW) || {};
 s.flow = FLOW;
 
-    const handledAdmin = await handleRoadAdminCallbacks({ bot, q, data });
-if (handledAdmin) return true;
+//    const handledAdmin = await handleRoadAdminCallbacks({ bot, q, data });
+//    if (handledAdmin) return true;
 
     const ensureStatsState = (): State => {
       const existing = root[foremanTgId];
