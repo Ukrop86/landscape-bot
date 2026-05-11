@@ -165,6 +165,21 @@ const st = root[foremanTgId] as State | undefined;
 
     let savePreviewText = "";
 
+
+if ((st as any)?.submittedForApproval) {
+  return renderFlow<State>(bot, chatId, s, FLOW, () => ({
+    text:
+      `⏳ День вже відправлено адміну на перевірку.\n\n` +
+      `Редагування тимчасово заблоковано.\n` +
+      `Якщо адмін поверне день — кнопки редагування знову відкриються.`,
+    kb: {
+      inline_keyboard: [
+        [{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }],
+      ],
+    },
+  }));
+}
+
   if (st?.step === "SAVE") {
     const x = st;
 
@@ -1742,7 +1757,13 @@ if (targetForemanTgId > 0) {
   if (st2) {
     st2.submittedForApproval = false;
     st2.adminReviewEventId = "";
-    st2.step = "SAVE"; // повертаємо на екран перевірки/збереження
+
+
+st2.submittedForApproval = false;
+st2.adminReviewEventId = "";
+st2.step = "START";
+
+
 
     root2[targetForemanTgId] = st2;
     setFlowState(s, FLOW, root2);
@@ -4775,17 +4796,29 @@ if (sessionStartTs) {
 const qtyProblems: string[] = [];
 
 for (const oid of st.plannedObjectIds ?? []) {
+  const obj = ensureObjectState(st, oid);
+
   const objRows = workMoneyRows.filter(
     (r: any) => String(r.objectId) === String(oid),
   );
 
-  const qtySum = objRows.reduce(
-    (a: number, r: any) => a + Number(r.qty ?? 0),
-    0,
-  );
+  for (const w of obj.works ?? []) {
+    const workId = String(w.workId ?? "");
 
-  if (qtySum <= 0) {
-    qtyProblems.push(`🧮 ${objectName(st, oid)} — не заповнено обсяги`);
+    const rowsForWork = objRows.filter(
+      (r: any) => String(r.workId) === workId,
+    );
+
+    const qtySum = rowsForWork.reduce(
+      (a: number, r: any) => a + Number(r.qty ?? 0),
+      0,
+    );
+
+    if (qtySum <= 0) {
+      qtyProblems.push(
+        `🧮 ${objectName(st, oid)} — ${w.name ?? workId}: не заповнено обсяг`,
+      );
+    }
   }
 }
 
