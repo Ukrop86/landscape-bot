@@ -166,18 +166,31 @@ const st = root[foremanTgId] as State | undefined;
     let savePreviewText = "";
 
 
-if ((st as any)?.submittedForApproval) {
-  return renderFlow<State>(bot, chatId, s, FLOW, () => ({
-    text:
-      `⏳ День вже відправлено адміну на перевірку.\n\n` +
-      `Редагування тимчасово заблоковано.\n` +
-      `Якщо адмін поверне день — кнопки редагування знову відкриються.`,
-    kb: {
-      inline_keyboard: [
-        [{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }],
-      ],
-    },
-  }));
+if (st && (st as any)?.submittedForApproval) {
+  const reviewEventId = String((st as any).adminReviewEventId ?? "").trim();
+  const reviewEv = reviewEventId ? await getEventById(reviewEventId).catch(() => null) : null;
+  const reviewStatus = String((reviewEv as any)?.status ?? "").toUpperCase().trim();
+
+  if (reviewStatus === "ПОВЕРНУТО") {
+    (st as any).submittedForApproval = false;
+    (st as any).adminReviewEventId = "";
+    st.step = "START";
+
+    root[foremanTgId] = st;
+    setFlowState(s, FLOW, root);
+  } else {
+    return renderFlow<State>(bot, chatId, s, FLOW, () => ({
+      text:
+        `⏳ День вже відправлено адміну на перевірку.\n\n` +
+        `Редагування тимчасово заблоковано.\n` +
+        `Якщо адмін поверне день — кнопки редагування знову відкриються.`,
+      kb: {
+        inline_keyboard: [
+          [{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }],
+        ],
+      },
+    }));
+  }
 }
 
   if (st?.step === "SAVE") {
@@ -1949,12 +1962,25 @@ await ensureStateReady(st);
     const date = st.date;
 
 
-    if ((st as any).submittedForApproval) {
-  await bot.answerCallbackQuery(q.id, {
-    text: "⏳ День вже відправлено адміну. Редагування буде доступне, якщо адмін поверне на редагування.",
-    show_alert: true,
-  });
-  return true;
+if ((st as any).submittedForApproval) {
+  const reviewEventId = String((st as any).adminReviewEventId ?? "").trim();
+  const reviewEv = reviewEventId ? await getEventById(reviewEventId).catch(() => null) : null;
+  const reviewStatus = String((reviewEv as any)?.status ?? "").toUpperCase().trim();
+
+  if (reviewStatus === "ПОВЕРНУТО") {
+    (st as any).submittedForApproval = false;
+    (st as any).adminReviewEventId = "";
+    st.step = "START";
+
+    root[foremanTgId] = st;
+    setFlowState(s, FLOW, root);
+  } else {
+    await bot.answerCallbackQuery(q.id, {
+      text: "⏳ День вже відправлено адміну. Редагування буде доступне, якщо адмін поверне на редагування.",
+      show_alert: true,
+    });
+    return true;
+  }
 }
 
     const gate = async (text: string) => {
