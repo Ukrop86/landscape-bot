@@ -170,14 +170,22 @@ if (st && (st as any)?.submittedForApproval) {
   const reviewEv = reviewEventId ? await getEventById(reviewEventId).catch(() => null) : null;
   const reviewStatus = String((reviewEv as any)?.status ?? "").toUpperCase().trim();
 
-  if (reviewStatus === "ПОВЕРНУТО") {
-    (st as any).submittedForApproval = false;
-    (st as any).adminReviewEventId = "";
-    st.step = "START";
+if (reviewStatus === "ПОВЕРНУТО") {
+  (st as any).submittedForApproval = false;
+  (st as any).adminReviewEventId = "";
+  st.step = "START";
 
-    root[foremanTgId] = st;
-    setFlowState(s, FLOW, root);
-  } else {
+  (st as any).editReturned = true;
+  (st as any).editAddedPeopleIds ??= [];
+  (st as any).editRemovedPeopleIds ??= [];
+  (st as any).editOriginalPeopleIds ??= uniq([
+    ...((st.members ?? []).map((m: any) => String(m.employeeId)).filter(Boolean)),
+    ...((st.inCarIds ?? []).map(String).filter(Boolean)),
+  ]);
+
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+} else {
     return renderFlow<State>(bot, chatId, s, FLOW, () => ({
       text:
         `⏳ День вже відправлено адміну на перевірку.\n\n` +
@@ -2041,14 +2049,22 @@ if ((st as any).submittedForApproval) {
   const reviewEv = reviewEventId ? await getEventById(reviewEventId).catch(() => null) : null;
   const reviewStatus = String((reviewEv as any)?.status ?? "").toUpperCase().trim();
 
-  if (reviewStatus === "ПОВЕРНУТО") {
-    (st as any).submittedForApproval = false;
-    (st as any).adminReviewEventId = "";
-    st.step = "START";
+if (reviewStatus === "ПОВЕРНУТО") {
+  (st as any).submittedForApproval = false;
+  (st as any).adminReviewEventId = "";
+  st.step = "START";
 
-    root[foremanTgId] = st;
-    setFlowState(s, FLOW, root);
-  } else {
+  (st as any).editReturned = true;
+  (st as any).editAddedPeopleIds ??= [];
+  (st as any).editRemovedPeopleIds ??= [];
+  (st as any).editOriginalPeopleIds ??= uniq([
+    ...((st.members ?? []).map((m: any) => String(m.employeeId)).filter(Boolean)),
+    ...((st.inCarIds ?? []).map(String).filter(Boolean)),
+  ]);
+
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+} else {
     await bot.answerCallbackQuery(q.id, {
       text: "⏳ День вже відправлено адміну. Редагування буде доступне, якщо адмін поверне на редагування.",
       show_alert: true,
@@ -2345,7 +2361,12 @@ setFlowState(s, FLOW, root);
 
       if (payrollEv) {
         const p = payrollEv.payload ?? {};
-        employeeIds = uniq((p.employeeIds ?? []).map(String)).filter(Boolean);
+        employeeIds = uniq([
+  ...(p.employeeIds ?? []).map(String),
+  ...((st as any).editAddedPeopleIds ?? []).map(String),
+])
+  .filter(Boolean)
+  .filter((id) => !new Set(((st as any).editRemovedPeopleIds ?? []).map(String)).has(String(id)));
         items = (p.items ?? []).map((it: any) => ({
           workId: String(it.workId ?? ""),
           workName: String(it.workName ?? it.workId ?? ""),
@@ -4940,25 +4961,7 @@ if (qtyProblems.length) {
   return true;
 }
 
-      const workTotalsByObj = new Map<
-        string,
-        { amount: number; qtyByUnit: Record<string, number> }
-      >();
-
-      for (const r of workMoneyRows) {
-        const cur = workTotalsByObj.get(r.objectId) ?? {
-          amount: 0,
-          qtyByUnit: {},
-        };
-        cur.amount += r.amount;
-        cur.qtyByUnit[r.unit] = (cur.qtyByUnit[r.unit] ?? 0) + r.qty;
-        workTotalsByObj.set(r.objectId, cur);
-      }
-
-      const workGrandTotal = [...workTotalsByObj.values()].reduce(
-        (a, x) => a + x.amount,
-        0,
-      );
+ 
       let roadTotalSec = roadAgg.reduce((a, x) => a + (x.sec ?? 0), 0);
       const roadSecByEmp = new Map(roadAgg.map((r) => [r.employeeId, r.sec]));
       const roadObjects = st.plannedObjectIds.slice(0, 4); 
@@ -5087,6 +5090,25 @@ roadTotalSec = [...roadSecByEmp.values()]
   if (rebuiltWorkRows.length) {
     workMoneyRows = rebuiltWorkRows;
   }
+       const workTotalsByObj = new Map<
+        string,
+        { amount: number; qtyByUnit: Record<string, number> }
+      >();
+
+      for (const r of workMoneyRows) {
+        const cur = workTotalsByObj.get(r.objectId) ?? {
+          amount: 0,
+          qtyByUnit: {},
+        };
+        cur.amount += r.amount;
+        cur.qtyByUnit[r.unit] = (cur.qtyByUnit[r.unit] ?? 0) + r.qty;
+        workTotalsByObj.set(r.objectId, cur);
+      }
+
+      const workGrandTotal = [...workTotalsByObj.values()].reduce(
+        (a, x) => a + x.amount,
+        0,
+      );
 }
 
       const payrollPacks: PayrollObjectPack[] = [];
@@ -5349,6 +5371,11 @@ workedEmployeeIdsByObject[oid] = uniq(
     .filter(Boolean),
 );
 }
+
+const workGrandTotal = workMoneyRows.reduce(
+  (a: number, r: any) => a + Number(r.amount ?? 0),
+  0,
+);
 
       const totalToPay = Number(workGrandTotal ?? 0) + Number(amount ?? 0);
       const fullPayload = {
