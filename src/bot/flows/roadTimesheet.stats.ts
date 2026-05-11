@@ -143,6 +143,8 @@ return {
   }
 }
 
+
+
 async function getRoadEndPayloadForCar(params: {
   date: string;
   foremanTgId: number;
@@ -178,6 +180,35 @@ async function getRoadEndPayloadForCar(params: {
     return null;
   }
 }
+
+async function getLatestRoadEndPayload(params: {
+  date: string;
+  foremanTgId: number;
+}): Promise<any | null> {
+  const { date, foremanTgId } = params;
+
+  try {
+    const events = await fetchEvents({ date, foremanTgId } as any);
+
+    const rows = (events ?? [])
+      .filter((e: any) => String(e.type ?? "") === "ROAD_END")
+      .sort((a: any, b: any) => {
+        const ta = Date.parse(String(a.ts ?? a.updatedAt ?? ""));
+        const tb = Date.parse(String(b.ts ?? b.updatedAt ?? ""));
+        return ta - tb;
+      });
+
+    const last = rows[rows.length - 1];
+    if (!last?.payload) return null;
+
+    return typeof last.payload === "string"
+      ? JSON.parse(last.payload)
+      : last.payload;
+  } catch {
+    return null;
+  }
+}
+
 
 export function renderRoadStatsIfStep(st: State): Screen | null {
   const step = (st as any).step as Step;
@@ -447,6 +478,71 @@ async function buildStatsPayMap(params: {
 }) {
   const { date, foremanTgId } = params;
 
+ const payload = await getLatestRoadEndPayload({ date, foremanTgId });
+
+if (payload?.salaryPacks?.length) {
+  const moneyByObject = new Map<string, number>();
+  const payByObjectEmp = new Map<string, number>();
+  const companyByObject = new Map<string, number>();
+  const roleSummaryByObject = new Map<
+    string,
+    { workers: number; brigadiers: number; seniors: number; company: number }
+  >();
+
+  const brigadierSet = new Set(
+    (payload.brigadierEmployeeIds ?? []).map(String),
+  );
+
+  const seniorSet = new Set(
+    (payload.seniorEmployeeIds ?? []).map(String),
+  );
+
+  for (const pack of payload.salaryPacks ?? []) {
+    const objectId = String(pack.objectId ?? "");
+    if (!objectId) continue;
+
+    moneyByObject.set(objectId, Number(pack.objectTotal ?? 0));
+
+    const summary = {
+      workers: 0,
+      brigadiers: 0,
+      seniors: 0,
+      company: 0,
+    };
+
+    for (const r of pack.rows ?? []) {
+      const empId = String(r.employeeId ?? "");
+      const pay = Number(r.pay ?? 0);
+
+      if (!empId) continue;
+
+      payByObjectEmp.set(`${objectId}||${empId}`, pay);
+
+      if (brigadierSet.has(empId)) summary.brigadiers += pay;
+      else if (seniorSet.has(empId)) summary.seniors += pay;
+      else summary.workers += pay;
+    }
+
+    const totalPaid =
+      summary.workers + summary.brigadiers + summary.seniors;
+
+    summary.company = Math.max(
+      0,
+      Math.round((Number(pack.objectTotal ?? 0) - totalPaid) * 100) / 100,
+    );
+
+    roleSummaryByObject.set(objectId, summary);
+    companyByObject.set(objectId, summary.company);
+  }
+
+  return {
+    moneyByObject,
+    payByObjectEmp,
+    companyByObject,
+    roleSummaryByObject,
+  };
+} 
+
   const aggAll = await computeFromRts({ date, foremanTgId });
   const workRows = (await computeWorkMoneyFromRts({ date, foremanTgId })) as any[];
 
@@ -634,8 +730,19 @@ async function buildObjectView(params: {
   const day = await buildRoadDayStats({ date, foremanTgId });
   const obj = day.objects[objectId];
 
-  const peopleLines =
-    Object.entries(obj?.secByEmployee ?? {})
+const payload = await getLatestRoadEndPayload({ date, foremanTgId });
+const payloadPack = (payload?.payrollPacks ?? []).find(
+  (p: any) => String(p.objectId) === String(objectId),
+);
+
+const peopleLines = payloadPack?.rows?.length
+  ? payloadPack.rows
+      .map(
+        (r: any) =>
+          `• ${mdEscapeSimple(String(r.employeeName ?? empName(st, r.employeeId)))}: *${fmtNum(r.hours)} год*`,
+      )
+      .join("\n")
+  : Object.entries(obj?.secByEmployee ?? {})
       .sort((a, b) => Number(b[1]) - Number(a[1]))
       .map(([empId, sec]) => `• ${mdEscapeSimple(empName(st, empId))}: *${(Number(sec) / 3600).toFixed(2)} год*`)
       .join("\n") || "—";
@@ -731,8 +838,32 @@ async function buildPersonView(params: {
   const day = await buildRoadDayStats({ date, foremanTgId });
   const emp = day.employees[employeeId];
 
-  const objLines =
-    Object.entries(emp?.secByObject ?? {})
+const payload = await getLatestRoadEndPayload({ date, foremanTgId });
+
+const payloadObjRows = (payload?.payrollPacks ?? [])
+  .map((p: any) => {
+    const row = (p.rows ?? []).find(
+      (r: any) => String(r.employeeId) === String(employeeId),
+    );
+
+    if (!row) return null;
+
+    return {
+      objectId: String(p.objectId),
+      objectName: String(p.objectName ?? objectName(st, p.objectId)),
+      hours: Number(row.hours ?? 0),
+    };
+  })
+  .filter(Boolean);
+
+const objLines = payloadObjRows.length
+  ? payloadObjRows
+      .map(
+        (r: any) =>
+          `• ${mdEscapeSimple(r.objectName)}: *${fmtNum(r.hours)} год*`,
+      )
+      .join("\n")
+  : Object.entries(emp?.secByObject ?? {})
       .sort((a, b) => Number(b[1]) - Number(a[1]))
       .map(([oid, sec]) => `• ${mdEscapeSimple(objectName(st, oid))}: *${(Number(sec) / 3600).toFixed(2)} год*`)
       .join("\n") || "—";
