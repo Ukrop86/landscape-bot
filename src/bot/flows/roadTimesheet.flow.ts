@@ -490,13 +490,17 @@ if ((x as any).editReturned) {
       });
     }
 
-    const riders = uniq([
+const editRemovedPeopleIdsPreview = new Set(
+  ((x as any).editRemovedPeopleIds ?? []).map(String),
+);
+
+const riders = uniq([
   ...(x.members ?? []).map((m: RoadMember) => String(m.employeeId)),
   ...((x as any).editAddedPeopleIds ?? []).map(String),
   ...(x.inCarIds ?? []).map(String),
 ])
   .filter(Boolean)
-  .filter((id) => !editRemovedPeopleIds.has(String(id)));
+  .filter((id) => !editRemovedPeopleIdsPreview.has(String(id)));
 
     const amount =
       (await getSettingNumber(`ROAD_ALLOWANCE_${tripClass}`)) ??
@@ -545,6 +549,17 @@ const salaryPacks: SalaryPack[] = buildSalaryPacksWithRoles({
   seniorEmployeeIds,
 });
 
+const workedEmployeeIdsByObject: Record<string, string[]> = {};
+
+for (const oid of x.plannedObjectIds ?? []) {
+  workedEmployeeIdsByObject[oid] = uniq(
+    workMoneyRows
+      .filter((r: any) => String(r.objectId) === String(oid))
+      .map((r: any) => String(r.employeeId))
+      .filter(Boolean),
+  );
+}
+
     const totalToPay = Number(workGrandTotal ?? 0) + Number(amount ?? 0);
 
     const fullPayload = {
@@ -567,6 +582,7 @@ const salaryPacks: SalaryPack[] = buildSalaryPacksWithRoles({
       brigadierEmployeeIds,
       seniorEmployeeIds,
       plannedObjectIds: x.plannedObjectIds ?? [],
+      workedEmployeeIdsByObject,
       odoStartKm: x.odoStartKm,
       odoEndKm: x.odoEndKm,
       carId: x.carId,
