@@ -5024,6 +5024,71 @@ for (const newEmpId of editAddedPeopleIds) {
 roadTotalSec = [...roadSecByEmp.values()]
   .reduce((a, x) => a + Number(x ?? 0), 0);
 
+  if ((st as any).editReturned) {
+  const addedSet = new Set(editAddedPeopleIds.map(String));
+  const removedSet = editRemovedPeopleIds;
+
+  workMoneyRows = workMoneyRows.filter(
+    (r: any) => !removedSet.has(String(r.employeeId)),
+  );
+
+  const rebuiltWorkRows: any[] = [];
+
+  for (const oid of st.plannedObjectIds ?? []) {
+    const obj = ensureObjectState(st, oid);
+
+    for (const w of obj.works ?? []) {
+      const workId = String(w.workId ?? "");
+
+      const rows = workMoneyRows.filter(
+        (r: any) =>
+          String(r.objectId) === String(oid) &&
+          String(r.workId) === workId,
+      );
+
+      if (!rows.length) continue;
+
+      const totalQty = rows.reduce(
+        (a: number, r: any) => a + Number(r.qty ?? 0),
+        0,
+      );
+
+      const totalAmount = rows.reduce(
+        (a: number, r: any) => a + Number(r.amount ?? 0),
+        0,
+      );
+
+      const people = uniq([
+        ...rows.map((r: any) => String(r.employeeId)),
+        ...editAddedPeopleIds,
+      ])
+        .filter(Boolean)
+        .filter((id) => !removedSet.has(String(id)));
+
+      if (!people.length) continue;
+
+      const qtyPerPerson = totalQty / people.length;
+      const amountPerPerson = totalAmount / people.length;
+
+      const sample = rows[0];
+
+      for (const empId of people) {
+        rebuiltWorkRows.push({
+          ...sample,
+          employeeId: empId,
+          qty: Math.round(qtyPerPerson * 100) / 100,
+          amount: Math.round(amountPerPerson * 100) / 100,
+          sec: Number(workSecByEmpObj.get(`${empId}||${oid}`) ?? sample.sec ?? 0),
+        });
+      }
+    }
+  }
+
+  if (rebuiltWorkRows.length) {
+    workMoneyRows = rebuiltWorkRows;
+  }
+}
+
       const payrollPacks: PayrollObjectPack[] = [];
       await ensureEmployees(st);
       const nameById = new Map(
@@ -5277,16 +5342,12 @@ const salaryPacks: SalaryPack[] = buildSalaryPacksWithRoles({
 const workedEmployeeIdsByObject: Record<string, string[]> = {};
 
 for (const oid of st.plannedObjectIds) {
-  workedEmployeeIdsByObject[oid] = uniq(
-    aggAll
-      .filter(
-        (r) =>
-          String(r.objectId) === String(oid) &&
-          Number(r.sec ?? 0) > 0,
-      )
-      .map((r) => String(r.employeeId ?? ""))
-      .filter(Boolean),
-  );
+workedEmployeeIdsByObject[oid] = uniq(
+  [...workSecByEmpObj.keys()]
+    .filter((key) => key.endsWith(`||${oid}`))
+    .map((key) => key.split("||")[0])
+    .filter(Boolean),
+);
 }
 
       const totalToPay = Number(workGrandTotal ?? 0) + Number(amount ?? 0);
