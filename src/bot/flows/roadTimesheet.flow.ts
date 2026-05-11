@@ -1722,6 +1722,7 @@ if (handledStats) {
           WRONG_ODO: "ODO некоректний",
           WRONG_PEOPLE: "Не ті люди",
           WRONG_OBJECTS: "Не ті обʼєкти",
+          WRONG_QTY: "Невірні обсяги",
           NO_PHOTO: "Нема фото",
           OTHER: "Інше",
         };
@@ -1732,11 +1733,27 @@ if (handledStats) {
           updatedAt: nowIso,
         });
 
-        await bot.sendMessage(
-          targetChatId,
-          `🔴 *День повернено адміністратором*\n📅 Дата: ${ev.date}\n🆔 Подія: *Робочий день*\n📝 Причина: *${reasonText}*\n\nВиправ і надішли знову.`,
-          { parse_mode: "Markdown" },
-        );
+        const targetForemanTgId = Number(ev.foremanTgId) || 0;
+
+if (targetForemanTgId > 0) {
+  const root2 = getFlowState<Record<number, State>>(s, FLOW) || {};
+  const st2 = root2[targetForemanTgId] as any;
+
+  if (st2) {
+    st2.submittedForApproval = false;
+    st2.adminReviewEventId = "";
+    st2.step = "SAVE"; // повертаємо на екран перевірки/збереження
+
+    root2[targetForemanTgId] = st2;
+    setFlowState(s, FLOW, root2);
+  }
+}
+
+await bot.sendMessage(
+  targetChatId,
+  `🔴 *День повернено адміністратором*\n📅 Дата: ${ev.date}\n📝 Причина: *${reasonText}*\n\nРедагування знову доступне. Відкрий меню робочого дня, виправ дані і надішли повторно.`,
+  { parse_mode: "Markdown" },
+);
 
         await bot.answerCallbackQuery(q.id, { text: "🔴 Повернено" });
         await safeEditAdmin(
@@ -1782,6 +1799,12 @@ if (handledStats) {
                     },
                   ],
                   [
+  {
+    text: "🧮 Невірні обсяги",
+    callback_data: `${cb.ADM_RETURN_REASON}${eventId}:WRONG_QTY`,
+  },
+],
+                  [
                     {
                       text: "❎ Скасувати",
                       callback_data: `${cb.ADM_RETURN_CANCEL}${eventId}`,
@@ -1821,6 +1844,27 @@ if (handledStats) {
           status: "ЗАТВЕРДЖЕНО",
           updatedAt: nowIso,
         });
+
+        const targetForemanTgId = Number(ev.foremanTgId) || 0;
+
+if (targetForemanTgId > 0) {
+  const root2 = getFlowState<Record<number, State>>(s, FLOW) || {};
+
+  root2[targetForemanTgId] = {
+    step: "START",
+    date: todayISO(),
+    phase: "SETUP",
+    plannedObjectIds: [],
+    objects: {},
+    inCarIds: [],
+    members: [],
+    driveActive: false,
+    returnActive: false,
+    qtyUnlocked: false,
+  } as State;
+
+  setFlowState(s, FLOW, root2);
+}
 
 const approvedText = buildRoadApprovedShortText(ev, {
   title: "✅ *День затверджено*",
@@ -1882,6 +1926,15 @@ await ensureStateReady(st);
     if (!st) return true;
     await ensureStateReady(st);
     const date = st.date;
+
+
+    if ((st as any).submittedForApproval) {
+  await bot.answerCallbackQuery(q.id, {
+    text: "⏳ День вже відправлено адміну. Редагування буде доступне, якщо адмін поверне на редагування.",
+    show_alert: true,
+  });
+  return true;
+}
 
     const gate = async (text: string) => {
       await bot.answerCallbackQuery(q.id, {
@@ -2776,19 +2829,31 @@ setFlowState(s, FLOW, root);
       return true;
     }
 
-    if (data === cb.SKIP_ODO_START_PHOTO) {
-      if (!st.carId) return (gate(TEXTS.roadFlow.guards.needCar), true);
-      if (st.odoStartKm === undefined)
-        return (gate(TEXTS.roadFlow.guards.needOdoStart), true);
+if (data === cb.SKIP_ODO_START_PHOTO) {
+  if (!st.carId) return (gate(TEXTS.roadFlow.guards.needCar), true);
+  if (st.odoStartKm === undefined)
+    return (gate(TEXTS.roadFlow.guards.needOdoStart), true);
 
-      st.odoStartPhotoFileId = st.odoStartPhotoFileId ?? "";
-      st.step = "START";
+  await bot.answerCallbackQuery(q.id).catch(() => {});
 
-      root[foremanTgId] = st;
-setFlowState(s, FLOW, root);
-      await render(bot, chatId, s, foremanTgId);
-      return true;
-    }
+  st.odoStartPhotoFileId = st.odoStartPhotoFileId ?? "";
+  st.step = "START";
+
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+
+  await bot.sendMessage(chatId, "✅ Фото початкового показника спідометра пропущено", {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "👥 Обрати людей", callback_data: cb.PICK_PEOPLE }],
+        [{ text: TEXTS.ui.buttons.back, callback_data: `${cb.BACK}start` }],
+        [{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }],
+      ],
+    },
+  });
+
+  return true;
+}
 
     if (data === cb.PICK_PEOPLE) {
       st.step = "PICK_PEOPLE";
@@ -4609,7 +4674,6 @@ setFlowState(s, FLOW, root);
     }
     
 if (data === cb.SKIP_ODO_END_PHOTO) {
-  
   await bot.answerCallbackQuery(q.id).catch(() => {});
 
   if (!canEnterOdoEnd(st) || st.odoEndKm === undefined)
@@ -4617,15 +4681,61 @@ if (data === cb.SKIP_ODO_END_PHOTO) {
 
   st.odoEndPhotoFileId = st.odoEndPhotoFileId ?? "";
   st.step = "SAVE";
+
   root[foremanTgId] = st;
-setFlowState(s, FLOW, root);
-  await render(bot, chatId, s, foremanTgId);
+  setFlowState(s, FLOW, root);
+
+  await bot.sendMessage(chatId, "✅ Фото кінцевого показника спідометра пропущено");
+  await uiSave(bot, chatId, foremanTgId, st);
+
   return true;
 }
 
 
-    if (data === cb.SAVE) {
+if (data === cb.SAVE) {
+
       if (!canSave(st)) return (gate("Спочатку ODO start/end."), true);
+const saveProblems: string[] = [];
+
+if (!st.carId) saveProblems.push("🚗 Не обрано авто");
+if (st.odoStartKm === undefined) saveProblems.push("🟢 Не введено початковий ODO");
+if (st.odoEndKm === undefined) saveProblems.push("🔴 Не введено кінцевий ODO");
+if (!st.inCarIds?.length && !st.members?.length) saveProblems.push("👥 Не обрано людей");
+if (!st.plannedObjectIds?.length) saveProblems.push("🏗 Не обрано обʼєкти");
+
+for (const oid of st.plannedObjectIds ?? []) {
+  const obj = ensureObjectState(st, oid);
+
+  if (!obj.works?.length) {
+    saveProblems.push(`🧱 ${objectName(st, oid)} — не додано план робіт`);
+  }
+
+  if ((obj.open ?? []).length > 0) {
+    saveProblems.push(`⏱ ${objectName(st, oid)} — є незавершені роботи`);
+  }
+}
+
+if (st.pendingBulkQty) {
+  saveProblems.push("🧮 Є незбережені обсяги робіт");
+}
+
+if (saveProblems.length) {
+  await bot.answerCallbackQuery(q.id, {
+    text: "⛔ День не можна відправити адміну",
+    show_alert: true,
+  });
+
+  await bot.sendMessage(
+    chatId,
+    `⛔ *Не можна відправити на затвердження*\n\n` +
+      `Потрібно виправити:\n\n` +
+      saveProblems.map((x) => `• ${x}`).join("\n"),
+    { parse_mode: "Markdown" },
+  );
+
+  return true;
+}
+
 const sessionStartTs =
   String(st.driveStartedAt ?? st.members?.[0]?.joinedAt ?? "").trim();
 
@@ -4661,6 +4771,40 @@ if (sessionStartTs) {
     });
   }
 }
+
+const qtyProblems: string[] = [];
+
+for (const oid of st.plannedObjectIds ?? []) {
+  const objRows = workMoneyRows.filter(
+    (r: any) => String(r.objectId) === String(oid),
+  );
+
+  const qtySum = objRows.reduce(
+    (a: number, r: any) => a + Number(r.qty ?? 0),
+    0,
+  );
+
+  if (qtySum <= 0) {
+    qtyProblems.push(`🧮 ${objectName(st, oid)} — не заповнено обсяги`);
+  }
+}
+
+if (qtyProblems.length) {
+  await bot.answerCallbackQuery(q.id, {
+    text: "⛔ Не заповнено обсяги",
+    show_alert: true,
+  });
+
+  await bot.sendMessage(
+    chatId,
+    `⛔ *Не можна відправити на затвердження*\n\n` +
+      qtyProblems.map((x) => `• ${x}`).join("\n"),
+    { parse_mode: "Markdown" },
+  );
+
+  return true;
+}
+
       const workTotalsByObj = new Map<
         string,
         { amount: number; qtyByUnit: Record<string, number> }
@@ -5115,22 +5259,19 @@ await sendLongHtml(bot, adminId, adminText, {
         },
       });
 
-      const fresh: State = {
-        step: "START",
-        date,
-        phase: "SETUP",
-        plannedObjectIds: [],
-        objects: {},
-        inCarIds: [],
-        members: [],
-        driveActive: false,
-        returnActive: false,
-        qtyUnlocked: false,
-      };
-root[foremanTgId] = fresh;
+(st as any).submittedForApproval = true;
+(st as any).adminReviewEventId = roadEndEventId;
+st.step = "SAVE";
+
+root[foremanTgId] = st;
 setFlowState(s, FLOW, root);
-await render(bot, chatId, s, foremanTgId);
-      return true;
+
+await bot.sendMessage(
+  chatId,
+  "⏳ День відправлено адміну на перевірку. Редагування тимчасово заблоковано."
+);
+
+return true;
     }
 
     return true;
