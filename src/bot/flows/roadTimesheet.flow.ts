@@ -846,18 +846,27 @@ if ((x.step as any) === "OBJ_MONITOR_OBJECT") {
         rows.push([{ text: "🧮 Обсяги робіт", callback_data: cb.QTY_MENU }]);
       }
 
-      if (
-        x.phase === "FINISHED" ||
-        x.odoEndKm !== undefined ||
-        !!x.odoEndPhotoFileId
-      ) {
-        rows.push([
-          {
-            text: "🔴 Кінцевий показник спідометра",
-            callback_data: `${cb.BACK}odo_end`,
-          },
-        ]);
-      }
+if (
+  x.phase === "FINISHED" ||
+  x.odoEndKm !== undefined ||
+  !!x.odoEndPhotoFileId
+) {
+  rows.push([
+    {
+      text: "🔴 Кінцевий показник спідометра",
+      callback_data: `${cb.BACK}odo_end`,
+    },
+  ]);
+
+  if (x.odoEndKm !== undefined) {
+    rows.push([
+      {
+        text: "📨 Відправити на перевірку",
+        callback_data: cb.SKIP_ODO_END_PHOTO,
+      },
+    ]);
+  }
+}
 
       rows.push([{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }]);
       return {
