@@ -185,19 +185,34 @@ if (reviewStatus === "ПОВЕРНУТО") {
 
   root[foremanTgId] = st;
   setFlowState(s, FLOW, root);
+} else if (reviewStatus === "ЗАТВЕРДЖЕНО") {
+  root[foremanTgId] = {
+    step: "START",
+    date: todayISO(),
+    phase: "SETUP",
+    plannedObjectIds: [],
+    objects: {},
+    inCarIds: [],
+    members: [],
+    driveActive: false,
+    returnActive: false,
+    qtyUnlocked: false,
+  } as State;
+
+  setFlowState(s, FLOW, root);
 } else {
-    return renderFlow<State>(bot, chatId, s, FLOW, () => ({
-      text:
-        `⏳ День вже відправлено адміну на перевірку.\n\n` +
-        `Редагування тимчасово заблоковано.\n` +
-        `Якщо адмін поверне день — кнопки редагування знову відкриються.`,
-      kb: {
-        inline_keyboard: [
-          [{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }],
-        ],
-      },
-    }));
-  }
+  return renderFlow<State>(bot, chatId, s, FLOW, () => ({
+    text:
+      `⏳ День вже відправлено адміну на перевірку.\n\n` +
+      `Редагування тимчасово заблоковано.\n` +
+      `Якщо адмін поверне день — кнопки редагування знову відкриються.`,
+    kb: {
+      inline_keyboard: [
+        [{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }],
+      ],
+    },
+  }));
+}
 }
 
   if (st?.step === "SAVE") {
@@ -221,7 +236,7 @@ const roadAgg = await computeRoadSecondsFromRts({
 
 const sinceTs = x.driveStartedAt ?? x.members?.[0]?.joinedAt;
 
-const workMoneyRows = await computeWorkMoneyFromRts({
+let workMoneyRows = await computeWorkMoneyFromRts({
   date: x.date,
   foremanTgId,
   ...(sinceTs ? { sinceTs } : {}),
@@ -265,6 +280,117 @@ const workMoneyRows = await computeWorkMoneyFromRts({
       discByEmpObj.set(key, Number(r.disciplineCoef ?? 1.0));
       prodByEmpObj.set(key, Number(r.productivityCoef ?? 1.0));
     }
+
+const editAddedPeopleIds = ((x as any).editAddedPeopleIds ?? []).map(String);
+const editRemovedPeopleIds = new Set(
+  ((x as any).editRemovedPeopleIds ?? []).map(String),
+);
+
+for (const key of [...workSecByEmpObj.keys()]) {
+  const [empId] = key.split("||");
+
+  if (editRemovedPeopleIds.has(String(empId))) {
+    workSecByEmpObj.delete(key);
+    discByEmpObj.delete(key);
+    prodByEmpObj.delete(key);
+  }
+}
+
+for (const removedEmpId of editRemovedPeopleIds) {
+  roadSecByEmp.delete(String(removedEmpId));
+}
+
+for (const newEmpId of editAddedPeopleIds) {
+  for (const oid of x.plannedObjectIds ?? []) {
+    const secs = [...workSecByEmpObj.entries()]
+      .filter(([key]) => key.endsWith(`||${oid}`))
+      .map(([, sec]) => Number(sec ?? 0))
+      .filter((sec) => sec > 0);
+
+    if (!secs.length) continue;
+
+    const avgSec = secs.reduce((a, b) => a + b, 0) / secs.length;
+    const key = `${newEmpId}||${oid}`;
+
+    workSecByEmpObj.set(key, avgSec);
+    discByEmpObj.set(key, 1.0);
+    prodByEmpObj.set(key, 1.0);
+  }
+
+  const roadSecs = [...roadSecByEmp.values()]
+    .map((v) => Number(v ?? 0))
+    .filter((v) => v > 0);
+
+  if (roadSecs.length) {
+    roadSecByEmp.set(
+      newEmpId,
+      roadSecs.reduce((a, b) => a + b, 0) / roadSecs.length,
+    );
+  }
+}
+
+if ((x as any).editReturned) {
+  workMoneyRows = workMoneyRows.filter(
+    (r: any) => !editRemovedPeopleIds.has(String(r.employeeId)),
+  );
+
+  const rebuiltWorkRows: any[] = [];
+
+  for (const oid of x.plannedObjectIds ?? []) {
+    const obj = ensureObjectState(x, oid);
+
+    for (const w of obj.works ?? []) {
+      const workId = String(w.workId ?? "");
+
+      const rows = workMoneyRows.filter(
+        (r: any) =>
+          String(r.objectId) === String(oid) &&
+          String(r.workId) === workId,
+      );
+
+      if (!rows.length) continue;
+
+      const totalQty = rows.reduce(
+        (a: number, r: any) => a + Number(r.qty ?? 0),
+        0,
+      );
+
+      const totalAmount = rows.reduce(
+        (a: number, r: any) => a + Number(r.amount ?? 0),
+        0,
+      );
+
+      const people = uniq([
+        ...rows.map((r: any) => String(r.employeeId)),
+        ...editAddedPeopleIds,
+      ])
+        .filter(Boolean)
+        .filter((id) => !editRemovedPeopleIds.has(String(id)));
+
+      if (!people.length) continue;
+
+      const qtyPerPerson = totalQty / people.length;
+      const amountPerPerson = totalAmount / people.length;
+
+      const sample = rows[0];
+
+      for (const empId of people) {
+        rebuiltWorkRows.push({
+          ...sample,
+          employeeId: empId,
+          qty: Math.round(qtyPerPerson * 100) / 100,
+          amount: Math.round(amountPerPerson * 100) / 100,
+          sec: Number(workSecByEmpObj.get(`${empId}||${oid}`) ?? sample.sec ?? 0),
+        });
+      }
+    }
+  }
+
+  if (rebuiltWorkRows.length) {
+    workMoneyRows = rebuiltWorkRows;
+  }
+}
+
 
     const payrollPacks: PayrollObjectPack[] = [];
 
@@ -364,7 +490,13 @@ const workMoneyRows = await computeWorkMoneyFromRts({
       });
     }
 
-    const riders = uniq((x.members ?? []).map((m: RoadMember) => m.employeeId)).filter(Boolean);
+    const riders = uniq([
+  ...(x.members ?? []).map((m: RoadMember) => String(m.employeeId)),
+  ...((x as any).editAddedPeopleIds ?? []).map(String),
+  ...(x.inCarIds ?? []).map(String),
+])
+  .filter(Boolean)
+  .filter((id) => !editRemovedPeopleIds.has(String(id)));
 
     const amount =
       (await getSettingNumber(`ROAD_ALLOWANCE_${tripClass}`)) ??
@@ -2068,13 +2200,30 @@ if (reviewStatus === "ПОВЕРНУТО") {
 
   root[foremanTgId] = st;
   setFlowState(s, FLOW, root);
+} else if (reviewStatus === "ЗАТВЕРДЖЕНО") {
+  root[foremanTgId] = {
+    step: "START",
+    date: todayISO(),
+    phase: "SETUP",
+    plannedObjectIds: [],
+    objects: {},
+    inCarIds: [],
+    members: [],
+    driveActive: false,
+    returnActive: false,
+    qtyUnlocked: false,
+  } as State;
+
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
 } else {
-    await bot.answerCallbackQuery(q.id, {
-      text: "⏳ День вже відправлено адміну. Редагування буде доступне, якщо адмін поверне на редагування.",
-      show_alert: true,
-    });
-    return true;
-  }
+  await bot.answerCallbackQuery(q.id, {
+    text: "⏳ День вже відправлено адміну. Редагування буде доступне, якщо адмін поверне на редагування.",
+    show_alert: true,
+  });
+  return true;
+}
 }
 
     const gate = async (text: string) => {
