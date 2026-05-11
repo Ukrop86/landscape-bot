@@ -28,7 +28,6 @@ import {  appendEvents,  refreshDayChecklist,  upsertTimesheetRow,  upsertAllowa
 import { getDayStatusRow } from "../../google/sheets/checklist.js";
 import {  makeEventId,  nowISO,  classifyTripByKm } from "../../google/sheets/utils.js";
 import { computeWorkMoneyFromRts } from "./roadTimesheet.compute.js";
-import { handleRoadAdminCallbacks } from "./roadTimesheet.admin.js";
 import {  cb,  PREFIX,  FLOW,  DEFAULT_ROAD_ALLOWANCE_BY_CLASS } from "./roadTimesheet.cb.js";
 
 const uiSave = (bot: TelegramBot, chatId: number, foremanTgId: number, st: State) =>
@@ -1541,6 +1540,73 @@ function buildSelectedCategoriesText(st: State, oid: string) {
 }
 
 
+function applyReturnedEditPersonChange(
+  st: State,
+  empIdRaw: string,
+  action: "ADD" | "REMOVE",
+) {
+  if (!(st as any).editReturned) return;
+
+  const empId = String(empIdRaw || "").trim();
+  if (!empId) return;
+
+  const originalPeople = new Set(
+    ((st as any).editOriginalPeopleIds ?? []).map(String),
+  );
+
+  (st as any).editAddedPeopleIds ??= [];
+  (st as any).editRemovedPeopleIds ??= [];
+
+  if (action === "ADD") {
+    if (originalPeople.has(empId)) {
+      (st as any).editRemovedPeopleIds = ((st as any).editRemovedPeopleIds ?? [])
+        .filter((x: string) => String(x) !== empId);
+    } else {
+      (st as any).editAddedPeopleIds = uniq([
+        ...((st as any).editAddedPeopleIds ?? []),
+        empId,
+      ]);
+    }
+
+    for (const oid of st.plannedObjectIds ?? []) {
+      const obj = ensureObjectState(st, oid);
+
+      obj.coefDiscipline[empId] ??= 1.0;
+      obj.coefProductivity[empId] ??= 1.0;
+
+      if ((obj.works ?? []).length) {
+        obj.assigned[empId] = obj.works.map((w) => String(w.workId));
+      }
+    }
+  }
+
+  if (action === "REMOVE") {
+    if (originalPeople.has(empId)) {
+      (st as any).editRemovedPeopleIds = uniq([
+        ...((st as any).editRemovedPeopleIds ?? []),
+        empId,
+      ]);
+    } else {
+      (st as any).editAddedPeopleIds = ((st as any).editAddedPeopleIds ?? [])
+        .filter((x: string) => String(x) !== empId);
+    }
+
+    for (const oid of st.plannedObjectIds ?? []) {
+      const obj = ensureObjectState(st, oid);
+
+      obj.leftOnObjectIds = (obj.leftOnObjectIds ?? [])
+        .filter((x) => String(x) !== empId);
+
+      obj.open = (obj.open ?? [])
+        .filter((x) => String(x.employeeId) !== empId);
+
+      delete obj.assigned[empId];
+      delete obj.coefDiscipline[empId];
+      delete obj.coefProductivity[empId];
+    }
+  }
+}
+
 
 export const RoadTimesheetFlow: FlowModule = {
   flow: FLOW,
@@ -1775,6 +1841,14 @@ if (targetForemanTgId > 0) {
 st2.submittedForApproval = false;
 st2.adminReviewEventId = "";
 st2.step = "START";
+
+(st2 as any).editReturned = true;
+(st2 as any).editAddedPeopleIds = [];
+(st2 as any).editRemovedPeopleIds = [];
+(st2 as any).editOriginalPeopleIds = uniq([
+  ...((st2.members ?? []).map((m: any) => String(m.employeeId)).filter(Boolean)),
+  ...((st2.inCarIds ?? []).map(String).filter(Boolean)),
+]);
 
 
 
@@ -2943,6 +3017,8 @@ if (!has) {
     ? st.inCarIds.filter((x) => x !== empId)
     : uniq([...st.inCarIds, empId]);
 
+    applyReturnedEditPersonChange(st, empId, has ? "REMOVE" : "ADD");
+
       const ts = now();
       if (!has) {
         st.members.push({ employeeId: empId, joinedAt: ts });
@@ -3542,7 +3618,7 @@ if (!inCar) {
           },
         });
       }
-
+applyReturnedEditPersonChange(st, empId, inCar ? "REMOVE" : "ADD");
       root[foremanTgId] = st;
 setFlowState(s, FLOW, root);
 
@@ -4883,7 +4959,7 @@ if (qtyProblems.length) {
         (a, x) => a + x.amount,
         0,
       );
-      const roadTotalSec = roadAgg.reduce((a, x) => a + (x.sec ?? 0), 0);
+      let roadTotalSec = roadAgg.reduce((a, x) => a + (x.sec ?? 0), 0);
       const roadSecByEmp = new Map(roadAgg.map((r) => [r.employeeId, r.sec]));
       const roadObjects = st.plannedObjectIds.slice(0, 4); 
       const roadObjCount = roadObjects.length || 0;
@@ -4897,6 +4973,56 @@ if (qtyProblems.length) {
         discByEmpObj.set(key, r.disciplineCoef ?? 1.0);
         prodByEmpObj.set(key, r.productivityCoef ?? 1.0);
       }
+
+
+      const editAddedPeopleIds = ((st as any).editAddedPeopleIds ?? []).map(String);
+const editRemovedPeopleIds = new Set(
+  ((st as any).editRemovedPeopleIds ?? []).map(String),
+);
+
+for (const key of [...workSecByEmpObj.keys()]) {
+  const [empId] = key.split("||");
+
+  if (editRemovedPeopleIds.has(String(empId))) {
+    workSecByEmpObj.delete(key);
+    discByEmpObj.delete(key);
+    prodByEmpObj.delete(key);
+  }
+}
+
+for (const removedEmpId of editRemovedPeopleIds) {
+  roadSecByEmp.delete(String(removedEmpId));
+}
+
+for (const newEmpId of editAddedPeopleIds) {
+  for (const oid of st.plannedObjectIds ?? []) {
+    const secs = [...workSecByEmpObj.entries()]
+      .filter(([key]) => key.endsWith(`||${oid}`))
+      .map(([, sec]) => Number(sec ?? 0))
+      .filter((sec) => sec > 0);
+
+    if (!secs.length) continue;
+
+    const avgSec = secs.reduce((a, b) => a + b, 0) / secs.length;
+    const key = `${newEmpId}||${oid}`;
+
+    workSecByEmpObj.set(key, avgSec);
+    discByEmpObj.set(key, 1.0);
+    prodByEmpObj.set(key, 1.0);
+  }
+
+  const roadSecs = [...roadSecByEmp.values()]
+    .map((x) => Number(x ?? 0))
+    .filter((x) => x > 0);
+
+  if (roadSecs.length) {
+    const avgRoadSec = roadSecs.reduce((a, b) => a + b, 0) / roadSecs.length;
+    roadSecByEmp.set(newEmpId, avgRoadSec);
+  }
+}
+
+roadTotalSec = [...roadSecByEmp.values()]
+  .reduce((a, x) => a + Number(x ?? 0), 0);
 
       const payrollPacks: PayrollObjectPack[] = [];
       await ensureEmployees(st);
@@ -5094,9 +5220,13 @@ for (const r of finalRows) {
         updatedAt: nowISO(),
       } as any);
 
-      const riders = uniq(
-        st.members.map((m: RoadMember) => m.employeeId),
-      ).filter(Boolean);
+const riders = uniq([
+  ...st.members.map((m: RoadMember) => String(m.employeeId)),
+  ...((st as any).editAddedPeopleIds ?? []).map(String),
+  ...(st.inCarIds ?? []).map(String),
+])
+  .filter(Boolean)
+  .filter((id) => !editRemovedPeopleIds.has(String(id)));
       const kmDay = Math.max(0, st.odoEndKm! - st.odoStartKm!);
       const tripClass = classifyTripByKm(kmDay);
 
@@ -5184,11 +5314,11 @@ for (const oid of st.plannedObjectIds) {
         odoStartKm: st.odoStartKm,
         odoEndKm: st.odoEndKm,
         carId: st.carId,
-        roadAgg: roadAgg.map((r) => ({
-          employeeId: r.employeeId,
-          employeeName: nameById.get(String(r.employeeId)) ?? r.employeeId,
-          sec: r.sec,
-        })),
+roadAgg: [...roadSecByEmp.entries()].map(([employeeId, sec]) => ({
+  employeeId,
+  employeeName: nameById.get(String(employeeId)) ?? employeeId,
+  sec,
+})),
 
         riders: riders.map((id) => ({
           id,
@@ -5317,7 +5447,10 @@ await sendLongHtml(bot, adminId, adminText, {
           ridersCount: riders.length,
         },
       });
-
+delete (st as any).editReturned;
+delete (st as any).editAddedPeopleIds;
+delete (st as any).editRemovedPeopleIds;
+delete (st as any).editOriginalPeopleIds;
 (st as any).submittedForApproval = true;
 (st as any).adminReviewEventId = roadEndEventId;
 st.step = "SAVE";
