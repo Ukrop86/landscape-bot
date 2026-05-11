@@ -1486,8 +1486,12 @@ rows.push([
     }
 
 if (x.step === "SAVE") {
+  const isReturnedEdit = Boolean((x as any).editReturned);
+
   return {
-    text: savePreviewText || "⚠️ Не вдалося підготувати превʼю.",
+    text: isReturnedEdit
+      ? "💾 Дані готові до повторної відправки.\n\nЯкщо ти редагував людей / обсяги / коефіцієнти — фінальний перерахунок буде зроблено при натисканні «Зберегти»."
+      : savePreviewText || "⚠️ Не вдалося підготувати превʼю.",
     kb: {
       inline_keyboard: [
         [{ text: TEXTS.ui.buttons.save, callback_data: cb.SAVE }],
@@ -5535,10 +5539,9 @@ await sendLongHtml(bot, adminId, adminText, {
           ridersCount: riders.length,
         },
       });
-delete (st as any).editReturned;
-delete (st as any).editAddedPeopleIds;
-delete (st as any).editRemovedPeopleIds;
-delete (st as any).editOriginalPeopleIds;
+
+
+
 (st as any).submittedForApproval = true;
 (st as any).adminReviewEventId = roadEndEventId;
 st.step = "SAVE";
