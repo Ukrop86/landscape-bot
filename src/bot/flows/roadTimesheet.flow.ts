@@ -782,13 +782,14 @@ if ((x.step as any) === "RETURN_EDIT_OBJECT_MENU") {
       `🧱 Робіт: ${(obj.works ?? []).length}\n\n` +
       `Що треба змінити?`,
     kb: {
-      inline_keyboard: [
-        [{ text: "👥 Додати / прибрати людей", callback_data: cb.AT_OBJ_DROP_PICK }],
-        [{ text: "🧱 Змінити роботи", callback_data: cb.RETURN_EDIT_WORKS }],
-        [{ text: "🧮 Змінити обсяги", callback_data: cb.RETURN_EDIT_QTY }],
-        [{ text: "⬅️ До списку обʼєктів", callback_data: cb.RETURN_EDIT_OBJECTS }],
-        [{ text: "💾 Повторно відправити", callback_data: cb.RETURN_EDIT_SAVE }],
-      ],
+inline_keyboard: [
+  [{ text: "👥 Додати / прибрати людей", callback_data: cb.RETURN_EDIT_PEOPLE }],
+  [{ text: "🧱 Змінити роботи", callback_data: cb.RETURN_EDIT_WORKS }],
+  [{ text: "🧮 Змінити обсяги", callback_data: cb.RETURN_EDIT_QTY }],
+  [{ text: "⚖️ Коефіцієнти", callback_data: cb.RETURN_EDIT_QTY }],
+  [{ text: "⬅️ До списку обʼєктів", callback_data: cb.RETURN_EDIT_OBJECTS }],
+  [{ text: "💾 Повторно відправити", callback_data: cb.RETURN_EDIT_SAVE }],
+],
     },
   };
 }
@@ -1469,7 +1470,7 @@ if ((obj.leftOnObjectIds ?? []).length > 0) {
 
       return {
         text:
-          `👥 Зняти/лишити людей на обʼєкті\n\n` +
+          `${(x as any).editReturned ? "👥 Редагування людей на обʼєкті" : "👥 Зняти/лишити людей на обʼєкті"}\n\n` +
           `Обʼєкт: ${mdEscapeSimple(objectName(x, oid))}\n` +
           `В машині зараз: ${joinEmpNames(x, x.inCarIds)}\n\n` +
           `Натискай на людину, щоб “зняти” (вона лишиться працювати на обʼєкті).`,
@@ -1795,68 +1796,66 @@ function buildSelectedCategoriesText(st: State, oid: string) {
 
 function applyReturnedEditPersonChange(
   st: State,
+  objectIdRaw: string,
   empIdRaw: string,
   action: "ADD" | "REMOVE",
 ) {
   if (!(st as any).editReturned) return;
 
+  const oid = String(objectIdRaw || "").trim();
   const empId = String(empIdRaw || "").trim();
-  if (!empId) return;
+  if (!oid || !empId) return;
 
-  const originalPeople = new Set(
-    ((st as any).editOriginalPeopleIds ?? []).map(String),
-  );
+  const obj = ensureObjectState(st, oid);
 
-  (st as any).editAddedPeopleIds ??= [];
-  (st as any).editRemovedPeopleIds ??= [];
+  (st as any).editByObject ??= {};
+  (st as any).editByObject[oid] ??= {
+    addedPeopleIds: [],
+    removedPeopleIds: [],
+  };
+
+  const editObj = (st as any).editByObject[oid];
 
   if (action === "ADD") {
-    if (originalPeople.has(empId)) {
-      (st as any).editRemovedPeopleIds = ((st as any).editRemovedPeopleIds ?? [])
-        .filter((x: string) => String(x) !== empId);
-    } else {
-      (st as any).editAddedPeopleIds = uniq([
-        ...((st as any).editAddedPeopleIds ?? []),
-        empId,
-      ]);
-    }
+    editObj.removedPeopleIds = (editObj.removedPeopleIds ?? [])
+      .filter((x: string) => String(x) !== empId);
 
-    for (const oid of st.plannedObjectIds ?? []) {
-      const obj = ensureObjectState(st, oid);
+    editObj.addedPeopleIds = uniq([
+      ...(editObj.addedPeopleIds ?? []),
+      empId,
+    ]);
 
-      obj.coefDiscipline[empId] ??= 1.0;
-      obj.coefProductivity[empId] ??= 1.0;
+    obj.leftOnObjectIds = uniq([
+      ...(obj.leftOnObjectIds ?? []),
+      empId,
+    ]);
 
-      if ((obj.works ?? []).length) {
-        obj.assigned[empId] = obj.works.map((w) => String(w.workId));
-      }
+    obj.coefDiscipline[empId] ??= 1.0;
+    obj.coefProductivity[empId] ??= 1.0;
+
+    if ((obj.works ?? []).length) {
+      obj.assigned[empId] = obj.works.map((w) => String(w.workId));
     }
   }
 
   if (action === "REMOVE") {
-    if (originalPeople.has(empId)) {
-      (st as any).editRemovedPeopleIds = uniq([
-        ...((st as any).editRemovedPeopleIds ?? []),
-        empId,
-      ]);
-    } else {
-      (st as any).editAddedPeopleIds = ((st as any).editAddedPeopleIds ?? [])
-        .filter((x: string) => String(x) !== empId);
-    }
+    editObj.addedPeopleIds = (editObj.addedPeopleIds ?? [])
+      .filter((x: string) => String(x) !== empId);
 
-    for (const oid of st.plannedObjectIds ?? []) {
-      const obj = ensureObjectState(st, oid);
+    editObj.removedPeopleIds = uniq([
+      ...(editObj.removedPeopleIds ?? []),
+      empId,
+    ]);
 
-      obj.leftOnObjectIds = (obj.leftOnObjectIds ?? [])
-        .filter((x) => String(x) !== empId);
+    obj.leftOnObjectIds = (obj.leftOnObjectIds ?? [])
+      .filter((x) => String(x) !== empId);
 
-      obj.open = (obj.open ?? [])
-        .filter((x) => String(x.employeeId) !== empId);
+    obj.open = (obj.open ?? [])
+      .filter((x) => String(x.employeeId) !== empId);
 
-      delete obj.assigned[empId];
-      delete obj.coefDiscipline[empId];
-      delete obj.coefProductivity[empId];
-    }
+    delete obj.assigned[empId];
+    delete obj.coefDiscipline[empId];
+    delete obj.coefProductivity[empId];
   }
 }
 
@@ -2342,6 +2341,21 @@ if (reviewStatus === "ПОВЕРНУТО") {
       });
     };
 
+if (data === cb.RETURN_EDIT_PEOPLE) {
+  const oid = st.activeObjectId || st.arrivedObjectId;
+  if (!oid) return (gate("Спочатку обери обʼєкт."), true);
+
+  st.arrivedObjectId = oid;
+  st.activeObjectId = oid;
+  st.step = "AT_OBJECT_DROP_PICK";
+
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
+
+
 if (data === cb.RETURN_EDIT_OBJECTS) {
   st.step = "RETURN_EDIT_OBJECTS" as any;
   root[foremanTgId] = st;
@@ -2696,12 +2710,22 @@ setFlowState(s, FLOW, root);
 
       if (payrollEv) {
         const p = payrollEv.payload ?? {};
-        employeeIds = uniq([
+
+
+
+const objEdit = ((st as any).editByObject ?? {})[String(oid)] ?? {};
+const addedForObj = (objEdit.addedPeopleIds ?? []).map(String);
+const removedForObj = new Set((objEdit.removedPeopleIds ?? []).map(String));
+
+employeeIds = uniq([
   ...(p.employeeIds ?? []).map(String),
-  ...((st as any).editAddedPeopleIds ?? []).map(String),
+  ...addedForObj,
 ])
   .filter(Boolean)
-  .filter((id) => !new Set(((st as any).editRemovedPeopleIds ?? []).map(String)).has(String(id)));
+  .filter((id) => !removedForObj.has(String(id)));
+
+
+
         items = (p.items ?? []).map((it: any) => ({
           workId: String(it.workId ?? ""),
           workName: String(it.workName ?? it.workId ?? ""),
@@ -3373,7 +3397,12 @@ if (!has) {
     ? st.inCarIds.filter((x) => x !== empId)
     : uniq([...st.inCarIds, empId]);
 
-    applyReturnedEditPersonChange(st, empId, has ? "REMOVE" : "ADD");
+    applyReturnedEditPersonChange(
+  st,
+  st.activeObjectId || st.arrivedObjectId || "",
+  empId,
+  has ? "REMOVE" : "ADD",
+);
 
       const ts = now();
       if (!has) {
@@ -3974,7 +4003,12 @@ if (!inCar) {
           },
         });
       }
-applyReturnedEditPersonChange(st, empId, inCar ? "REMOVE" : "ADD");
+applyReturnedEditPersonChange(
+  st,
+  st.activeObjectId || st.arrivedObjectId || "",
+  empId,
+  inCar ? "REMOVE" : "ADD",
+);
       root[foremanTgId] = st;
 setFlowState(s, FLOW, root);
 
@@ -4110,11 +4144,21 @@ if (data.startsWith(cb.AT_OBJ_TOGGLE)) {
     });
   }
 
+  applyReturnedEditPersonChange(
+  st,
+  oid,
+  empId,
+  inCar ? "ADD" : "REMOVE",
+);
+
   st.step = "AT_OBJECT_DROP_PICK";
   root[foremanTgId] = st;
 setFlowState(s, FLOW, root);
   await render(bot, chatId, s, foremanTgId);
   return true;
+
+
+
 }
 
 
@@ -5365,14 +5409,21 @@ roadTotalSec = [...roadSecByEmp.values()]
   if ((st as any).editReturned) {
   const addedSet = new Set(editAddedPeopleIds.map(String));
   const removedSet = editRemovedPeopleIds;
+ 
+  const editByObject = (st as any).editByObject ?? {};
 
-  workMoneyRows = workMoneyRows.filter(
-    (r: any) => !removedSet.has(String(r.employeeId)),
-  );
+workMoneyRows = workMoneyRows.filter((r: any) => {
+  const objEdit = editByObject[String(r.objectId)] ?? {};
+  const removedForObj = new Set((objEdit.removedPeopleIds ?? []).map(String));
+  return !removedForObj.has(String(r.employeeId));
+});
 
   const rebuiltWorkRows: any[] = [];
 
   for (const oid of st.plannedObjectIds ?? []) {
+    const objEdit = editByObject[String(oid)] ?? {};
+const addedForObj = (objEdit.addedPeopleIds ?? []).map(String);
+const removedForObj = new Set((objEdit.removedPeopleIds ?? []).map(String));
     const obj = ensureObjectState(st, oid);
 
     for (const w of obj.works ?? []) {
@@ -5396,12 +5447,12 @@ roadTotalSec = [...roadSecByEmp.values()]
         0,
       );
 
-      const people = uniq([
-        ...rows.map((r: any) => String(r.employeeId)),
-        ...editAddedPeopleIds,
-      ])
-        .filter(Boolean)
-        .filter((id) => !removedSet.has(String(id)));
+const people = uniq([
+  ...rows.map((r: any) => String(r.employeeId)),
+  ...addedForObj,
+])
+  .filter(Boolean)
+  .filter((id) => !removedForObj.has(String(id)));
 
       if (!people.length) continue;
 
