@@ -123,7 +123,14 @@ BULK_COEF_BACK: `${PREFIX}bulk_coef_back`,
   STATS_OBJECT: `${PREFIX}STATS_OBJECT:`,   
   STATS_PERSON: `${PREFIX}STATS_PERSON:`,   
 
-  STATS_BACK: `${PREFIX}STATS_BACK:`,     
+  STATS_BACK: `${PREFIX}STATS_BACK:`, 
+RETURN_EDIT_OBJECTS: `${PREFIX}return_edit_objects`,
+RETURN_EDIT_OBJECT_PICK: `${PREFIX}return_edit_object_pick:`,
+RETURN_EDIT_PEOPLE: `${PREFIX}return_edit_people`,
+RETURN_EDIT_CAR: `${PREFIX}return_edit_car`,
+RETURN_EDIT_WORKS: `${PREFIX}return_edit_works`,
+RETURN_EDIT_QTY: `${PREFIX}return_edit_qty`,
+RETURN_EDIT_SAVE: `${PREFIX}return_edit_save`,    
 
   SAVE: `${PREFIX}save`,
 } as const;

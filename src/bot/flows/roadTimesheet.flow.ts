@@ -173,7 +173,7 @@ if (st && (st as any)?.submittedForApproval) {
 if (reviewStatus === "ПОВЕРНУТО") {
   (st as any).submittedForApproval = false;
   (st as any).adminReviewEventId = "";
-  st.step = "START";
+  st.step = "RETURN_EDIT_OBJECTS" as any;
 
   (st as any).editReturned = true;
   (st as any).editAddedPeopleIds ??= [];
@@ -723,6 +723,76 @@ return renderFlow<State>(bot, chatId, s, FLOW, () => {
       };
     }
 
+    if ((x.step as any) === "RETURN_EDIT_OBJECTS") {
+  const rows: TelegramBot.InlineKeyboardButton[][] = [];
+
+  for (const oid of x.plannedObjectIds ?? []) {
+    rows.push([
+      {
+        text: `🏗 ${objectName(x, oid)}`.slice(0, 60),
+        callback_data: `${cb.RETURN_EDIT_OBJECT_PICK}${oid}`,
+      },
+    ]);
+  }
+
+  rows.push([
+    { text: "🚗 Змінити машину", callback_data: cb.RETURN_EDIT_CAR },
+  ]);
+
+  rows.push([
+    { text: "💾 Перейти до повторної відправки", callback_data: cb.RETURN_EDIT_SAVE },
+  ]);
+
+  rows.push([{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }]);
+
+  return {
+    text:
+      `🔴 День повернено адміністратором\n\n` +
+      `Обери обʼєкт, який треба виправити.\n\n` +
+      `Всередині обʼєкта можна:\n` +
+      `• додати / прибрати людей\n` +
+      `• змінити роботи\n` +
+      `• змінити обсяги\n` +
+      `• потім повторно відправити адміну`,
+    kb: { inline_keyboard: rows },
+  };
+}
+
+if ((x.step as any) === "RETURN_EDIT_OBJECT_MENU") {
+  const oid = x.activeObjectId || x.arrivedObjectId;
+
+  if (!oid) {
+    return {
+      text: "⚠️ Не обрано обʼєкт.",
+      kb: {
+        inline_keyboard: [
+          [{ text: "⬅️ До списку обʼєктів", callback_data: cb.RETURN_EDIT_OBJECTS }],
+        ],
+      },
+    };
+  }
+
+  const obj = ensureObjectState(x, oid);
+
+  return {
+    text:
+      `✏️ Редагування обʼєкта\n\n` +
+      `🏗 ${mdEscapeSimple(objectName(x, oid))}\n` +
+      `👥 Люди: ${mdEscapeSimple(joinEmpNames(x, obj.leftOnObjectIds ?? []))}\n` +
+      `🧱 Робіт: ${(obj.works ?? []).length}\n\n` +
+      `Що треба змінити?`,
+    kb: {
+      inline_keyboard: [
+        [{ text: "👥 Додати / прибрати людей", callback_data: cb.AT_OBJ_DROP_PICK }],
+        [{ text: "🧱 Змінити роботи", callback_data: cb.RETURN_EDIT_WORKS }],
+        [{ text: "🧮 Змінити обсяги", callback_data: cb.RETURN_EDIT_QTY }],
+        [{ text: "⬅️ До списку обʼєктів", callback_data: cb.RETURN_EDIT_OBJECTS }],
+        [{ text: "💾 Повторно відправити", callback_data: cb.RETURN_EDIT_SAVE }],
+      ],
+    },
+  };
+}
+
 if ((x.step as any) === "OBJ_MONITOR_OBJECT") {
   const oid = x.arrivedObjectId;
   if (!oid) {
@@ -794,6 +864,15 @@ if ((x.step as any) === "OBJ_MONITOR_OBJECT") {
 
     if (x.step === "START") {
       const rows: TelegramBot.InlineKeyboardButton[][] = [];
+
+      if ((x as any).editReturned) {
+  rows.push([
+    {
+      text: "✏️ Редагувати повернений день",
+      callback_data: cb.RETURN_EDIT_OBJECTS,
+    },
+  ]);
+}
 
       rows.push([
         { text: TEXTS.roadFlow.buttons.pickCar, callback_data: cb.PICK_CAR },
@@ -1379,7 +1458,12 @@ if ((obj.leftOnObjectIds ?? []).length > 0) {
 
       rows.push([{ text: "✅ Готово", callback_data: cb.ARRIVE_CONFIRM }]);
       rows.push([
-        { text: TEXTS.ui.buttons.back, callback_data: `${cb.BACK}at_obj` },
+        {
+  text: TEXTS.ui.buttons.back,
+  callback_data: (x as any).editReturned
+    ? cb.RETURN_EDIT_OBJECT_PICK + (x.activeObjectId || x.arrivedObjectId || "")
+    : `${cb.BACK}at_obj`,
+},
       ]);
       rows.push([{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }]);
 
@@ -2009,7 +2093,7 @@ if (targetForemanTgId > 0) {
 
 st2.submittedForApproval = false;
 st2.adminReviewEventId = "";
-st2.step = "START";
+st2.step = "RETURN_EDIT_OBJECTS" as any;
 
 (st2 as any).editReturned = true;
 (st2 as any).editAddedPeopleIds = [];
@@ -2213,7 +2297,7 @@ if ((st as any).submittedForApproval) {
 if (reviewStatus === "ПОВЕРНУТО") {
   (st as any).submittedForApproval = false;
   (st as any).adminReviewEventId = "";
-  st.step = "START";
+  st.step = "RETURN_EDIT_OBJECTS" as any;
 
   (st as any).editReturned = true;
   (st as any).editAddedPeopleIds ??= [];
@@ -2257,6 +2341,79 @@ if (reviewStatus === "ПОВЕРНУТО") {
         show_alert: true,
       });
     };
+
+if (data === cb.RETURN_EDIT_OBJECTS) {
+  st.step = "RETURN_EDIT_OBJECTS" as any;
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
+
+if (data.startsWith(cb.RETURN_EDIT_OBJECT_PICK)) {
+  const oid = data.slice(cb.RETURN_EDIT_OBJECT_PICK.length).trim();
+  if (!oid) return true;
+
+  st.activeObjectId = oid;
+  st.arrivedObjectId = oid;
+  ensureObjectState(st, oid);
+
+  st.step = "RETURN_EDIT_OBJECT_MENU" as any;
+
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
+
+if (data === cb.RETURN_EDIT_CAR) {
+  (st as any)._afterPickCarStep = "RETURN_EDIT_OBJECTS";
+  st.step = "PICK_CAR";
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
+
+if (data === cb.RETURN_EDIT_WORKS) {
+  const oid = st.activeObjectId || st.arrivedObjectId;
+  if (!oid) return (gate("Спочатку обери обʼєкт."), true);
+
+  st.activeObjectId = oid;
+  ensureObjectState(st, oid);
+
+  st.returnAfterPlanWorksStep = "RETURN_EDIT_OBJECT_MENU" as any;
+  st.returnAfterPlanWorksArrivedObjectId = oid;
+  st.returnAfterPlanWorksPhase = st.phase;
+
+  st.step = "PLAN_WORKS_PICK";
+
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
+
+if (data === cb.RETURN_EDIT_QTY) {
+  const oid = st.activeObjectId || st.arrivedObjectId;
+  if (!oid) return (gate("Спочатку обери обʼєкт."), true);
+
+  return RoadTimesheetFlow.onCallback!(
+    bot,
+    q,
+    s,
+    `${cb.QTY_OBJ}${oid}`,
+  );
+}
+
+if (data === cb.RETURN_EDIT_SAVE) {
+  st.step = "SAVE";
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
+
 
 if (data === cb.GO_DRIVE) {
   if (st.phase === "DRIVE_DAY" && st.driveActive) {
