@@ -273,7 +273,7 @@ await setDayStatus({
     await bot.answerCallbackQuery(q.id, { text: "❌ Не вдалося перечитати подію", show_alert: true });
     return true;
   }
-
+ 
   const payrollRows = await buildPayrollRowsFromApprovedEvent(evUpdated);
 
 if (payrollRows.length > 0) {
