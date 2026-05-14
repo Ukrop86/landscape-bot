@@ -1,7 +1,7 @@
 // src/bot/flows/roadTimesheet.admin.ts
 import type TelegramBot from "node-telegram-bot-api";
 import { fetchUsers } from "../../google/sheets/dictionaries.js";
-import { getEventById, updateEventById, setDayStatus, fetchEvents, upsertDayStatus  } from "../../google/sheets/working.js";
+import { getEventById, updateEventById, setDayStatus, fetchEvents, appendPayrollRows } from "../../google/sheets/working.js";
 import { cb } from "./roadTimesheet.cb.js";
 
 
@@ -39,6 +39,49 @@ async function resolveDayStatusObjectId(ev: any): Promise<string> {
     .filter(Boolean);
 
   return candidates[0] ?? "";
+}
+
+function buildPayrollRowsFromApprovedEvent(ev: any) {
+  const p = ev?.payload ? JSON.parse(String(ev.payload)) : {};
+
+  const employees = Array.isArray(p.employees) ? p.employees : [];
+  const works = Array.isArray(p.works) ? p.works : [];
+
+  const objectName = String(p.objectName ?? ev.objectId ?? "").trim();
+  const roadTotal = Number(p.roadTotal ?? p.roadAmount ?? 0);
+  const roadPerEmployee = employees.length > 0 ? roadTotal / employees.length : 0;
+
+  const rows: any[][] = [];
+  let n = 1;
+
+  for (const emp of employees) {
+    const employeeName = String(emp.name ?? emp.employeeName ?? emp.id ?? "").trim();
+    const employeeClass = String(emp.class ?? emp.role ?? "").trim();
+
+    for (const work of works) {
+      const workName = String(work.name ?? work.workName ?? work.title ?? "").trim();
+      const qty = Number(work.qty ?? work.quantity ?? work.amount ?? 0);
+      const workAccrual = Number(work.total ?? work.amountMoney ?? work.sum ?? 0);
+
+      const total = workAccrual + roadPerEmployee;
+
+      rows.push([
+        n++,
+        employeeName,
+        objectName,
+        workName,
+        qty,
+        workAccrual,
+        roadPerEmployee,
+        employeeClass,
+        workAccrual,
+        total,
+        "",
+      ]);
+    }
+  }
+
+  return rows;
 }
 
 export async function handleRoadAdminCallbacks(args: {
@@ -235,6 +278,12 @@ await setDayStatus({
     await bot.answerCallbackQuery(q.id, { text: "❌ Не вдалося перечитати подію", show_alert: true });
     return true;
   }
+
+  const payrollRows = buildPayrollRowsFromApprovedEvent(evUpdated);
+
+if (payrollRows.length > 0) {
+  await appendPayrollRows(payrollRows);
+}
 
 const { buildRoadApprovedShortText, sendLongHtml } = await import("./roadTimesheet.utils.js");
 

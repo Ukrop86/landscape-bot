@@ -578,6 +578,11 @@ export async function appendEvents(events: EventRow[]) {
 clearEventsSheetCache();
 }
 
+export async function appendPayrollRows(rows: any[][]) {
+  if (!rows.length) return;
+
+  await appendRows("БУХГАЛТЕРСЬКИЙ ЗВІТ", rows, "USER_ENTERED");
+}
 
 export async function appendReports(reports: ReportRow[]) {
   if (!reports.length) return;
