@@ -483,11 +483,6 @@ if (data === ACT.SAVE) {
 }
 return false;
 },
-
-
-
-
-
   async onMessage(bot, msg, s) {
     const chatId = msg.chat.id;
     const text = (msg.text ?? "").trim();
