@@ -129,7 +129,7 @@ function buildSalaryPacksWithRoles(params: {
         pay: Math.round(pay * 100) / 100,
       };
     });
-
+ 
     return {
       objectId: String(o.objectId),
       objectName: String(o.objectName),
@@ -2724,7 +2724,7 @@ employeeIds = uniq([
   .filter(Boolean)
   .filter((id) => !removedForObj.has(String(id)));
 
-
+ 
 
         items = (p.items ?? []).map((it: any) => ({
           workId: String(it.workId ?? ""),

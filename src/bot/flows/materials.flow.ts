@@ -14,6 +14,13 @@ type Step = "PICK_DATE" | "PICK_OBJECT" | "PICK_CATEGORY" | "PICK_MATERIAL" | "E
 
 type MoveType = "ISSUE" | "RETURN" | "WRITEOFF" | "ADJUST";
 
+type MaterialItem = {
+  materialId: string;
+  materialName: string;
+  qty: number | null;
+  unit?: string;
+};
+
 type State = {
   step: Step;
   date: string;
@@ -23,8 +30,9 @@ type State = {
   moveType?: MoveType;
   purpose?: string;
   category?: string;
-    objectName?: string;      // 👈 додай
-materialName?: string;    // 👈 додай
+  objectName?: string;
+  materialName?: string;
+  items: MaterialItem[];
 };
 
 const FLOW = "MATERIALS";
@@ -41,10 +49,24 @@ const ACT = {
   CAT: `${PREFIX}cat:`,
   CAT_CLEAR: `${PREFIX}cat:all`,
   PICK_CAT: `${PREFIX}pick_cat`,
+  DONE_MATERIALS: `${PREFIX}done_materials`,
 } as const;
 
 function initState(): State {
-  return { step: "PICK_DATE", date: todayISO() };
+  return { step: "PICK_DATE", date: todayISO(), items: [] };
+}
+
+function moveTypeLabel(t?: MoveType) {
+  if (!t) return TEXTS.ui.symbols.emptyDash;
+
+  const labels: Record<MoveType, string> = {
+    ISSUE: "Видача",
+    RETURN: "Повернення",
+    WRITEOFF: "Списання",
+    ADJUST: "Коригування",
+  };
+
+  return labels[t];
 }
 
 function isLocked(status?: string) {
@@ -67,7 +89,12 @@ function fmt(st: State) {
     `${TEXTS.materialsFlow.labels.object} *${st.objectName ?? TEXTS.ui.symbols.emptyDash}*`,
     `${TEXTS.materialsFlow.labels.material} *${st.materialName ?? TEXTS.ui.symbols.emptyDash}*`,
     `${TEXTS.materialsFlow.labels.qty} *${st.qty ?? TEXTS.ui.symbols.emptyDash}*`,
-    `${TEXTS.materialsFlow.labels.type} *${st.moveType ?? TEXTS.ui.symbols.emptyDash}*`,
+    `${TEXTS.materialsFlow.labels.type} *${moveTypeLabel(st.moveType)}*`,
+    `${TEXTS.materialsFlow.labels.material} *${
+  st.items.length
+    ? st.items.map(i => `${i.materialName} — ${i.qty ?? "?"} ${i.unit ?? ""}`).join(", ")
+    : (st.materialName ?? TEXTS.ui.symbols.emptyDash)
+}*`,
   ].join("\n");
 }
 
@@ -171,7 +198,9 @@ TEXTS.materialsFlow.screens.pickCategory
     // кнопка змінити категорію
 rows.unshift([{ text: TEXTS.materialsFlow.buttons.changeCategory, callback_data: ACT.PICK_CAT }]);
 
-
+if (st.items.length > 0) {
+  rows.push([{ text: "✅ Завершити вибір матеріалів", callback_data: ACT.DONE_MATERIALS }]);
+}
 
 rows.push([{ text: TEXTS.ui.buttons.menu, callback_data: CB.MENU }]);
 
@@ -221,7 +250,7 @@ TEXTS.materialsFlow.screens.pickType
   .replace("{fmt}", fmt(st)),
       {
         inline_keyboard: [
-          ...types.map((t) => [{ text: t, callback_data: `${ACT.TYPE}${t}` }]),
+          ...types.map((t) => [{ text: moveTypeLabel(t), callback_data: `${ACT.TYPE}${t}` }]),
 [{ text: TEXTS.ui.buttons.menu, callback_data: CB.MENU }],
         ],
       }
@@ -377,6 +406,21 @@ if (data.startsWith(ACT.MAT)) {
   return true;
 }
 
+if (data === ACT.DONE_MATERIALS) {
+  if (!st.items.length) {
+    await bot.sendMessage(chatId, "Спочатку вибери хоча б один матеріал.");
+    return true;
+  }
+
+  setFlowState(s, FLOW as any, {
+    ...st,
+    step: "PICK_TYPE",
+  } as any);
+
+  await render(bot, chatId, s, getFlowState<State>(s, FLOW as any)!);
+  return true;
+}
+
     if (data.startsWith(ACT.TYPE)) {
       const moveType = data.slice(ACT.TYPE.length) as MoveType;
 setFlowState(s, FLOW as any, { ...st, moveType, step: "REVIEW" } as any);
@@ -384,62 +428,65 @@ setFlowState(s, FLOW as any, { ...st, moveType, step: "REVIEW" } as any);
       return true;
     }
 
-    if (data === ACT.SAVE) {
-      const cur = getFlowState<State>(s, FLOW as any)!;
-      if (!cur.objectId || !cur.materialId || !cur.moveType) {
-await bot.sendMessage(chatId, TEXTS.materialsFlow.errors.notAllFilled);
-        return true;
-      }
+if (data === ACT.SAVE) {
+  const cur = getFlowState<State>(s, FLOW as any)!;
 
-      const mats = await fetchMaterials();
-      const mat = mats.find((m) => m.id === cur.materialId) as MaterialRow | undefined;
-      if (!mat) {
-await bot.sendMessage(chatId, TEXTS.materialsFlow.errors.matNotFound);
-        return true;
-      }
+  if (!cur.objectId || !(cur.items ?? []).length || !cur.moveType) {
+    await bot.sendMessage(chatId, TEXTS.materialsFlow.errors.notAllFilled);
+    return true;
+  }
 
-      const row: MaterialMoveRow = {
-        moveId: makeMoveId(),
-        time: new Date().toISOString(),
-        date: cur.date,
-        objectId: cur.objectId,
-        foremanTgId: actorTgId,
-        materialId: mat.id,
-        materialName: mat.name,
-        qty: cur.qty ?? null,
-        unit: mat.unit,
-        moveType: cur.moveType as any,
-        purpose: cur.purpose ?? "",
-        photos: "",
-        payload: "",
-        dayStatus: "",
-        updatedAt: new Date().toISOString(),
-      };
+  const ds = await getDayStatusRow(cur.date, cur.objectId, actorTgId);
+  if (isLocked(ds?.status)) {
+    await bot.sendMessage(
+      chatId,
+      TEXTS.materialsFlow.errors.locked.replace(
+        "{status}",
+        String(ds?.status ?? TEXTS.ui.symbols.unknown)
+      )
+    );
+    return true;
+  }
 
-        const ds = await getDayStatusRow(cur.date, cur.objectId, actorTgId);
-      if (isLocked(ds?.status)) {
-await bot.sendMessage(
-  chatId,
-  TEXTS.materialsFlow.errors.locked.replace(
-    "{status}",
-    String(ds?.status ?? TEXTS.ui.symbols.unknown)
-  )
-);
-        return true;
-      }
+  const mats = await fetchMaterials();
 
-      await appendMaterialMoves([row]);
-      await refreshDayChecklist(cur.date, cur.objectId, actorTgId);
+  const rows: MaterialMoveRow[] = cur.items.map((item) => {
+    const mat = mats.find((m) => String(m.id) === String(item.materialId)) as MaterialRow | undefined;
 
-      clearFlowState(s, FLOW as any);
-      delete s.flow;
+    return {
+      moveId: makeMoveId(),
+      time: new Date().toISOString(),
+      date: cur.date,
+      objectId: cur.objectId!,
+      foremanTgId: actorTgId,
+      materialId: item.materialId,
+      materialName: mat?.name ?? item.materialName,
+      qty: item.qty ?? null,
+      unit: mat?.unit ?? item.unit ?? "",
+      moveType: cur.moveType as any,
+      purpose: cur.purpose ?? "",
+      photos: "",
+      payload: "",
+      dayStatus: "",
+      updatedAt: new Date().toISOString(),
+    };
+  });
 
-await bot.sendMessage(chatId, TEXTS.materialsFlow.messages.saved);
-      return true;
-    }
+  await appendMaterialMoves(rows);
+  await refreshDayChecklist(cur.date, cur.objectId, actorTgId);
 
-    return false;
-  },
+  clearFlowState(s, FLOW as any);
+  delete s.flow;
+
+  await bot.sendMessage(chatId, TEXTS.materialsFlow.messages.saved);
+  return true;
+}
+return false;
+},
+
+
+
+
 
   async onMessage(bot, msg, s) {
     const chatId = msg.chat.id;
@@ -450,11 +497,26 @@ await bot.sendMessage(chatId, TEXTS.materialsFlow.messages.saved);
     if (st.step !== "ENTER_QTY") return false;
 
     // пусто або ?
-    if (!text || text === "?") {
-setFlowState(s, FLOW as any, { ...st, qty: null, step: "PICK_TYPE" } as any);
-      await render(bot, chatId, s, getFlowState<State>(s, FLOW as any)!);
-      return true;
-    }
+if (!text || text === "?") {
+  setFlowState(s, FLOW as any, {
+    ...st,
+    items: [
+      ...(st.items ?? []),
+      {
+        materialId: st.materialId!,
+        materialName: st.materialName!,
+        qty: null,
+      },
+    ],
+    materialId: undefined,
+    materialName: undefined,
+    qty: undefined,
+    step: "PICK_MATERIAL",
+  } as any);
+
+  await render(bot, chatId, s, getFlowState<State>(s, FLOW as any)!);
+  return true;
+}
 
     const n = Number(text.replace(",", "."));
     if (!Number.isFinite(n) || n < 0) {
@@ -462,7 +524,21 @@ await bot.sendMessage(chatId, TEXTS.materialsFlow.errors.enterNumberOrQ);
       return true;
     }
 
-setFlowState(s, FLOW as any, { ...st, qty: n, step: "PICK_TYPE" } as any);
+setFlowState(s, FLOW as any, {
+  ...st,
+  items: [
+    ...st.items,
+    {
+      materialId: st.materialId!,
+      materialName: st.materialName!,
+      qty: n,
+    },
+  ],
+  materialId: undefined,
+  materialName: undefined,
+  qty: undefined,
+  step: "PICK_MATERIAL",
+} as any);
     await render(bot, chatId, s, getFlowState<State>(s, FLOW as any)!);
     return true;
   },
