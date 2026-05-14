@@ -45,8 +45,20 @@ export function buildRowByHeaders(headers: string[], map: Record<string, number>
   return row;
 }
 
+const headerCache = new Map<
+  string,
+  { headers: string[]; map: Record<string, number> }
+>();
+
 export async function getHeaderMap(sheetName: string) {
+  const cached = headerCache.get(sheetName);
+
+  if (cached) {
+    return cached;
+  }
+
   const sheets = getSheetsClient();
+
   const head = await sheets.spreadsheets.values.get({
     spreadsheetId: config.sheetId,
     range: `${sheetRef(sheetName)}!1:1`,
@@ -56,12 +68,20 @@ export async function getHeaderMap(sheetName: string) {
   const headers = rawHeaders.map(normalizeHeader);
 
   const map: Record<string, number> = {};
+
   headers.forEach((h, i) => {
     const key = norm(h);
-    if (key) map[key] = i;
+
+    if (key) {
+      map[key] = i;
+    }
   });
 
-  return { headers, map };
+  const result = { headers, map };
+
+  headerCache.set(sheetName, result);
+
+  return result;
 }
 
 export async function loadSheet(sheetName: string, range = "A:Z") {

@@ -1,7 +1,7 @@
 // src/bot/flows/roadTimesheet.admin.ts
 import type TelegramBot from "node-telegram-bot-api";
 import { fetchUsers } from "../../google/sheets/dictionaries.js";
-import { getEventById, updateEventById, setDayStatus, fetchEvents, appendPayrollRows } from "../../google/sheets/working.js";
+import { getEventById, updateEventById, setDayStatus, fetchEvents, appendPayrollRows, fetchReportsForPayroll  } from "../../google/sheets/working.js";
 import { cb } from "./roadTimesheet.cb.js";
 
 
@@ -41,41 +41,36 @@ async function resolveDayStatusObjectId(ev: any): Promise<string> {
   return candidates[0] ?? "";
 }
 
-function buildPayrollRowsFromApprovedEvent(ev: any) {
+async function buildPayrollRowsFromApprovedEvent(ev: any) {
   const p = ev?.payload ? JSON.parse(String(ev.payload)) : {};
 
-  const employees = Array.isArray(p.employees) ? p.employees : [];
-  const works = Array.isArray(p.works) ? p.works : [];
+  const employeeIds = String(ev.employeeIds || "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
 
-  const objectName = String(p.objectName ?? ev.objectId ?? "").trim();
-  const roadTotal = Number(p.roadTotal ?? p.roadAmount ?? 0);
-  const roadPerEmployee = employees.length > 0 ? roadTotal / employees.length : 0;
+  const reports = await fetchReportsForPayroll({
+    date: String(ev.date ?? "").trim(),
+    foremanTgId: Number(ev.foremanTgId),
+    objectId: String(ev.objectId ?? "").trim(),
+  });
 
   const rows: any[][] = [];
   let n = 1;
 
-  for (const emp of employees) {
-    const employeeName = String(emp.name ?? emp.employeeName ?? emp.id ?? "").trim();
-    const employeeClass = String(emp.class ?? emp.role ?? "").trim();
-
-    for (const work of works) {
-      const workName = String(work.name ?? work.workName ?? work.title ?? "").trim();
-      const qty = Number(work.qty ?? work.quantity ?? work.amount ?? 0);
-      const workAccrual = Number(work.total ?? work.amountMoney ?? work.sum ?? 0);
-
-      const total = workAccrual + roadPerEmployee;
-
+  for (const empId of employeeIds) {
+    for (const r of reports) {
       rows.push([
         n++,
-        employeeName,
-        objectName,
-        workName,
-        qty,
-        workAccrual,
-        roadPerEmployee,
-        employeeClass,
-        workAccrual,
-        total,
+        empId,
+        ev.objectId,
+        r.workName,
+        r.volume,
+        "",
+        "",
+        "",
+        "",
+        "",
         "",
       ]);
     }
@@ -279,7 +274,7 @@ await setDayStatus({
     return true;
   }
 
-  const payrollRows = buildPayrollRowsFromApprovedEvent(evUpdated);
+  const payrollRows = await buildPayrollRowsFromApprovedEvent(evUpdated);
 
 if (payrollRows.length > 0) {
   await appendPayrollRows(payrollRows);

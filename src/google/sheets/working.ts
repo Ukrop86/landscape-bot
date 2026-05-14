@@ -1073,6 +1073,35 @@ function applyPatch<T extends Record<string, any>>(base: T, patch: Partial<T>): 
   return out;
 }
 
+export async function fetchReportsForPayroll(args: {
+  date: string;
+  foremanTgId: number;
+  objectId: string;
+}) {
+  const { map, data } = await loadSheet(SHEET_NAMES.reports, "A:Z");
+
+  const rows: any[] = [];
+
+  for (const row of data) {
+    const date = getCell(row, map, REPORTS_HEADERS.date);
+    const objectId = getCell(row, map, REPORTS_HEADERS.objectId);
+    const foremanTgId = Number(
+      getCell(row, map, REPORTS_HEADERS.foremanTgId)
+    );
+
+    if (date !== args.date) continue;
+    if (objectId !== args.objectId) continue;
+    if (foremanTgId !== args.foremanTgId) continue;
+
+    rows.push({
+      workName: getCell(row, map, REPORTS_HEADERS.workName),
+      volume: getCell(row, map, REPORTS_HEADERS.volume),
+    });
+  }
+
+  return rows;
+}
+
 export async function editEventByIdWithLog(args: {
   eventId: string;
   editorTgId: number;
