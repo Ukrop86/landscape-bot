@@ -279,7 +279,7 @@ await setDayStatus({
 if (payrollRows.length > 0) {
   await appendPayrollRows(payrollRows);
 }
-
+  
 const { buildRoadApprovedShortText, sendLongHtml } = await import("./roadTimesheet.utils.js");
 
 const approvedText = buildRoadApprovedShortText(evUpdated, {
