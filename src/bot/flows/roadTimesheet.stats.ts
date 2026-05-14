@@ -54,8 +54,17 @@ export const STATS_CB = {
 
 
 function isApprovedStatus(status: string) {
-  const s = String(status ?? "").trim().toUpperCase();
-  return s === "ЗАТВЕРДЖЕНО";
+  const s = String(status ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[✅🟡🔴🟢⚪️]/g, "")
+    .replace(/\s+/g, " ");
+
+  return (
+    s === "ЗАТВЕРДЖЕНО" ||
+    s === "ЗДАНО" ||
+    s === "АКТИВНА"
+  );
 }
 
 function cbx(prefix: string, key: string) {
@@ -143,44 +152,6 @@ return {
   }
 }
 
-
-
-async function getRoadEndPayloadForCar(params: {
-  date: string;
-  foremanTgId: number;
-  carId: string;
-}): Promise<any | null> {
-  const { date, foremanTgId, carId } = params;
-
-  try {
-    const events = await fetchEvents({ date, foremanTgId } as any);
-
-    const rows = (events ?? [])
-      .filter((e: any) => String(e.type ?? "") === "ROAD_END")
-      .filter((e: any) => String(e.carId ?? "") === String(carId));
-
-    if (!rows.length) return null;
-
-    // беремо останню (на випадок якщо було кілька)
-    const last = rows[rows.length - 1];
-
-    const rawPayload = last?.payload;
-    if (!rawPayload) return null;
-
-    if (typeof rawPayload === "string") {
-      try {
-        return JSON.parse(rawPayload);
-      } catch {
-        return null;
-      }
-    }
-
-    return rawPayload ?? null;
-  } catch {
-    return null;
-  }
-}
-
 async function getLatestRoadEndPayload(params: {
   date: string;
   foremanTgId: number;
@@ -201,9 +172,16 @@ async function getLatestRoadEndPayload(params: {
     const last = rows[rows.length - 1];
     if (!last?.payload) return null;
 
-    return typeof last.payload === "string"
-      ? JSON.parse(last.payload)
-      : last.payload;
+    const payload =
+      typeof last.payload === "string"
+        ? JSON.parse(last.payload)
+        : last.payload;
+
+    return {
+      ...(payload ?? {}),
+      __status: String(last.status ?? ""),
+      __eventId: String(last.eventId ?? ""),
+    };
   } catch {
     return null;
   }
@@ -750,7 +728,13 @@ const peopleLines = payloadPack?.rows?.length
   const carLines =
     (obj?.carIds ?? []).map((cid) => `• ${mdEscapeSimple(carName(st, cid))}`).join("\n") || "—";
 
-  const canShowMoney = String(obj?.statusDay ?? "") === "ЗАТВЕРДЖЕНО";
+  const checklistStatus = await getObjectStatusSafe(date, objectId, foremanTgId);
+const displayDayStatus = checklistStatus || String(obj?.statusDay ?? "—");
+
+const canShowMoney =
+  isApprovedStatus(checklistStatus) ||
+  isApprovedStatus(obj?.statusDay) ||
+  isApprovedStatus(payload?.__status);
 
 const payMap = await buildStatsPayMap({ date, foremanTgId });
 const totalAmount = payMap.moneyByObject.get(String(objectId)) ?? 0;
@@ -799,7 +783,7 @@ const text =
   `🏗 *Статистика обʼєкта*\n\n` +
   `Обʼєкт: *${mdEscapeSimple(objectName(st, objectId))}*\n` +
   `📅 ${mdEscapeSimple(date)}\n` +
-  `Статус дня: *${mdEscapeSimple(obj?.statusDay || "—")}*\n` +
+  `Статус дня: *${mdEscapeSimple(displayDayStatus)}*\n` +
   `Статус зараз: *${mdEscapeSimple(obj?.statusNow || "—")}*\n\n` +
   `🚗 Машини:\n${carLines}\n\n` +
   `👥 Зараз на обʼєкті:\n${presentLines}\n\n` +
@@ -868,9 +852,16 @@ const objLines = payloadObjRows.length
       .map(([oid, sec]) => `• ${mdEscapeSimple(objectName(st, oid))}: *${(Number(sec) / 3600).toFixed(2)} год*`)
       .join("\n") || "—";
 
-  const allApproved =
+const payloadApproved = isApprovedStatus(payload?.__status);
+
+const allApproved =
+  payloadApproved ||
+  (
     (emp?.objectIds ?? []).length > 0 &&
-    (emp?.objectIds ?? []).every((oid) => String(day.objects[oid]?.statusDay ?? "") === "ЗАТВЕРДЖЕНО");
+    (emp?.objectIds ?? []).every((oid) =>
+      isApprovedStatus(day.objects[oid]?.statusDay)
+    )
+  );
 
 const payMap = await buildStatsPayMap({ date, foremanTgId });
 
@@ -920,15 +911,27 @@ const roleLines = [
   .join("\n");
 
 
-  const nowWhere =
-    emp?.whereNowObjectId
-      ? `🏗 ${objectName(st, emp.whereNowObjectId)}`
-      : emp?.whereNowCarId
-        ? `🚗 ${carName(st, emp.whereNowCarId)}`
-        : "—";
+const dayFinished =
+  payloadApproved ||
+  st.phase === "FINISHED" ||
+  st.odoEndKm !== undefined ||
+  Boolean((st as any).submittedForApproval);
 
-const nowWork =
-  emp?.currentWorkName
+const statusNow = dayFinished
+  ? "НА БАЗІ"
+  : String(emp?.statusNow || "—");
+
+const nowWhere = dayFinished
+  ? "База"
+  : emp?.whereNowObjectId
+    ? `🏗 ${objectName(st, emp.whereNowObjectId)}`
+    : emp?.whereNowCarId
+      ? `🚗 ${carName(st, emp.whereNowCarId)}`
+      : "—";
+
+const nowWork = dayFinished
+  ? "—"
+  : emp?.currentWorkName
     ? `🧱 ${emp.currentWorkName}`
     : "—";
 
@@ -936,13 +939,13 @@ const text =
   `👤 *Статистика працівника*\n\n` +
   `Працівник: *${mdEscapeSimple(empName(st, employeeId))}*\n` +
   `📅 ${mdEscapeSimple(date)}\n` +
-  `Статус зараз: *${mdEscapeSimple(emp?.statusNow || "—")}*\n` +
+  `Статус зараз: *${mdEscapeSimple(statusNow)}*\n` +
   `Де зараз: *${mdEscapeSimple(nowWhere)}*\n` +
   `Що робить зараз: *${mdEscapeSimple(nowWork)}*\n\n` +
   `🏗 Обʼєкти / години:\n${objLines}\n\n` +
   (
     allApproved
-      ? `💰 Разом по роботах: *${fmtNum(totalAmount)}*\n\n📊 Загальний розподіл:\n${roleLines}\n\n💵 По обʼєктах:\n${payLines}`
+      ? `💰 Разом по роботах: *${fmtNum(totalAmount)}*\n\n💵 По обʼєктах:\n${payLines}`
       : `💰 Разом по роботах: *приховано до затвердження*`
   );
 

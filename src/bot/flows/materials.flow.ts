@@ -87,8 +87,6 @@ function fmt(st: State) {
   return [
     `${TEXTS.materialsFlow.labels.date} *${st.date}*`,
     `${TEXTS.materialsFlow.labels.object} *${st.objectName ?? TEXTS.ui.symbols.emptyDash}*`,
-    `${TEXTS.materialsFlow.labels.material} *${st.materialName ?? TEXTS.ui.symbols.emptyDash}*`,
-    `${TEXTS.materialsFlow.labels.qty} *${st.qty ?? TEXTS.ui.symbols.emptyDash}*`,
     `${TEXTS.materialsFlow.labels.type} *${moveTypeLabel(st.moveType)}*`,
     `${TEXTS.materialsFlow.labels.material} *${
   st.items.length
@@ -276,6 +274,49 @@ TEXTS.materialsFlow.screens.review
   );
 }
 
+async function sendNewMaterialsScreen(
+  bot: TelegramBot,
+  chatId: number,
+  st: State
+) {
+  const mats = await fetchMaterials();
+  const active = mats.filter((m: any) => String(m.active ?? "").toLowerCase() !== "ні");
+
+  const filtered = st.category
+    ? (st.category === "__NO_CAT__"
+        ? active.filter((m: any) => !String(m.category ?? "").trim())
+        : active.filter((m: any) => String(m.category ?? "").trim() === st.category))
+    : active;
+
+  const rows = filtered.slice(0, 30).map((m) => [
+    { text: `🧱 ${m.name}`, callback_data: `${ACT.MAT}${m.id}` },
+  ]);
+
+  rows.unshift([{ text: TEXTS.materialsFlow.buttons.changeCategory, callback_data: ACT.PICK_CAT }]);
+
+  if (st.items.length > 0) {
+    rows.push([{ text: "✅ Завершити вибір матеріалів", callback_data: ACT.DONE_MATERIALS }]);
+  }
+
+  rows.push([{ text: TEXTS.ui.buttons.menu, callback_data: CB.MENU }]);
+
+  await bot.sendMessage(
+    chatId,
+    TEXTS.materialsFlow.screens.pickMaterial
+      .replace("{title}", `*${TEXTS.materialsFlow.title}*`)
+      .replace("{fmt}", fmt(st))
+      .replace("{cat}",
+        st.category
+          ? (st.category === "__NO_CAT__" ? "Без категорії" : st.category)
+          : "Усі"
+      ),
+    {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: rows },
+    }
+  );
+}
+
 function makeMoveId() {
   // простий стабільний id без залежностей
   return `MAT_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
@@ -392,17 +433,28 @@ if (data.startsWith(ACT.OBJ)) {
 if (data.startsWith(ACT.MAT)) {
   const materialId = data.slice(ACT.MAT.length);
 
-  const mats = await fetchMaterials(); // 👈 якщо вже є — ок
+  const mats = await fetchMaterials();
   const mat = mats.find(m => m.id === materialId);
 
   setFlowState(s, FLOW as any, {
     ...st,
     materialId,
-    materialName: mat?.name ?? materialId, // 👈 головне
+    materialName: mat?.name ?? materialId,
     step: "ENTER_QTY"
   } as any);
 
-  await render(bot, chatId, s, getFlowState<State>(s, FLOW as any)!);
+  await bot.sendMessage(
+    chatId,
+    `📦 Матеріал: *${mat?.name ?? materialId}*\n\nВведи кількість в чат.`,
+    {
+      parse_mode: "Markdown",
+      reply_markup: {
+        force_reply: true,
+        input_field_placeholder: "Введи кількість...",
+      },
+    }
+  );
+
   return true;
 }
 
@@ -534,7 +586,9 @@ setFlowState(s, FLOW as any, {
   qty: undefined,
   step: "PICK_MATERIAL",
 } as any);
-    await render(bot, chatId, s, getFlowState<State>(s, FLOW as any)!);
-    return true;
+
+const newSt = getFlowState<State>(s, FLOW as any)!;
+await sendNewMaterialsScreen(bot, chatId, newSt);
+return true;
   },
 };
