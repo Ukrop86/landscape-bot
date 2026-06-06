@@ -118,10 +118,44 @@ export function buildAccountingRowsFromApprovedRoadEvent(ev: RoadEventLike): Acc
     .filter(Boolean)
     .join(", ");
 
+  const brigadierIds = new Set(
+    [
+      ...(Array.isArray(payload.brigadierEmployeeIds)
+        ? payload.brigadierEmployeeIds
+        : []),
+      payload.brigadierEmployeeId,
+    ]
+      .map((x) => String(x ?? "").trim())
+      .filter(Boolean),
+  );
+  const seniorIds = new Set(
+    [
+      ...(Array.isArray(payload.seniorEmployeeIds)
+        ? payload.seniorEmployeeIds
+        : []),
+      payload.seniorEmployeeId,
+    ]
+      .map((x) => String(x ?? "").trim())
+      .filter(Boolean),
+  );
+
   const byObjectEmployee = new Map<string, any[]>();
+  const workTotals = new Map<
+    string,
+    {
+      objectId: string;
+      workId: string;
+      workName: string;
+      unit: string;
+      qty: number;
+      amount: number;
+    }
+  >();
+
   for (const row of workMoneyRows) {
     const objectId = String(row.objectId ?? "").trim();
     const employeeId = String(row.employeeId ?? "").trim();
+    const workId = String(row.workId ?? "").trim();
     const workName = String(row.workName ?? row.workId ?? "").trim();
     if (!employeeId || !workName) continue;
 
@@ -129,6 +163,21 @@ export function buildAccountingRowsFromApprovedRoadEvent(ev: RoadEventLike): Acc
     const rows = byObjectEmployee.get(key) ?? [];
     rows.push(row);
     byObjectEmployee.set(key, rows);
+
+    const workKey = `${objectId}||${workId || workName}`;
+    const current =
+      workTotals.get(workKey) ?? {
+        objectId,
+        workId,
+        workName,
+        unit: String(row.unit ?? "").trim(),
+        qty: 0,
+        amount: 0,
+      };
+
+    current.qty += Number(row.qty ?? 0);
+    current.amount += Number(row.amount ?? 0);
+    workTotals.set(workKey, current);
   }
 
   const out: AccountingRow[] = [];
@@ -142,33 +191,73 @@ export function buildAccountingRowsFromApprovedRoadEvent(ev: RoadEventLike): Acc
       objectId ||
       "—";
 
-    for (const salaryRow of pack?.rows ?? []) {
+    const objectTotal = Number(pack?.objectTotal ?? 0);
+    const packRows = Array.isArray(pack?.rows) ? pack.rows : [];
+    const hasBrigadier = packRows.some((r: any) =>
+      brigadierIds.has(String(r.employeeId ?? "").trim()),
+    );
+    const hasSenior = packRows.some((r: any) =>
+      seniorIds.has(String(r.employeeId ?? "").trim()),
+    );
+    const workersPool = money(objectTotal * (hasBrigadier ? 0.7 : 0.9));
+    const workerSalaryRows = packRows.filter((r: any) => {
+      const id = String(r.employeeId ?? "").trim();
+      if (!id) return false;
+      if (hasBrigadier && brigadierIds.has(id)) return false;
+      if (hasSenior && seniorIds.has(id)) return false;
+      return byObjectEmployee.has(`${objectId}||${id}`);
+    });
+    const employeesCount = workerSalaryRows.length;
+    if (!employeesCount || workersPool <= 0) continue;
+
+    const perEmployeeAmount = money(workersPool / employeesCount);
+    const objectWorks = [...workTotals.values()].filter(
+      (w) => String(w.objectId) === objectId && Number(w.amount ?? 0) > 0,
+    );
+    const workTotalForObject = objectWorks.reduce(
+      (a, w) => a + Number(w.amount ?? 0),
+      0,
+    );
+
+    for (const salaryRow of workerSalaryRows) {
       const employeeId = String(salaryRow?.employeeId ?? "").trim();
       const employeeName = String(salaryRow?.employeeName ?? employeeId).trim();
-      const employeePay = Number(salaryRow?.pay ?? 0);
-      if (!employeeId || employeePay <= 0) continue;
+      if (!employeeId) continue;
 
       const workRows = byObjectEmployee.get(`${objectId}||${employeeId}`) ?? [];
       if (!workRows.length) continue;
 
-      const baseTotal = workRows.reduce(
-        (a, row) => a + Math.max(0, Number(row.amount ?? 0)),
-        0,
-      );
+      const workKeys = [
+        ...new Set(
+          workRows.map((row) => {
+            const workId = String(row.workId ?? "").trim();
+            return `${objectId}||${workId || String(row.workName ?? "")}`;
+          }),
+        ),
+      ];
 
-      for (const row of workRows) {
-        const base = Math.max(0, Number(row.amount ?? 0));
+      for (const workKey of workKeys) {
+        const totalWork = workTotals.get(workKey);
+        if (!totalWork) continue;
+
+        const workTotal = Number(totalWork.amount ?? 0);
         const share =
-          baseTotal > 0 ? base / baseTotal : 1 / Math.max(1, workRows.length);
-        const amount = money(employeePay * share);
+          workTotalForObject > 0
+            ? workTotal / workTotalForObject
+            : 1 / Math.max(1, workKeys.length);
+        const amount = money(perEmployeeAmount * share);
 
         if (amount <= 0) continue;
+
+        const qty = Number(totalWork.qty ?? 0);
+        const unit = String(totalWork.unit ?? "").trim();
+        const formattedQty = volumeText({ qty, unit });
 
         out.push({
           employeeName,
           objectName,
-          workName: String(row.workName ?? row.workId ?? "—"),
-          volume: volumeText(row),
+          workName: totalWork.workName || totalWork.workId || "—",
+          volume: formattedQty,
           amount,
           note: [
             `date=${ev.date}`,
@@ -176,12 +265,28 @@ export function buildAccountingRowsFromApprovedRoadEvent(ev: RoadEventLike): Acc
             `eventId=${ev.eventId}`,
             `objectId=${objectId}`,
             `employeeId=${employeeId}`,
-            `workId=${String(row.workId ?? "").trim()}`,
+            `workId=${totalWork.workId}`,
           ].join("; "),
         });
+
+        console.log(
+          [
+            "[accounting] row",
+            `workTotal=${money(workTotal)}`,
+            `workersPool=${workersPool}`,
+            `employeesCount=${employeesCount}`,
+            `perEmployeeAmount=${perEmployeeAmount}`,
+            `qty=${money(qty)}`,
+            `unit=${unit}`,
+            `formattedQty=${formattedQty}`,
+          ].join(" "),
+        );
       }
     }
   }
+
+  const totalRowsAmount = money(out.reduce((a, row) => a + Number(row.amount ?? 0), 0));
+  console.log(`[accounting] totalRowsAmount=${totalRowsAmount}`);
 
   return out;
 }
