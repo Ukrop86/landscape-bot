@@ -1,6 +1,6 @@
 import { config } from "../../config.js";
 import { getSheetsClient } from "../client.js";
-import { appendRows, getCell, loadSheet } from "./core.js";
+import { appendRows, getCell, loadSheet, invalidateSheetCache, withSheetsRetry } from "./core.js";
 import { EVENTS_HEADERS } from "./headers.js";
 import { SHEET_NAMES } from "./names.js";
 import { sheetRef } from "./utils.js";
@@ -46,29 +46,36 @@ type AccountingRow = {
 async function ensureAccountingSheet() {
   const sheets = getSheetsClient();
 
-  const meta = await sheets.spreadsheets.get({
-    spreadsheetId: config.sheetId,
-    fields: "sheets.properties.title",
-  });
+  const meta = await withSheetsRetry("READ", "spreadsheet metadata", () =>
+    sheets.spreadsheets.get({
+      spreadsheetId: config.sheetId,
+      fields: "sheets.properties.title",
+    }),
+  );
 
   const exists = (meta.data.sheets ?? []).some(
     (s) => s.properties?.title === ACCOUNTING_SHEET,
   );
 
   if (!exists) {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: config.sheetId,
-      requestBody: {
-        requests: [{ addSheet: { properties: { title: ACCOUNTING_SHEET } } }],
-      },
-    });
+    await withSheetsRetry("WRITE", `${ACCOUNTING_SHEET} create`, () =>
+      sheets.spreadsheets.batchUpdate({
+        spreadsheetId: config.sheetId,
+        requestBody: {
+          requests: [{ addSheet: { properties: { title: ACCOUNTING_SHEET } } }],
+        },
+      }),
+    );
 
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: config.sheetId,
-      range: `${sheetRef(ACCOUNTING_SHEET)}!A1:H1`,
-      valueInputOption: "USER_ENTERED",
-      requestBody: { values: [[...ACCOUNTING_HEADERS]] },
-    });
+    await withSheetsRetry("WRITE", `${ACCOUNTING_SHEET}!A1:H1 update`, () =>
+      sheets.spreadsheets.values.update({
+        spreadsheetId: config.sheetId,
+        range: `${sheetRef(ACCOUNTING_SHEET)}!A1:H1`,
+        valueInputOption: "USER_ENTERED",
+        requestBody: { values: [[...ACCOUNTING_HEADERS]] },
+      }),
+    );
+    invalidateSheetCache(ACCOUNTING_SHEET);
 
     console.log(`[accounting] created sheet ${ACCOUNTING_SHEET}`);
   }

@@ -12,7 +12,7 @@ import {
   TOOLS_MOVE_HEADERS,
   EDIT_LOG_HEADERS
 } from "./headers.js";
-import { buildRowByHeaders, getHeaderMap, appendRows, requireHeaders, upsertRowByKeys, loadSheet, getCell } from "./core.js";
+import { buildRowByHeaders, getHeaderMap, appendRows, requireHeaders, upsertRowByKeys, loadSheet, getCell, invalidateSheetCache } from "./core.js";
 import { nowISO, parseNumber, makeEventId, classifyTripByKm  } from "./utils.js";
 import { computeChecklist, getDayStatusRow } from "./checklist.js";
 // ⬇️ додай імпорти зверху файлу
@@ -194,6 +194,7 @@ export async function fetchMissingReports(args: {
 
 function clearEventsSheetCache() {
   eventsSheetCache = null;
+  invalidateSheetCache(SHEET_NAMES.events);
 }
 
 
@@ -293,14 +294,17 @@ let eventsSheetCache: any = null;
 
 async function loadEventsSheetCached() {
   const now = Date.now();
+  const ttlMs = 20_000;
 
-  if (eventsSheetCache && now - eventsSheetCache.ts < 5000) {
+  if (eventsSheetCache && now - eventsSheetCache.ts < ttlMs) {
+    console.log(`[SHEETS][CACHE_HIT] eventsSheetCache`);
     return {
       map: eventsSheetCache.map,
       data: eventsSheetCache.data,
     };
   }
 
+  console.log(`[SHEETS][CACHE_MISS] eventsSheetCache`);
   const sh = await loadSheet(SHEET_NAMES.events); // ✅ ВАЖЛИВО
 
   eventsSheetCache = {
@@ -640,7 +644,7 @@ export async function upsertEvent(e: EventRow) {
   if (!e.eventId) throw new Error("❌ ПОДІЯ_ID (eventId) обовʼязковий");
   if (!e.status) throw new Error("❌ СТАТУС (status) обовʼязковий");
 
-  return upsertRowByKeys(
+  const result = await upsertRowByKeys(
     SHEET_NAMES.events,
     { [EVENTS_HEADERS.eventId]: e.eventId },
     {
@@ -661,6 +665,7 @@ export async function upsertEvent(e: EventRow) {
     }
   );
   clearEventsSheetCache();
+  return result;
 }
 
 
@@ -677,7 +682,9 @@ export async function updateEventById(
   if (patch.payload !== undefined) p[EVENTS_HEADERS.payload] = patch.payload ?? "";
   if (patch.msgId !== undefined) p[EVENTS_HEADERS.msgId] = patch.msgId ?? "";
 
-  return upsertRowByKeys(SHEET_NAMES.events, { [EVENTS_HEADERS.eventId]: eventId }, p);
+  const result = await upsertRowByKeys(SHEET_NAMES.events, { [EVENTS_HEADERS.eventId]: eventId }, p);
+  clearEventsSheetCache();
+  return result;
 }
 
 /**

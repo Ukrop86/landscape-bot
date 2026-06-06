@@ -50,6 +50,109 @@ const headerCache = new Map<
   { headers: string[]; map: Record<string, number> }
 >();
 
+type LoadedSheet = {
+  header: string[];
+  map: Record<string, number>;
+  data: any[][];
+  all: any[][];
+};
+
+const READ_CACHE_DEFAULT_TTL_MS = 25_000;
+const READ_CACHE_EVENTS_TTL_MS = 20_000;
+const readCache = new Map<string, { ts: number; value: LoadedSheet }>();
+const pendingReads = new Map<string, Promise<LoadedSheet>>();
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getErrorStatus(err: any): number {
+  return Number(
+    err?.code ??
+      err?.status ??
+      err?.response?.status ??
+      err?.response?.statusCode ??
+      err?.response?.body?.error?.code ??
+      0,
+  );
+}
+
+export function isTransientSheetsError(err: any) {
+  const status = getErrorStatus(err);
+  return status === 429 || (status >= 500 && status < 600);
+}
+
+export function isSheetsQuotaError(err: any) {
+  const status = getErrorStatus(err);
+  const text = [
+    err?.message,
+    err?.response?.body?.error?.message,
+    err?.response?.body?.error_description,
+    err?.response?.body?.description,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return status === 429 || text.includes("quota exceeded") || text.includes("readrequestsperminute");
+}
+
+export async function withSheetsRetry<T>(
+  op: "READ" | "WRITE",
+  label: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const delays = [0, 500, 1500, 3000];
+
+  for (let i = 0; i < delays.length; i++) {
+    if (delays[i] > 0) await sleep(delays[i]);
+
+    try {
+      if (op === "READ") console.log(`[SHEETS][READ] ${label}`);
+      return await fn();
+    } catch (err: any) {
+      const status = getErrorStatus(err);
+      if (isSheetsQuotaError(err)) {
+        console.warn(`[SHEETS][QUOTA] ${label} status=${status || "unknown"}`);
+      }
+
+      const attempt = i + 1;
+      const canRetry = isTransientSheetsError(err) && i < delays.length - 1;
+      if (canRetry) {
+        console.warn(`[SHEETS][RETRY] attempt=${attempt} status=${status || "unknown"} ${label}`);
+        continue;
+      }
+
+      throw err;
+    }
+  }
+
+  return fn();
+}
+
+function readCacheKey(sheetName: string, range: string) {
+  return `${sheetName}!${range}`;
+}
+
+function ttlForSheet(sheetName: string) {
+  return sheetName === "ЖУРНАЛ_ПОДІЙ" ? READ_CACHE_EVENTS_TTL_MS : READ_CACHE_DEFAULT_TTL_MS;
+}
+
+export function invalidateSheetCache(sheetName?: string) {
+  if (!sheetName) {
+    readCache.clear();
+    pendingReads.clear();
+    return;
+  }
+
+  for (const key of [...readCache.keys()]) {
+    if (key.startsWith(`${sheetName}!`)) readCache.delete(key);
+  }
+  for (const key of [...pendingReads.keys()]) {
+    if (key.startsWith(`${sheetName}!`)) pendingReads.delete(key);
+  }
+}
+
 export async function getHeaderMap(sheetName: string) {
   const cached = headerCache.get(sheetName);
 
@@ -59,10 +162,12 @@ export async function getHeaderMap(sheetName: string) {
 
   const sheets = getSheetsClient();
 
-  const head = await sheets.spreadsheets.values.get({
-    spreadsheetId: config.sheetId,
-    range: `${sheetRef(sheetName)}!1:1`,
-  });
+  const head = await withSheetsRetry("READ", `${sheetName}!1:1`, () =>
+    sheets.spreadsheets.values.get({
+      spreadsheetId: config.sheetId,
+      range: `${sheetRef(sheetName)}!1:1`,
+    }),
+  );
 
   const rawHeaders: string[] = (head.data.values?.[0] || []).map((x) => String(x ?? ""));
   const headers = rawHeaders.map(normalizeHeader);
@@ -85,30 +190,61 @@ export async function getHeaderMap(sheetName: string) {
 }
 
 export async function loadSheet(sheetName: string, range = "A:Z") {
-  const sheets = getSheetsClient();
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: config.sheetId,
-    range: `${sheetRef(sheetName)}!${range}`,
-  });
+  const cacheKey = readCacheKey(sheetName, range);
+  const cached = readCache.get(cacheKey);
+  const now = Date.now();
 
-  const rows = res.data.values || [];
-
-  if (rows.length === 0) {
-    return { header: [] as string[], map: {} as Record<string, number>, data: [] as any[][], all: rows };
+  if (cached && now - cached.ts < ttlForSheet(sheetName)) {
+    console.log(`[SHEETS][CACHE_HIT] ${cacheKey}`);
+    return cached.value;
   }
 
-  const header = (rows[0] || []).map(normalizeHeader);
-  const map: Record<string, number> = {};
-  header.forEach((h: string, i: number) => {
-    const key = norm(h);
-    if (key) map[key] = i;
-  });
+  console.log(`[SHEETS][CACHE_MISS] ${cacheKey}`);
 
-  const data = rows
-    .slice(1)
-    .filter((r) => r && r.some((c) => String(c ?? "").trim() !== ""));
+  const pending = pendingReads.get(cacheKey);
+  if (pending) {
+    console.log(`[SHEETS][CACHE_HIT] ${cacheKey}:pending`);
+    return pending;
+  }
 
-  return { header, map, data, all: rows };
+  const sheets = getSheetsClient();
+  const pendingRead = (async (): Promise<LoadedSheet> => {
+    const res = await withSheetsRetry("READ", `${sheetName}!${range}`, () =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId: config.sheetId,
+        range: `${sheetRef(sheetName)}!${range}`,
+      }),
+    );
+
+    const rows = res.data.values || [];
+
+    if (rows.length === 0) {
+      return { header: [] as string[], map: {} as Record<string, number>, data: [] as any[][], all: rows };
+    }
+
+    const header = (rows[0] || []).map(normalizeHeader);
+    const map: Record<string, number> = {};
+    header.forEach((h: string, i: number) => {
+      const key = norm(h);
+      if (key) map[key] = i;
+    });
+
+    const data = rows
+      .slice(1)
+      .filter((r) => r && r.some((c) => String(c ?? "").trim() !== ""));
+
+    return { header, map, data, all: rows };
+  })();
+
+  pendingReads.set(cacheKey, pendingRead);
+
+  try {
+    const value = await pendingRead;
+    readCache.set(cacheKey, { ts: Date.now(), value });
+    return value;
+  } finally {
+    pendingReads.delete(cacheKey);
+  }
 }
 
 export async function appendRows(
@@ -119,12 +255,15 @@ export async function appendRows(
   if (!rows.length) return;
   const sheets = getSheetsClient();
 
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: config.sheetId,
-    range: `${sheetRef(sheetName)}!A:Z`,
-    valueInputOption,
-    requestBody: { values: rows },
-  });
+  await withSheetsRetry("WRITE", `${sheetName}!A:Z append`, () =>
+    sheets.spreadsheets.values.append({
+      spreadsheetId: config.sheetId,
+      range: `${sheetRef(sheetName)}!A:Z`,
+      valueInputOption,
+      requestBody: { values: rows },
+    }),
+  );
+  invalidateSheetCache(sheetName);
 }
 
 export async function updateRow(sheetName: string, rowNumber1Based: number, values: any[]) {
@@ -132,12 +271,15 @@ export async function updateRow(sheetName: string, rowNumber1Based: number, valu
   const endCol = colToA1(values.length - 1);
   const range = `${sheetRef(sheetName)}!A${rowNumber1Based}:${endCol}${rowNumber1Based}`;
 
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: config.sheetId,
-    range,
-    valueInputOption: "USER_ENTERED",
-    requestBody: { values: [values] },
-  });
+  await withSheetsRetry("WRITE", `${sheetName}!${range} update`, () =>
+    sheets.spreadsheets.values.update({
+      spreadsheetId: config.sheetId,
+      range,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [values] },
+    }),
+  );
+  invalidateSheetCache(sheetName);
 }
 
 function rowMatchesKeys(row: any[], map: Record<string, number>, keys: Record<string, any>) {
@@ -158,10 +300,12 @@ function rowMatchesKeys(row: any[], map: Record<string, number>, keys: Record<st
 export async function upsertRowByKeys(sheetName: string, keys: Record<string, any>, patch: Record<string, any>) {
   const sheets = getSheetsClient();
 
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: config.sheetId,
-    range: `${sheetRef(sheetName)}!A:Z`,
-  });
+  const res = await withSheetsRetry("READ", `${sheetName}!A:Z upsert`, () =>
+    sheets.spreadsheets.values.get({
+      spreadsheetId: config.sheetId,
+      range: `${sheetRef(sheetName)}!A:Z`,
+    }),
+  );
 
   const rows = res.data.values || [];
   if (!rows.length) throw new Error(`❌ Лист "${sheetName}" порожній або не має заголовків`);
