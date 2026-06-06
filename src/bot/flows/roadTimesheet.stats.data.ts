@@ -7,12 +7,16 @@ type CarDayStat = {
   carId: string;
   objectIds: string[];
   employeeIds: string[];
+  currentEmployeeIds: string[];
   odoStartKm?: number;
   odoEndKm?: number;
   roadSec: number;
   statusNow: string;
   whereNowObjectId?: string;
   lastEventType?: string;
+  lastEventId?: string;
+  lastDriveEventId?: string;
+  lastReturnEventId?: string;
   isOnBase?: boolean;
 };
 
@@ -27,6 +31,7 @@ type EmployeeDayStat = {
   currentWorkId?: string;
   currentWorkName?: string;
   lastEventType?: string;
+  lastEventId?: string;
 };
 
 type ObjectDayStat = {
@@ -186,6 +191,7 @@ export async function buildRoadDayStats(args: {
         carId,
         objectIds: [],
         employeeIds: [],
+        currentEmployeeIds: [],
         roadSec: 0,
         statusNow: "—",
       };
@@ -245,7 +251,20 @@ if (carId) {
   for (const empId of employeeIds) uniqPush(car.employeeIds, empId);
 
   car.lastEventType = type;
+  car.lastEventId = String(e.eventId ?? "");
   car.statusNow = detectCarStatusFromType(type);
+
+  if (type === "RTS_PICK_UP" || type === "RTS_ODO_START" || type === "RTS_DRIVE_START" || type === "RTS_DRIVE_RESUME" || type === "RTS_RETURN_START") {
+    for (const empId of employeeIds) uniqPush(car.currentEmployeeIds, empId);
+  }
+
+  if (type === "RTS_DROP_OFF") {
+    car.currentEmployeeIds = car.currentEmployeeIds.filter((id) => !employeeIds.includes(id));
+  }
+
+  if (type === "RTS_RETURN_STOP" || type === "RTS_ODO_END") {
+    car.currentEmployeeIds = [];
+  }
 
   if (
     type === "RTS_ARRIVE_OBJECT" ||
@@ -263,6 +282,7 @@ if (carId) {
     type === "RTS_RETURN_START" ||
     type === "RTS_ODO_START"
   ) {
+    car.lastDriveEventId = String(e.eventId ?? "");
     delete car.whereNowObjectId;
     car.isOnBase = false;
   }
@@ -271,6 +291,7 @@ if (carId) {
     type === "RTS_RETURN_STOP" ||
     type === "RTS_ODO_END"
   ) {
+    car.lastReturnEventId = String(e.eventId ?? "");
     delete car.whereNowObjectId;
     car.isOnBase = true;
   }
@@ -328,6 +349,7 @@ for (const empId of employeeIds) {
   if (carId) uniqPush(emp.carIds, carId);
 
   emp.lastEventType = type;
+  emp.lastEventId = String(e.eventId ?? "");
   emp.statusNow = detectEmployeeStatusFromType(type);
 
   if (type === "RTS_PICK_UP") {

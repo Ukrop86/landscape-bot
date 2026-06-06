@@ -80,6 +80,43 @@ function auditStatsSource(screen: string, details: Record<string, any>) {
   console.log(`[RTS_STATS][${screen}]`, details);
 }
 
+function addToMap(map: Map<string, number>, key: string, value: number) {
+  map.set(key, Math.round(((map.get(key) ?? 0) + Number(value ?? 0)) * 100) / 100);
+}
+
+function getPayloadObjectName(payload: any, objectId: string, st: State) {
+  const detailed = Array.isArray(payload?.objectsDetailed) ? payload.objectsDetailed : [];
+  const found = detailed.find((o: any) => String(o?.objectId ?? "") === String(objectId));
+  return String(found?.objectName ?? objectName(st, objectId));
+}
+
+function payloadsForObject(payloads: any[], objectId: string) {
+  return payloads.filter((payload) => {
+    const oid = String(objectId);
+    return (
+      (payload.salaryPacks ?? []).some((p: any) => String(p.objectId ?? "") === oid) ||
+      (payload.payrollPacks ?? []).some((p: any) => String(p.objectId ?? "") === oid) ||
+      (payload.workTotalsByObject ?? []).some((p: any) => String(p.objectId ?? "") === oid) ||
+      (payload.workMoneyRows ?? []).some((r: any) => String(r.objectId ?? "") === oid)
+    );
+  });
+}
+
+function payloadsForEmployee(payloads: any[], employeeId: string) {
+  return payloads.filter((payload) => {
+    const eid = String(employeeId);
+    return (
+      (payload.salaryPacks ?? []).some((p: any) =>
+        (p.rows ?? []).some((r: any) => String(r.employeeId ?? "") === eid),
+      ) ||
+      (payload.payrollPacks ?? []).some((p: any) =>
+        (p.rows ?? []).some((r: any) => String(r.employeeId ?? "") === eid),
+      ) ||
+      (payload.workMoneyRows ?? []).some((r: any) => String(r.employeeId ?? "") === eid)
+    );
+  });
+}
+
 function cbx(prefix: string, key: string) {
   // робимо callback_data в тому ж просторі що й flow (через PREFIX)
   return `${prefix}${key}`;
@@ -165,10 +202,10 @@ return {
   }
 }
 
-async function getLatestRoadEndPayload(params: {
+async function getResolvedRoadEndPayloads(params: {
   date: string;
   foremanTgId: number;
-}): Promise<any | null> {
+}): Promise<any[]> {
   const { date, foremanTgId } = params;
 
   try {
@@ -185,26 +222,50 @@ async function getLatestRoadEndPayload(params: {
 
     const approvedRows = rows.filter((e: any) => isApprovedStatus(String(e.status ?? "")));
     const nonReturnedRows = rows.filter((e: any) => !isReturnedStatus(String(e.status ?? "")));
-    const candidates = approvedRows.length ? approvedRows : nonReturnedRows.length ? nonReturnedRows : rows;
-    const last = candidates[candidates.length - 1];
-    if (!last?.payload) return null;
+    const candidates = approvedRows.length ? approvedRows : nonReturnedRows.length ? [nonReturnedRows[nonReturnedRows.length - 1]] : [];
 
-    const payload =
-      typeof last.payload === "string"
-        ? JSON.parse(last.payload)
-        : last.payload;
+    const payloads = candidates
+      .filter(Boolean)
+      .map((ev: any) => {
+        let payload: any = {};
+        try {
+          payload = typeof ev.payload === "string" ? JSON.parse(ev.payload) : (ev.payload ?? {});
+        } catch {
+          payload = {};
+        }
 
-    return {
-      ...(payload ?? {}),
-      __status: String(last.status ?? ""),
-      __eventId: String(last.eventId ?? ""),
-      __refEventId: String(last.refEventId ?? ""),
-      __type: String(last.type ?? ""),
-      __resolvedFrom: approvedRows.length ? "approved" : nonReturnedRows.length ? "latest_non_returned" : "latest_any",
-    };
+        return {
+          ...(payload ?? {}),
+          __status: String(ev.status ?? ""),
+          __eventId: String(ev.eventId ?? ""),
+          __refEventId: String(ev.refEventId ?? ""),
+          __type: String(ev.type ?? ""),
+          __resolvedFrom: approvedRows.length ? "approved" : "latest_non_returned",
+        };
+      });
+
+    auditStatsSource("ROAD_END_RESOLVE", {
+      date,
+      foremanTgId,
+      roadEndEvents: rows.length,
+      approvedEvents: approvedRows.length,
+      nonReturnedEvents: nonReturnedRows.length,
+      resolvedEvents: payloads.map((p) => p.__eventId),
+      statuses: payloads.map((p) => p.__status),
+    });
+
+    return payloads;
   } catch {
-    return null;
+    return [];
   }
+}
+
+async function getLatestRoadEndPayload(params: {
+  date: string;
+  foremanTgId: number;
+}): Promise<any | null> {
+  const payloads = await getResolvedRoadEndPayloads(params);
+  return payloads[payloads.length - 1] ?? null;
 }
 
 
@@ -433,8 +494,11 @@ async function buildCarView(params: {
   const objectLines =
     (car?.objectIds ?? []).map((oid) => `• ${mdEscapeSimple(objectName(st, oid))}`).join("\n") || "—";
 
+  const currentCarPeopleIds = car ? ((car as any).currentEmployeeIds ?? []) : [];
   const peopleLines =
-    (car?.employeeIds ?? []).map((empId) => `• ${mdEscapeSimple(empName(st, empId))}`).join("\n") || "—";
+    currentCarPeopleIds
+      .map((empId: string) => `• ${mdEscapeSimple(empName(st, empId))}`)
+      .join("\n") || "—";
 
   const kmDay =
     typeof car?.odoStartKm === "number" && typeof car?.odoEndKm === "number"
@@ -456,12 +520,17 @@ async function buildCarView(params: {
     type: payload?.__type ?? "",
     source: payload?.__resolvedFrom ?? "live_events",
     resolvedFinalEvent: payload?.__eventId ?? "",
-    currentPhase: st.phase,
-    currentObject: car?.whereNowObjectId ?? "",
-    currentCar: carId,
-    currentEarnings: "",
-    statusNow: car?.statusNow ?? "",
-    lastEventType: car?.lastEventType ?? "",
+  statePhase: st.phase,
+  currentCar: carId,
+  currentEarnings: "",
+  statusNow: car?.statusNow ?? "",
+  lastEventType: car?.lastEventType ?? "",
+  sourceEventsCount: day.events.filter((ev: any) => String(ev.carId ?? "") === String(carId)).length,
+  currentPeople: currentCarPeopleIds,
+  currentPhase: car?.statusNow ?? "",
+  currentObject: car?.whereNowObjectId ?? "",
+    lastDriveEvent: (car as any)?.lastDriveEventId ?? "",
+    lastReturnEvent: (car as any)?.lastReturnEventId ?? "",
   });
 
   const text =
@@ -495,9 +564,10 @@ async function buildStatsPayMap(params: {
 }) {
   const { date, foremanTgId } = params;
 
- const payload = await getLatestRoadEndPayload({ date, foremanTgId });
+ const payloads = await getResolvedRoadEndPayloads({ date, foremanTgId });
+ const approvedPayloads = payloads.filter((payload) => isApprovedStatus(payload?.__status));
 
-if (payload?.salaryPacks?.length) {
+if (approvedPayloads.some((payload) => payload?.salaryPacks?.length)) {
   const moneyByObject = new Map<string, number>();
   const payByObjectEmp = new Map<string, number>();
   const companyByObject = new Map<string, number>();
@@ -506,61 +576,68 @@ if (payload?.salaryPacks?.length) {
     { workers: number; brigadiers: number; seniors: number; company: number }
   >();
 
-  const brigadierSet = new Set(
-    (payload.brigadierEmployeeIds ?? []).map(String),
-  );
-
-  const seniorSet = new Set(
-    (payload.seniorEmployeeIds ?? []).map(String),
-  );
-
-  for (const pack of payload.salaryPacks ?? []) {
-    const objectId = String(pack.objectId ?? "");
-    if (!objectId) continue;
-
-    moneyByObject.set(objectId, Number(pack.objectTotal ?? 0));
-
-    const summary = {
-      workers: 0,
-      brigadiers: 0,
-      seniors: 0,
-      company: 0,
-    };
-
-    for (const r of pack.rows ?? []) {
-      const empId = String(r.employeeId ?? "");
-      const pay = Number(r.pay ?? 0);
-
-      if (!empId) continue;
-
-      payByObjectEmp.set(`${objectId}||${empId}`, pay);
-
-      if (brigadierSet.has(empId)) summary.brigadiers += pay;
-      else if (seniorSet.has(empId)) summary.seniors += pay;
-      else summary.workers += pay;
-    }
-
-    const totalPaid =
-      summary.workers + summary.brigadiers + summary.seniors;
-
-    summary.company = Math.max(
-      0,
-      Math.round((Number(pack.objectTotal ?? 0) - totalPaid) * 100) / 100,
+  for (const payload of approvedPayloads) {
+    const brigadierSet = new Set(
+      (payload.brigadierEmployeeIds ?? []).map(String),
     );
 
-    roleSummaryByObject.set(objectId, summary);
-    companyByObject.set(objectId, summary.company);
+    const seniorSet = new Set(
+      (payload.seniorEmployeeIds ?? []).map(String),
+    );
+
+    for (const pack of payload.salaryPacks ?? []) {
+      const objectId = String(pack.objectId ?? "");
+      if (!objectId) continue;
+
+      addToMap(moneyByObject, objectId, Number(pack.objectTotal ?? 0));
+
+      const summary = roleSummaryByObject.get(objectId) ?? {
+        workers: 0,
+        brigadiers: 0,
+        seniors: 0,
+        company: 0,
+      };
+
+      let eventTotalPaid = 0;
+      let eventWorkers = 0;
+      let eventBrigadiers = 0;
+      let eventSeniors = 0;
+
+      for (const r of pack.rows ?? []) {
+        const empId = String(r.employeeId ?? "");
+        const pay = Number(r.pay ?? 0);
+
+        if (!empId) continue;
+
+        addToMap(payByObjectEmp, `${objectId}||${empId}`, pay);
+
+        eventTotalPaid += pay;
+        if (brigadierSet.has(empId)) eventBrigadiers += pay;
+        else if (seniorSet.has(empId)) eventSeniors += pay;
+        else eventWorkers += pay;
+      }
+
+      summary.workers = Math.round((summary.workers + eventWorkers) * 100) / 100;
+      summary.brigadiers = Math.round((summary.brigadiers + eventBrigadiers) * 100) / 100;
+      summary.seniors = Math.round((summary.seniors + eventSeniors) * 100) / 100;
+      summary.company = Math.round(
+        (summary.company + Math.max(0, Number(pack.objectTotal ?? 0) - eventTotalPaid)) * 100,
+      ) / 100;
+
+      roleSummaryByObject.set(objectId, summary);
+      companyByObject.set(objectId, summary.company);
+    }
   }
 
   auditStatsSource("PAY_MAP", {
     date,
     foremanTgId,
     source: "ROAD_END.salaryPacks",
-    resolvedEventId: payload.__eventId ?? "",
-    refEventId: payload.__refEventId ?? "",
-    status: payload.__status ?? "",
-    type: payload.__type ?? "",
-    resolvedFrom: payload.__resolvedFrom ?? "",
+    resolvedEventId: approvedPayloads.map((p) => p.__eventId).join(","),
+    refEventId: approvedPayloads.map((p) => p.__refEventId).filter(Boolean).join(","),
+    status: approvedPayloads.map((p) => p.__status).join(","),
+    type: "ROAD_END",
+    resolvedFrom: "approved",
     objects: moneyByObject.size,
     totalEarnings: [...payByObjectEmp.values()].reduce((a, v) => a + Number(v ?? 0), 0),
   });
@@ -770,13 +847,16 @@ async function buildObjectView(params: {
   const day = await buildRoadDayStats({ date, foremanTgId });
   const obj = day.objects[objectId];
 
-const payload = await getLatestRoadEndPayload({ date, foremanTgId });
-const payloadPack = (payload?.payrollPacks ?? []).find(
-  (p: any) => String(p.objectId) === String(objectId),
+const payloads = await getResolvedRoadEndPayloads({ date, foremanTgId });
+const objectPayloads = payloadsForObject(payloads, objectId);
+const payloadPackRows = objectPayloads.flatMap((payload) =>
+  (payload?.payrollPacks ?? [])
+    .filter((p: any) => String(p.objectId) === String(objectId))
+    .flatMap((p: any) => p.rows ?? []),
 );
 
-const peopleLines = payloadPack?.rows?.length
-  ? payloadPack.rows
+const peopleLines = payloadPackRows.length
+  ? payloadPackRows
       .map(
         (r: any) =>
           `• ${mdEscapeSimple(String(r.employeeName ?? empName(st, r.employeeId)))}: *${fmtNum(r.hours)} год*`,
@@ -791,32 +871,69 @@ const peopleLines = payloadPack?.rows?.length
     (obj?.carIds ?? []).map((cid) => `• ${mdEscapeSimple(carName(st, cid))}`).join("\n") || "—";
 
   const checklistStatus = await getObjectStatusSafe(date, objectId, foremanTgId);
-const displayDayStatus = checklistStatus || String(obj?.statusDay ?? "—");
+const objectApproved = objectPayloads.some((payload) => isApprovedStatus(payload?.__status));
+const displayDayStatus = objectApproved ? "ЗАТВЕРДЖЕНО" : checklistStatus || String(obj?.statusDay ?? "—");
+const displayNowStatus = objectApproved ? "ДЕНЬ ЗАВЕРШЕНО" : String(obj?.statusNow || "—");
 
 const canShowMoney =
   isApprovedStatus(checklistStatus) ||
   isApprovedStatus(obj?.statusDay) ||
-  isApprovedStatus(payload?.__status);
+  objectApproved;
 
 const payMap = await buildStatsPayMap({ date, foremanTgId });
 const totalAmount = payMap.moneyByObject.get(String(objectId)) ?? 0;
+const workRowsForObject = objectPayloads
+  .flatMap((payload) => payload.workMoneyRows ?? [])
+  .filter((row: any) => String(row.objectId ?? "") === String(objectId));
+const workByKey = new Map<string, { name: string; unit: string; qty: number; amount: number }>();
+
+for (const row of workRowsForObject) {
+  const workId = String(row.workId ?? row.workName ?? "").trim();
+  const key = workId || String(row.workName ?? "");
+  if (!key) continue;
+  const cur = workByKey.get(key) ?? {
+    name: String(row.workName ?? workId),
+    unit: String(row.unit ?? "").trim(),
+    qty: 0,
+    amount: 0,
+  };
+  cur.qty += Number(row.qty ?? 0);
+  cur.amount += Number(row.amount ?? 0);
+  workByKey.set(key, cur);
+}
+
+const workLines =
+  [...workByKey.values()]
+    .map((row) => {
+      const qty = Math.round(Number(row.qty ?? 0) * 100) / 100;
+      return `• ${mdEscapeSimple(row.name)}: *${fmtNum(qty)} ${mdEscapeSimple(row.unit)}*`;
+    })
+    .join("\n") || "—";
 
 auditStatsSource("OBJECT_VIEW", {
   date,
   foremanTgId,
   objectId,
-  eventId: payload?.__eventId ?? "",
-  refEventId: payload?.__refEventId ?? "",
-  status: payload?.__status ?? "",
-  type: payload?.__type ?? "",
-  source: payload?.__resolvedFrom ?? "live_events",
-  resolvedFinalEvent: payload?.__eventId ?? "",
+  objectName: objectName(st, objectId),
+  sourceEventsCount: day.events.filter((ev: any) => String(ev.objectId ?? "") === String(objectId)).length,
+  approvedRoadEventsForObject: objectPayloads.filter((payload) => isApprovedStatus(payload?.__status)).map((p) => p.__eventId),
+  eventId: objectPayloads.map((p) => p.__eventId).join(","),
+  refEventId: objectPayloads.map((p) => p.__refEventId).filter(Boolean).join(","),
+  status: objectPayloads.map((p) => p.__status).join(","),
+  type: "ROAD_END",
+  source: objectPayloads.length ? "resolved_road_end" : "live_events",
+  resolvedFinalEvent: objectPayloads.map((p) => p.__eventId).join(","),
   currentPhase: st.phase,
   currentObject: objectId,
   currentCar: obj?.lastCarId ?? "",
   currentEarnings: totalAmount,
-  statusNow: obj?.statusNow ?? "",
+  statusNow: displayNowStatus,
   statusDay: displayDayStatus,
+  activePeople: obj?.presentEmployeeIds ?? [],
+  workingPeople: obj?.workingEmployeeIds ?? [],
+  workRowsCount: workRowsForObject.length,
+  workTotal: totalAmount,
+  salaryRowsCount: [...payMap.payByObjectEmp.keys()].filter((key) => key.startsWith(`${objectId}||`)).length,
 });
 
 const payLines =
@@ -864,10 +981,11 @@ const text =
   `Обʼєкт: *${mdEscapeSimple(objectName(st, objectId))}*\n` +
   `📅 ${mdEscapeSimple(date)}\n` +
   `Статус дня: *${mdEscapeSimple(displayDayStatus)}*\n` +
-  `Статус зараз: *${mdEscapeSimple(obj?.statusNow || "—")}*\n\n` +
+  `Статус зараз: *${mdEscapeSimple(displayNowStatus)}*\n\n` +
   `🚗 Машини:\n${carLines}\n\n` +
   `👥 Зараз на обʼєкті:\n${presentLines}\n\n` +
   `🧱 Зараз працюють:\n${workingLines}\n\n` +
+  `📏 Роботи / обсяги:\n${workLines}\n\n` +
   `⏱ Люди / години:\n${peopleLines}\n\n` +
   (
     canShowMoney
@@ -902,23 +1020,32 @@ async function buildPersonView(params: {
   const day = await buildRoadDayStats({ date, foremanTgId });
   const emp = day.employees[employeeId];
 
-const payload = await getLatestRoadEndPayload({ date, foremanTgId });
+const payloads = await getResolvedRoadEndPayloads({ date, foremanTgId });
+const employeePayloads = payloadsForEmployee(payloads, employeeId);
+const employeeHoursByObject = new Map<string, { objectName: string; hours: number }>();
 
-const payloadObjRows = (payload?.payrollPacks ?? [])
-  .map((p: any) => {
-    const row = (p.rows ?? []).find(
-      (r: any) => String(r.employeeId) === String(employeeId),
-    );
+for (const payload of employeePayloads) {
+  for (const pack of payload?.payrollPacks ?? []) {
+    const objectId = String(pack.objectId ?? "");
+    if (!objectId) continue;
 
-    if (!row) return null;
+    for (const row of pack.rows ?? []) {
+      if (String(row.employeeId ?? "") !== String(employeeId)) continue;
+      const cur = employeeHoursByObject.get(objectId) ?? {
+        objectName: String(pack.objectName ?? getPayloadObjectName(payload, objectId, st)),
+        hours: 0,
+      };
+      cur.hours += Number(row.hours ?? 0);
+      employeeHoursByObject.set(objectId, cur);
+    }
+  }
+}
 
-    return {
-      objectId: String(p.objectId),
-      objectName: String(p.objectName ?? objectName(st, p.objectId)),
-      hours: Number(row.hours ?? 0),
-    };
-  })
-  .filter(Boolean);
+const payloadObjRows = [...employeeHoursByObject.entries()].map(([objectId, row]) => ({
+  objectId,
+  objectName: row.objectName,
+  hours: Math.round(row.hours * 100) / 100,
+}));
 
 const objLines = payloadObjRows.length
   ? payloadObjRows
@@ -932,7 +1059,7 @@ const objLines = payloadObjRows.length
       .map(([oid, sec]) => `• ${mdEscapeSimple(objectName(st, oid))}: *${(Number(sec) / 3600).toFixed(2)} год*`)
       .join("\n") || "—";
 
-const payloadApproved = isApprovedStatus(payload?.__status);
+const payloadApproved = employeePayloads.some((payload) => isApprovedStatus(payload?.__status));
 
 const allApproved =
   payloadApproved ||
@@ -953,12 +1080,27 @@ auditStatsSource("PERSON_VIEW", {
   date,
   foremanTgId,
   employeeId,
-  eventId: payload?.__eventId ?? "",
-  refEventId: payload?.__refEventId ?? "",
-  status: payload?.__status ?? "",
-  type: payload?.__type ?? "",
-  source: payload?.__resolvedFrom ?? "live_events",
-  resolvedFinalEvent: payload?.__eventId ?? "",
+  employeeName: empName(st, employeeId),
+  sourceEventsCount: day.events.filter((ev: any) => {
+    const ids = String(ev.employeeIds ?? "").split(",").map((x: string) => x.trim());
+    return ids.includes(String(employeeId));
+  }).length,
+  lastRelevantEventId: (emp as any)?.lastEventId ?? "",
+  lastRelevantEventType: emp?.lastEventType ?? "",
+  resolvedObjectId: emp?.whereNowObjectId ?? "",
+  resolvedObjectName: emp?.whereNowObjectId ? objectName(st, emp.whereNowObjectId) : "",
+  resolvedCarId: emp?.whereNowCarId ?? "",
+  resolvedCarName: emp?.whereNowCarId ? carName(st, emp.whereNowCarId) : "",
+  approvedRoadEventsForEmployee: employeePayloads.filter((payload) => isApprovedStatus(payload?.__status)).map((p) => p.__eventId),
+  salaryRowsCount: [...payMap.payByObjectEmp.keys()].filter((key) => key.endsWith(`||${employeeId}`)).length,
+  salaryTotal: totalAmount,
+  worksByObject: payloadObjRows.map((r: any) => ({ objectId: r.objectId, hours: r.hours })),
+  eventId: employeePayloads.map((p) => p.__eventId).join(","),
+  refEventId: employeePayloads.map((p) => p.__refEventId).filter(Boolean).join(","),
+  status: employeePayloads.map((p) => p.__status).join(","),
+  type: "ROAD_END",
+  source: employeePayloads.length ? "resolved_road_end" : "live_events",
+  resolvedFinalEvent: employeePayloads.map((p) => p.__eventId).join(","),
   currentPhase: st.phase,
   currentObject: emp?.whereNowObjectId ?? "",
   currentCar: emp?.whereNowCarId ?? "",
