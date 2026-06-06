@@ -17,10 +17,11 @@ import { loadSheet, getCell } from "../src/google/sheets/core.js";
 import { SHEET_NAMES } from "../src/google/sheets/names.js";
 import {
   ALLOWANCES_HEADERS,
+  EVENTS_HEADERS,
   ODOMETER_HEADERS,
   TIMESHEET_HEADERS,
 } from "../src/google/sheets/headers.js";
-import { fetchEvents, getEventById } from "../src/google/sheets/working.js";
+import { fetchEvents } from "../src/google/sheets/working.js";
 
 type FakeMessage = TelegramBot.Message & {
   reply_markup?: TelegramBot.SendMessageOptions["reply_markup"];
@@ -172,6 +173,10 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function hasTestMark(row: Record<string, unknown>) {
   return Object.values(row).some((v) => String(v ?? "").toUpperCase().includes("TEST"));
 }
@@ -232,6 +237,12 @@ function stateOf(foremanTgId: number) {
   const session = ensureSession(foremanTgId);
   const root = getFlowState<Record<number, any>>(session, FLOW) ?? {};
   return root[foremanTgId];
+}
+
+async function readEventStatusUncached(eventId: string) {
+  const sh = await loadSheet(SHEET_NAMES.events);
+  const row = sh.data.find((r) => getCell(r, sh.map, EVENTS_HEADERS.eventId) === eventId);
+  return row ? getCell(row, sh.map, EVENTS_HEADERS.status) : "";
 }
 
 async function verifyStep(foremanTgId: number, label: StepLabel, predicate: (st: any) => boolean, hint: string) {
@@ -359,11 +370,23 @@ async function main() {
   await click(cb.START_WORK_ON_OBJ);
   await verifyStep(foremanTgId, "START_WORK", (st) => st?.phase === "WORKING_AT_OBJECT" && st?.objects?.[String(object.id)]?.open?.length > 0, "роботу на об'єкті не стартовано");
 
-  await click(`${cb.STOP_WORK}${employee.id}||${work.id}`);
-  await pendingText("1");
-  await verifyStep(foremanTgId, "STOP_WORK", (st) => (st?.objects?.[String(object.id)]?.open ?? []).length === 0, "роботу не зупинено");
+  await sleep(1200);
+  await click(`${cb.STOP_OBJ_WORK}${object.id}`);
+  await click(`${cb.BULK_QTY_ADJ}${work.id}:1`);
+  await click(cb.BULK_QTY_SAVE);
+  await click(cb.BULK_COEF_DISC_SAVE);
+  await click(cb.BULK_COEF_PROD_SAVE);
+  await verifyStep(
+    foremanTgId,
+    "STOP_WORK",
+    (st) =>
+      st?.phase === "PAUSED_AT_OBJECT" &&
+      st?.step === "AT_OBJECT_MENU" &&
+      (st?.objects?.[String(object.id)]?.open ?? []).length === 0 &&
+      !st?.pendingBulkQty,
+    "роботи об'єкта не завершено через bulk stop",
+  );
 
-  await click(`${cb.BACK}at_obj`);
   await click(cb.FINISH_DAY);
   await click(cb.RETURN_PICK_OBJECT);
   await click(`${cb.RETURN_OBJ}${object.id}`);
@@ -388,18 +411,16 @@ async function main() {
   if (!adminButton) fail("ADMIN_APPROVE: адміну не надіслано кнопку approve.");
   await click(adminButton.data, adminTgId, adminTgId, adminButton.messageId);
 
-  const approvedEvent = await getEventById(eventId);
-  if (String(approvedEvent?.status) !== "ЗАТВЕРДЖЕНО") {
-    fail(`ADMIN_APPROVE: подія ${eventId} не затверджена, status=${approvedEvent?.status ?? "null"}`);
+  const approvedStatus = await readEventStatusUncached(eventId);
+  if (approvedStatus !== "ЗАТВЕРДЖЕНО") {
+    fail(`ADMIN_APPROVE: подія ${eventId} не затверджена, status=${approvedStatus || "null"}`);
   }
   pass("ADMIN_APPROVE");
 
   const eventRows = await fetchEvents({ date: savedState.date, foremanTgId });
-  const testEvents = eventRows.filter((e) => {
-    const blob = `${e.carId} ${e.objectId} ${e.employeeIds} ${e.payload}`.toUpperCase();
-    return blob.includes("TEST") || String(e.eventId) === eventId;
-  });
-  if (!testEvents.some((e) => e.type === "ROAD_END") || !testEvents.some((e) => e.type === "RTS_SAVE")) {
+  const hasRoadEnd = eventRows.some((e) => String(e.eventId) === eventId && e.type === "ROAD_END");
+  const hasRtsSave = eventRows.some((e) => e.type === "RTS_SAVE" && String(e.carId) === String(car.id));
+  if (!hasRoadEnd || !hasRtsSave) {
     fail("SHEETS_EVENTS: не знайдено ROAD_END/RTS_SAVE для TEST сценарію.");
   }
   pass("SHEETS_EVENTS");
