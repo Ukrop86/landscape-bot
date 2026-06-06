@@ -3,6 +3,7 @@ import { TEXTS } from "../texts.js";
 import type { State } from "./roadTimesheet.types.js";
 import { cb } from "./roadTimesheet.cb.js";
 import { canStartDay } from "./roadTimesheet.guards.js";
+import { getObjectAddressGroups, getPeopleBrigadeGroups } from "./roadTimesheet.domain.js";
 import { fmtNum, joinEmpNames } from "./roadTimesheet.utils.js";
 
 export type RenderContext = {
@@ -189,63 +190,82 @@ export function renderOdoStartScreen(ctx: RenderContext) {
 
 export function renderPickPeopleScreen(ctx: RenderContext) {
   const { x, busyByEmployeeId } = ctx;
-  const emps = x.employees ?? [];
-  const slice = emps.slice(0, 40);
   const inCar = new Set(x.inCarIds);
-const rows: TelegramBot.InlineKeyboardButton[][] = slice.map((e) => {
-  const busy = busyByEmployeeId.get(String(e.id));
-  const isMine = inCar.has(e.id);
+  const groups = getPeopleBrigadeGroups(x);
+  const activeBrigadeId = String((x as any).activePeopleBrigadeId ?? "").trim();
+  const activeGroup = activeBrigadeId
+    ? groups.find((g) => g.id === activeBrigadeId)
+    : undefined;
 
-  const label = isMine
-    ? `✅ ${e.name}`
-    : busy
-      ? `🔒 ${e.name} — ${busy.foremanName}`
-      : `▫️ ${e.name}`;
+  if (activeGroup) {
+    const rows: TelegramBot.InlineKeyboardButton[][] = [];
+    const selectedCount = activeGroup.employees.filter((e) => inCar.has(String(e.id))).length;
 
-  return [
-    {
-      text: label.slice(0, 60),
-      callback_data: `${cb.EMP_TOGGLE}${e.id}`,
-    },
-  ];
-});
-
-  rows.push([{ text: "✅ Готово", callback_data: cb.PEOPLE_DONE }]);
-  rows.push([
-    { text: TEXTS.ui.buttons.back, callback_data: `${cb.BACK}start` },
-  ]);
-  rows.push([{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }]);
-  return {
-    text:
-      `👥 Люди в машині\n\n` +
-      `Зараз: ${joinEmpNames(x, x.inCarIds)}\n\n` +
-      `Натискай щоб додати/прибрати.`,
-    kb: { inline_keyboard: rows },
-  };
-}
-
-export function renderPickObjectsScreen(ctx: RenderContext) {
-  const { x, date } = ctx;
-  const objs = x.objectsMeta ?? [];
-  const slice = objs.slice(0, 30);
-  const picked = new Set(x.plannedObjectIds);
-  const rows: TelegramBot.InlineKeyboardButton[][] = slice.map((o) => [
-    {
-      text: `${picked.has(o.id) ? "✅ " : "▫️ "}${o.name}`.slice(
-        0,
-        60,
-      ),
-      callback_data: `${cb.OBJ_TOGGLE}${o.id}`,
-    },
-  ]);
-  rows.push([{ text: "✅ Готово", callback_data: cb.OBJECTS_DONE }]);
-  if (canStartDay(x)) {
     rows.push([
       {
-        text: TEXTS.roadFlow.buttons.startDay,
-        callback_data: cb.START_DAY,
+        text: "✅ Вибрати всіх",
+        callback_data: `${cb.PEOPLE_GROUP_SELECT_ALL}${encodeURIComponent(activeGroup.id)}`,
       },
     ]);
+    rows.push([
+      {
+        text: "❌ Зняти всіх",
+        callback_data: `${cb.PEOPLE_GROUP_CLEAR_ALL}${encodeURIComponent(activeGroup.id)}`,
+      },
+    ]);
+
+    for (const e of activeGroup.employees.slice(0, 45)) {
+      const busy = busyByEmployeeId.get(String(e.id));
+      const isMine = inCar.has(String(e.id));
+      const label = isMine
+        ? `☑️ ${e.name}`
+        : busy
+          ? `🔒 ${e.name} — ${busy.foremanName}`
+          : `☐ ${e.name}`;
+
+      rows.push([
+        {
+          text: label.slice(0, 60),
+          callback_data: `${cb.PEOPLE_TOGGLE}${e.id}`,
+        },
+      ]);
+    }
+
+    rows.push([{ text: "⬅️ Назад до бригад", callback_data: cb.PEOPLE_GROUPS_BACK }]);
+    if (x.inCarIds.length > 0) {
+      rows.push([{ text: "➡️ Продовжити", callback_data: cb.PEOPLE_DONE }]);
+    }
+    rows.push([{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }]);
+
+    return {
+      text:
+        `👥 ${activeGroup.title}\n` +
+        `Вибрано: ${selectedCount}/${activeGroup.employees.length}`,
+      kb: { inline_keyboard: rows },
+    };
+  }
+
+  const iconFor = (title: string) => {
+    const s = title.toLowerCase();
+    if (s.includes("полив")) return "🚿";
+    if (s.includes("благо")) return "🏡";
+    if (s.includes("агр")) return "🌱";
+    if (s.includes("догляд")) return "🌿";
+    return "👥";
+  };
+
+  const rows: TelegramBot.InlineKeyboardButton[][] = groups.map((g) => {
+    const selected = g.employees.filter((e) => inCar.has(String(e.id))).length;
+    return [
+      {
+        text: `${iconFor(g.title)} ${g.title} (${selected}/${g.employees.length})`.slice(0, 60),
+        callback_data: `${cb.PEOPLE_GROUP_OPEN}${encodeURIComponent(g.id)}`,
+      },
+    ];
+  });
+
+  if (x.inCarIds.length > 0) {
+    rows.push([{ text: "➡️ Продовжити", callback_data: cb.PEOPLE_DONE }]);
   }
   rows.push([
     { text: TEXTS.ui.buttons.back, callback_data: `${cb.BACK}start` },
@@ -254,10 +274,86 @@ export function renderPickObjectsScreen(ctx: RenderContext) {
 
   return {
     text:
-      `🏗 Обʼєкти\n\n` +
+      `👥 Виберіть бригаду\n\n` +
+      `Зараз в машині: ${joinEmpNames(x, x.inCarIds)}`,
+    kb: { inline_keyboard: rows },
+  };
+}
+
+export function renderPickObjectsScreen(ctx: RenderContext) {
+  const { x, date } = ctx;
+  const picked = new Set(x.plannedObjectIds);
+  const groups = getObjectAddressGroups(x);
+  const activeGroupId = String((x as any).activeObjectAddressGroupId ?? "").trim();
+  const activeGroup = activeGroupId
+    ? groups.find((g) => g.id === activeGroupId)
+    : undefined;
+
+  if (activeGroup) {
+    const selectedCount = activeGroup.objects.filter((o) => picked.has(String(o.id))).length;
+    const rows: TelegramBot.InlineKeyboardButton[][] = [
+      [
+        {
+          text: "✅ Вибрати всі",
+          callback_data: `${cb.OBJECT_GROUP_SELECT_ALL}${encodeURIComponent(activeGroup.id)}`,
+        },
+      ],
+      [
+        {
+          text: "❌ Зняти всі",
+          callback_data: `${cb.OBJECT_GROUP_CLEAR_ALL}${encodeURIComponent(activeGroup.id)}`,
+        },
+      ],
+    ];
+
+    for (const o of activeGroup.objects.slice(0, 45)) {
+      rows.push([
+        {
+          text: `${picked.has(String(o.id)) ? "☑️ " : "☐ "}${o.name}`.slice(0, 60),
+          callback_data: `${cb.OBJECT_TOGGLE}${o.id}`,
+        },
+      ]);
+    }
+
+    rows.push([{ text: "⬅️ Назад до адрес", callback_data: cb.OBJECT_GROUPS_BACK }]);
+    if (x.plannedObjectIds.length > 0) {
+      rows.push([{ text: "➡️ Продовжити", callback_data: cb.OBJECTS_DONE }]);
+    }
+    rows.push([{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }]);
+
+    return {
+      text:
+        `📍 ${activeGroup.title}\n` +
+        `Вибрано: ${selectedCount}/${activeGroup.objects.length}`,
+      kb: { inline_keyboard: rows },
+    };
+  }
+
+  const rows: TelegramBot.InlineKeyboardButton[][] = groups.map((g) => {
+    const selected = g.objects.filter((o) => picked.has(String(o.id))).length;
+    const icon = g.title === "Без адреси" ? "📍" : "🏙";
+
+    return [
+      {
+        text: `${icon} ${g.title} (${selected}/${g.objects.length})`.slice(0, 60),
+        callback_data: `${cb.OBJECT_GROUP_OPEN}${encodeURIComponent(g.id)}`,
+      },
+    ];
+  });
+
+  if (x.plannedObjectIds.length > 0) {
+    rows.push([{ text: "➡️ Продовжити", callback_data: cb.OBJECTS_DONE }]);
+  }
+  rows.push([
+    { text: TEXTS.ui.buttons.back, callback_data: `${cb.BACK}start` },
+  ]);
+  rows.push([{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }]);
+
+  return {
+    text:
+      `📍 Виберіть місто / адресу\n\n` +
       `📅 ${date}\n` +
-      `Обрано: ${x.plannedObjectIds.length}\n\n` +
-      `Натискай щоб додати/прибрати.`,
+      `Обрано: ${x.plannedObjectIds.length}`,
     kb: { inline_keyboard: rows },
   };
 }

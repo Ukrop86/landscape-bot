@@ -13,6 +13,11 @@ export const cb = {
 
   PICK_PEOPLE: `${PREFIX}pick_people`,
   EMP_TOGGLE: `${PREFIX}emp_toggle:`,
+  PEOPLE_GROUP_OPEN: `${PREFIX}people_group:`,
+  PEOPLE_GROUP_SELECT_ALL: `${PREFIX}people_group_all:`,
+  PEOPLE_GROUP_CLEAR_ALL: `${PREFIX}people_group_clear:`,
+  PEOPLE_TOGGLE: `${PREFIX}people_toggle:`,
+  PEOPLE_GROUPS_BACK: `${PREFIX}people_groups_back`,
   PEOPLE_DONE: `${PREFIX}people_done`,
 
   REGISTER_ADMIN: "reg:admin:",
@@ -43,6 +48,11 @@ export const cb = {
 
   PICK_OBJECTS: `${PREFIX}pick_objs`,
   OBJ_TOGGLE: `${PREFIX}obj_toggle:`,
+  OBJECT_GROUP_OPEN: `${PREFIX}object_group:`,
+  OBJECT_GROUP_SELECT_ALL: `${PREFIX}object_group_all:`,
+  OBJECT_GROUP_CLEAR_ALL: `${PREFIX}object_group_clear:`,
+  OBJECT_TOGGLE: `${PREFIX}object_toggle:`,
+  OBJECT_GROUPS_BACK: `${PREFIX}object_groups_back`,
   OBJECTS_DONE: `${PREFIX}objs_done`,
   
 

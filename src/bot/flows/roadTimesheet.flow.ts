@@ -14,6 +14,8 @@ import type {  Step,  SalaryPack,  RoadMember,  State,  PayrollEmpRow,  PayrollO
 import { buildSalaryPacksWithRoles } from "./roadTimesheet.payroll.js";
 import {
   buildSelectedCategoriesText,
+  getObjectAddressGroups,
+  getPeopleBrigadeGroups,
   getActiveWorks,
   getWorkCategories,
   isLocked,
@@ -2714,6 +2716,7 @@ if (data === cb.SKIP_ODO_START_PHOTO) {
 }
 
     if (data === cb.PICK_PEOPLE) {
+      delete (st as any).activePeopleBrigadeId;
       st.step = "PICK_PEOPLE";
       root[foremanTgId] = st;
 setFlowState(s, FLOW, root);
@@ -2721,8 +2724,154 @@ setFlowState(s, FLOW, root);
       return true;
     }
 
-if (data.startsWith(cb.EMP_TOGGLE)) {
-  const empId = data.slice(cb.EMP_TOGGLE.length);
+const decodePeopleBrigadeId = (raw: string) => {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+};
+
+if (data.startsWith(cb.PEOPLE_GROUP_OPEN)) {
+  const brigadeId = decodePeopleBrigadeId(data.slice(cb.PEOPLE_GROUP_OPEN.length));
+  const groups = getPeopleBrigadeGroups(st);
+  const found = groups.find((g) => g.id === brigadeId);
+
+  if (!found) {
+    await bot.answerCallbackQuery(q.id, {
+      text: "⚠️ Бригаду не знайдено",
+      show_alert: true,
+    });
+    return true;
+  }
+
+  (st as any).activePeopleBrigadeId = brigadeId;
+  st.step = "PICK_PEOPLE";
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
+
+if (data === cb.PEOPLE_GROUPS_BACK) {
+  delete (st as any).activePeopleBrigadeId;
+  st.step = "PICK_PEOPLE";
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
+
+if (data.startsWith(cb.PEOPLE_GROUP_SELECT_ALL)) {
+  const brigadeId = decodePeopleBrigadeId(data.slice(cb.PEOPLE_GROUP_SELECT_ALL.length));
+  const group = getPeopleBrigadeGroups(st).find((g) => g.id === brigadeId);
+  if (!group) return (gate("Бригаду не знайдено."), true);
+
+  const skipped: string[] = [];
+  const ts = now();
+
+  for (const e of group.employees) {
+    const empId = String(e.id);
+    if (!empId || st.inCarIds.includes(empId)) continue;
+
+    const owner = await findEmployeeBusyByAnotherForeman({
+      date,
+      employeeId: empId,
+      selfForemanTgId: foremanTgId,
+    });
+
+    if (owner) {
+      skipped.push(String(e.name));
+      continue;
+    }
+
+    st.inCarIds = uniq([...st.inCarIds, empId]);
+    st.members.push({ employeeId: empId, joinedAt: ts });
+    applyReturnedEditPersonChange(
+      st,
+      st.activeObjectId || st.arrivedObjectId || "",
+      empId,
+      "ADD",
+    );
+
+    await writeEvent({
+      bot,
+      chatId,
+      msgId,
+      date,
+      foremanTgId,
+      carId: st.carId ?? "",
+      type: "RTS_PICK_UP",
+      employeeIds: [empId],
+      payload: { at: ts, phase: st.phase, from: "PICK_PEOPLE_GROUP_SELECT_ALL" },
+    });
+  }
+
+  if (skipped.length) {
+    await bot.answerCallbackQuery(q.id, {
+      text: `Не додано зайнятих: ${skipped.length}`,
+      show_alert: false,
+    }).catch(() => {});
+  }
+
+  (st as any).activePeopleBrigadeId = brigadeId;
+  st.step = "PICK_PEOPLE";
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
+
+if (data.startsWith(cb.PEOPLE_GROUP_CLEAR_ALL)) {
+  const brigadeId = decodePeopleBrigadeId(data.slice(cb.PEOPLE_GROUP_CLEAR_ALL.length));
+  const group = getPeopleBrigadeGroups(st).find((g) => g.id === brigadeId);
+  if (!group) return (gate("Бригаду не знайдено."), true);
+
+  const ts = now();
+
+  for (const e of group.employees) {
+    const empId = String(e.id);
+    if (!empId || !st.inCarIds.includes(empId)) continue;
+
+    st.inCarIds = st.inCarIds.filter((x) => x !== empId);
+
+    const lastOpen = [...st.members]
+      .reverse()
+      .find((m) => m.employeeId === empId && !m.leftAt);
+    if (lastOpen) lastOpen.leftAt = ts;
+
+    applyReturnedEditPersonChange(
+      st,
+      st.activeObjectId || st.arrivedObjectId || "",
+      empId,
+      "REMOVE",
+    );
+
+    await writeEvent({
+      bot,
+      chatId,
+      msgId,
+      date,
+      foremanTgId,
+      carId: st.carId ?? "",
+      type: "RTS_DROP_OFF",
+      employeeIds: [empId],
+      payload: { at: ts, phase: st.phase, from: "PICK_PEOPLE_GROUP_CLEAR_ALL" },
+    });
+  }
+
+  (st as any).activePeopleBrigadeId = brigadeId;
+  st.step = "PICK_PEOPLE";
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
+
+if (data.startsWith(cb.EMP_TOGGLE) || data.startsWith(cb.PEOPLE_TOGGLE)) {
+  const empId = data.startsWith(cb.PEOPLE_TOGGLE)
+    ? data.slice(cb.PEOPLE_TOGGLE.length)
+    : data.slice(cb.EMP_TOGGLE.length);
   if (!empId) return true;
 
   const has = st.inCarIds.includes(empId);
@@ -2802,6 +2951,14 @@ setFlowState(s, FLOW, root);
     }
 
     if (data === cb.PEOPLE_DONE) {
+      if (!st.inCarIds?.length) {
+        await bot.answerCallbackQuery(q.id, {
+          text: "Спочатку вибери хоча б одного працівника",
+          show_alert: true,
+        });
+        return true;
+      }
+      delete (st as any).activePeopleBrigadeId;
       st.step = "START";
       root[foremanTgId] = st;
 setFlowState(s, FLOW, root);
@@ -2811,6 +2968,7 @@ setFlowState(s, FLOW, root);
 
     if (data === cb.PICK_OBJECTS || data === cb.ADD_OBJECTS) {
       if (!st.carId) return (gate(TEXTS.roadFlow.guards.needCar), true);
+      delete (st as any).activeObjectAddressGroupId;
       st.step = "PICK_OBJECTS";
       root[foremanTgId] = st;
 setFlowState(s, FLOW, root);
@@ -2818,8 +2976,105 @@ setFlowState(s, FLOW, root);
       return true;
     }
 
-    if (data.startsWith(cb.OBJ_TOGGLE)) {
-      const oid = data.slice(cb.OBJ_TOGGLE.length);
+const decodeObjectAddressGroupId = (raw: string) => {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+};
+
+if (data.startsWith(cb.OBJECT_GROUP_OPEN)) {
+  const groupId = decodeObjectAddressGroupId(data.slice(cb.OBJECT_GROUP_OPEN.length));
+  const group = getObjectAddressGroups(st).find((g) => g.id === groupId);
+
+  if (!group) {
+    await bot.answerCallbackQuery(q.id, {
+      text: "⚠️ Адресу не знайдено",
+      show_alert: true,
+    });
+    return true;
+  }
+
+  (st as any).activeObjectAddressGroupId = groupId;
+  st.step = "PICK_OBJECTS";
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
+
+if (data === cb.OBJECT_GROUPS_BACK) {
+  delete (st as any).activeObjectAddressGroupId;
+  st.step = "PICK_OBJECTS";
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
+
+if (data.startsWith(cb.OBJECT_GROUP_SELECT_ALL)) {
+  const groupId = decodeObjectAddressGroupId(data.slice(cb.OBJECT_GROUP_SELECT_ALL.length));
+  const group = getObjectAddressGroups(st).find((g) => g.id === groupId);
+  if (!group) return (gate("Адресу не знайдено."), true);
+
+  for (const o of group.objects) {
+    const oid = String(o.id);
+    if (!oid || st.plannedObjectIds.includes(oid)) continue;
+    st.plannedObjectIds = uniq([...st.plannedObjectIds, oid]);
+    ensureObjectState(st, oid);
+  }
+
+  await writeEvent({
+    bot,
+    chatId,
+    msgId,
+    date,
+    foremanTgId,
+    carId: st.carId ?? "",
+    type: "RTS_PLAN_OBJECTS",
+    payload: { plannedObjectIds: st.plannedObjectIds },
+  });
+
+  (st as any).activeObjectAddressGroupId = groupId;
+  st.step = "PICK_OBJECTS";
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
+
+if (data.startsWith(cb.OBJECT_GROUP_CLEAR_ALL)) {
+  const groupId = decodeObjectAddressGroupId(data.slice(cb.OBJECT_GROUP_CLEAR_ALL.length));
+  const group = getObjectAddressGroups(st).find((g) => g.id === groupId);
+  if (!group) return (gate("Адресу не знайдено."), true);
+
+  const ids = new Set(group.objects.map((o) => String(o.id)));
+  st.plannedObjectIds = st.plannedObjectIds.filter((oid) => !ids.has(String(oid)));
+
+  await writeEvent({
+    bot,
+    chatId,
+    msgId,
+    date,
+    foremanTgId,
+    carId: st.carId ?? "",
+    type: "RTS_PLAN_OBJECTS",
+    payload: { plannedObjectIds: st.plannedObjectIds },
+  });
+
+  (st as any).activeObjectAddressGroupId = groupId;
+  st.step = "PICK_OBJECTS";
+  root[foremanTgId] = st;
+  setFlowState(s, FLOW, root);
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
+
+    if (data.startsWith(cb.OBJ_TOGGLE) || data.startsWith(cb.OBJECT_TOGGLE)) {
+      const oid = data.startsWith(cb.OBJECT_TOGGLE)
+        ? data.slice(cb.OBJECT_TOGGLE.length)
+        : data.slice(cb.OBJ_TOGGLE.length);
       if (!oid) return true;
 
       const has = st.plannedObjectIds.includes(oid);
@@ -2846,6 +3101,14 @@ setFlowState(s, FLOW, root);
     }
 
     if (data === cb.OBJECTS_DONE) {
+      if (!st.plannedObjectIds?.length) {
+        await bot.answerCallbackQuery(q.id, {
+          text: "Спочатку вибери хоча б один обʼєкт",
+          show_alert: true,
+        });
+        return true;
+      }
+      delete (st as any).activeObjectAddressGroupId;
       st.step = "START";
       root[foremanTgId] = st;
 setFlowState(s, FLOW, root);

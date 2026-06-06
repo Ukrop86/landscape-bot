@@ -2,6 +2,7 @@ import type TelegramBot from "node-telegram-bot-api";
 import { getFlowState, setFlowState, todayISO } from "../core/helpers.js";
 import { fetchUsers } from "../../google/sheets/dictionaries.js";
 import { getEventById, updateEventById } from "../../google/sheets/working.js";
+import { appendAccountingReportForApprovedRoadEvent } from "../../google/sheets/accounting.js";
 import type { State } from "./roadTimesheet.types.js";
 import { cb, FLOW } from "./roadTimesheet.cb.js";
 import {
@@ -245,6 +246,17 @@ await bot.sendMessage(
     await updateEventById(eventId, {
       status: "ЗАТВЕРДЖЕНО",
       updatedAt: nowIso,
+    });
+
+    await appendAccountingReportForApprovedRoadEvent({
+      eventId: ev.eventId,
+      date: ev.date,
+      foremanTgId: ev.foremanTgId,
+      payload: ev.payload,
+    }).catch((e: any) => {
+      console.log(
+        `[accounting] failed eventId=${eventId}: ${e?.message ?? String(e)}`,
+      );
     });
 
     const targetForemanTgId = Number(ev.foremanTgId) || 0;

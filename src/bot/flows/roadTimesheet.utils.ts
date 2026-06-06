@@ -307,6 +307,9 @@ export async function ensureEmployees(st: State) {
     .map((e: any) => ({
       id: String(e.id ?? e.ID ?? e.employeeId ?? e["ID"] ?? "").trim(),
       name: String(e.name ?? e.NAME ?? e["ІМ'Я"] ?? e["ІМ'Я"] ?? "").trim(),
+      brigadeId: String(e.brigadeId ?? e.BRIGADE_ID ?? e["БРИГАДА_ID"] ?? "").trim(),
+      position: String(e.position ?? e.POSITION ?? e["ПОСАДА"] ?? "").trim(),
+      active: e.active,
     }))
     .filter((x: any) => x.id);
 }
@@ -331,6 +334,8 @@ export async function ensureObjectsMeta(st: State) {
     .map((o: any) => ({
       id: String(o.id ?? o.ID ?? o.objectId ?? o["ID"] ?? "").trim(),
       name: String(o.name ?? o.NAME ?? o.title ?? o["НАЗВА"] ?? o["НАЗВАНИЕ"] ?? "").trim(),
+      address: String(o.address ?? o.ADDRESS ?? o["АДРЕСА"] ?? "").trim(),
+      active: o.active,
     }))
     .filter((x: any) => x.id);
 }

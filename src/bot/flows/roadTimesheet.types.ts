@@ -72,8 +72,8 @@ export type RtsType =
   
   | "RTS_SAVE";  
 
-export type DictObject = { id: string; name: string };
-export type DictEmployee = { id: string; name: string };
+export type DictObject = { id: string; name: string; address?: string; active?: boolean };
+export type DictEmployee = { id: string; name: string; brigadeId?: string; position?: string; active?: boolean };
 export type DictWork = { id: string; name: string; unit: string; rate: number; category?: string; active: boolean };
 export type WorkItem = { workId: string; name: string; unit: string; rate: number };
 
@@ -162,9 +162,9 @@ export type State = FlowBaseState & {
   worksMeta?: DictWork[];
   qtyUnlocked?: boolean;
 
-  employees?: { id: string; name: string }[];
+  employees?: DictEmployee[];
   carsMeta?: { id: string; name: string }[];
-  objectsMeta?: { id: string; name: string }[];
+  objectsMeta?: DictObject[];
 
   uiMsgId?: number;
   activeEmployeeId?: string;
