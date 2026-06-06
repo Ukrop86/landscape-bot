@@ -10,6 +10,9 @@ export const PREFIX = "rts:" as const;
 export const cb = {
   MENU: `${PREFIX}menu`,
   BACK: `${PREFIX}back:`,
+  RESET_STATE: `${PREFIX}reset_state`,
+  RESET_STATE_CONFIRM: `${PREFIX}reset_state_confirm`,
+  RESET_STATE_CANCEL: `${PREFIX}reset_state_cancel`,
 
   PICK_PEOPLE: `${PREFIX}pick_people`,
   EMP_TOGGLE: `${PREFIX}emp_toggle:`,

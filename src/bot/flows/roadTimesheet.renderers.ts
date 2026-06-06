@@ -105,6 +105,7 @@ if (
   }
 }
 
+  rows.push([{ text: "🧹 Скинути поточний стан", callback_data: cb.RESET_STATE }]);
   rows.push([{ text: TEXTS.common.backToMenu, callback_data: cb.MENU }]);
   return {
     text:

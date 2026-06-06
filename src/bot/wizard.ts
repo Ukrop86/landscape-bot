@@ -5,7 +5,7 @@ import { hydrateAuth } from "./core/auth.js";
 import { fetchUsers, addUserToSheet, updateUserRow } from "../google/sheets/dictionaries.js";
 
 import { CB } from "./core/cb.js";
-import { ensureSession, resetSession } from "./core/session.js";
+import { ensureSession } from "./core/session.js";
 import type { FlowModule } from "./core/flowTypes.js";
 import { makeMenuMap, getModuleByFlow, routeByPrefix } from "./core/flowRegistry.js";
 
@@ -107,7 +107,10 @@ export async function onStart(bot: TelegramBot, msg: TelegramBot.Message) {
   const user = msg.from;
   if (!user) return;
 
-  resetSession(chatId);
+  const s = ensureSession(chatId);
+  s.mode = "MENU";
+  delete s.flow;
+  s.updatedAt = Date.now();
 
   const users = await fetchUsers();
 
@@ -118,7 +121,12 @@ export async function onStart(bot: TelegramBot, msg: TelegramBot.Message) {
     const active = String(me.active ?? "").trim().toUpperCase();
 
     if (active === "ТАК" || active === "TRUE" || active === "1") {
-      await sendWelcome(bot, chatId);
+      console.log("[BOT][START] keep existing session state", {
+        chatId,
+        tgId: user.id,
+        hasFlows: Boolean((s as any).flows && Object.keys((s as any).flows).length),
+      });
+      await showMainMenu(bot, chatId);
       return;
     }
 

@@ -1533,6 +1533,264 @@ function applyReturnedEditPersonChange(
 }
 
 
+function makeEmptyRoadState(foremanTgId: number): State {
+  return {
+    step: "START",
+    date: todayISO(),
+    phase: "SETUP",
+    plannedObjectIds: [],
+    objects: {},
+    inCarIds: [],
+    members: [],
+    driveActive: false,
+    returnActive: false,
+    qtyUnlocked: false,
+    foremanName: `Бригадир ${foremanTgId}`,
+  };
+}
+
+function eventTs(e: any) {
+  const ms = Date.parse(String(e?.ts ?? e?.updatedAt ?? ""));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function eventEmployeeIds(e: any, payload: any): string[] {
+  return uniq([
+    ...String(e?.employeeIds ?? "")
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean),
+    ...(Array.isArray(payload?.employeeIds)
+      ? payload.employeeIds.map((x: any) => String(x ?? "").trim()).filter(Boolean)
+      : []),
+    String(payload?.employeeId ?? "").trim(),
+  ].filter(Boolean));
+}
+
+function isApprovedRoadStatus(status: any) {
+  const s0 = String(status ?? "").trim().toUpperCase();
+  return s0 === "ЗАТВЕРДЖЕНО" || s0 === "ПІДТВЕРДЖЕНО";
+}
+
+async function restoreRoadStateFromEvents(params: {
+  foremanTgId: number;
+  skipRestore?: boolean;
+}) {
+  const { foremanTgId, skipRestore } = params;
+  const date = todayISO();
+
+  if (skipRestore) {
+    console.log("[RTS][RESTORE] skip because runtime reset flag is active", { date, foremanTgId });
+    return null;
+  }
+
+  const events = await fetchEvents({ date, foremanTgId } as any).catch((e: any) => {
+    console.warn("[RTS][RESTORE] fetch failed", { date, foremanTgId, error: e?.message ?? String(e) });
+    return [];
+  });
+
+  const rows = [...(events ?? [])].sort((a, b) => eventTs(a) - eventTs(b));
+  const approvedRoadEnds = rows.filter(
+    (e: any) => String(e.type ?? "") === "ROAD_END" && isApprovedRoadStatus(e.status),
+  );
+
+  console.log("[RTS][RESTORE] scan", {
+    date,
+    foremanTgId,
+    eventsCount: rows.length,
+    approvedRoadEnds: approvedRoadEnds.length,
+    lastEventId: rows[rows.length - 1]?.eventId ?? "",
+    lastType: rows[rows.length - 1]?.type ?? "",
+    lastStatus: rows[rows.length - 1]?.status ?? "",
+  });
+
+  if (!rows.length) {
+    console.log("[RTS][RESTORE] no active day found", { date, foremanTgId });
+    return null;
+  }
+
+  const st = makeEmptyRoadState(foremanTgId);
+
+  for (const e of rows) {
+    const type = String(e.type ?? "");
+    const payload = parsePayload(e.payload);
+    const oid = String(payload?.objectId ?? e.objectId ?? "").trim();
+    const carId = String(payload?.carId ?? e.carId ?? st.carId ?? "").trim();
+    const employeeIds = eventEmployeeIds(e, payload);
+
+    if (carId) st.carId = carId;
+
+    if (type === "RTS_SETUP_CAR") {
+      st.carId = String(payload?.carId ?? e.carId ?? "").trim() || undefined;
+    }
+
+    if (type === "RTS_ODO_START") {
+      const km = Number(payload?.odoStartKm ?? payload?.odoKm);
+      if (Number.isFinite(km)) st.odoStartKm = km;
+    }
+
+    if (type === "RTS_ODO_START_PHOTO") {
+      st.odoStartPhotoFileId = String(payload?.fileId ?? payload?.photoFileId ?? payload?.photo ?? "").trim() || st.odoStartPhotoFileId;
+    }
+
+    if (type === "RTS_PLAN_OBJECTS") {
+      const planned = Array.isArray(payload?.plannedObjectIds)
+        ? payload.plannedObjectIds.map((x: any) => String(x ?? "").trim()).filter(Boolean)
+        : [];
+      if (planned.length) {
+        st.plannedObjectIds = uniq(planned);
+        for (const id of st.plannedObjectIds) ensureObjectState(st, id);
+      }
+    }
+
+    if (type === "RTS_PLAN_WORKS" && oid) {
+      const obj = ensureObjectState(st, oid);
+      if (!st.plannedObjectIds.includes(oid)) st.plannedObjectIds.push(oid);
+      if (Array.isArray(payload?.works)) {
+        obj.works = payload.works
+          .map((w: any) => ({
+            workId: String(w.workId ?? w.id ?? "").trim(),
+            name: String(w.name ?? w.workName ?? w.workId ?? "").trim(),
+            unit: String(w.unit ?? "од.").trim(),
+            rate: Number(w.rate ?? w.tariff ?? 0),
+          }))
+          .filter((w: any) => w.workId);
+      }
+    }
+
+    if (type === "RTS_DRIVE_START" || type === "RTS_DRIVE_RESUME") {
+      st.driveActive = true;
+      st.returnActive = false;
+      st.phase = "DRIVE_DAY";
+      st.step = "RUN_DRIVE";
+      st.driveStartedAt = st.driveStartedAt ?? String(payload?.at ?? e.ts ?? "");
+    }
+
+    if (type === "RTS_DRIVE_PAUSE" || type === "RTS_ARRIVE_OBJECT") {
+      st.driveActive = false;
+      st.phase = "PAUSED_AT_OBJECT";
+      st.step = "AT_OBJECT_MENU";
+      if (oid) {
+        st.arrivedObjectId = oid;
+        ensureObjectState(st, oid);
+      }
+    }
+
+    if (type === "RTS_DROP_OFF" && oid) {
+      const obj = ensureObjectState(st, oid);
+      for (const empId of employeeIds) {
+        st.inCarIds = st.inCarIds.filter((id) => id !== empId);
+        if (!obj.leftOnObjectIds.includes(empId)) obj.leftOnObjectIds.push(empId);
+      }
+      st.arrivedObjectId = oid;
+      st.phase = "PAUSED_AT_OBJECT";
+      st.step = "AT_OBJECT_MENU";
+    }
+
+    if (type === "RTS_PICK_UP") {
+      if (oid) {
+        const obj = ensureObjectState(st, oid);
+        obj.leftOnObjectIds = obj.leftOnObjectIds.filter((id) => !employeeIds.includes(id));
+      }
+      for (const empId of employeeIds) {
+        if (!st.inCarIds.includes(empId)) st.inCarIds.push(empId);
+      }
+    }
+
+    if (type === "RTS_OBJ_WORK_START" && oid) {
+      const obj = ensureObjectState(st, oid);
+      const workId = String(payload?.workId ?? "").trim();
+      for (const empId of employeeIds) {
+        if (!obj.leftOnObjectIds.includes(empId)) obj.leftOnObjectIds.push(empId);
+        if (workId && !obj.open.some((x) => x.employeeId === empId && x.workId === workId && x.objectId === oid)) {
+          obj.open.push({
+            objectId: oid,
+            employeeId: empId,
+            workId,
+            startedAt: String(payload?.startedAt ?? e.ts ?? ""),
+          });
+        }
+      }
+      st.arrivedObjectId = oid;
+      st.phase = "WORKING_AT_OBJECT";
+      st.step = "AT_OBJECT_RUN";
+    }
+
+    if (type === "RTS_OBJ_WORK_STOP" && oid) {
+      const obj = ensureObjectState(st, oid);
+      const workId = String(payload?.workId ?? "").trim();
+      obj.open = obj.open.filter((x) => {
+        if (workId && x.workId !== workId) return true;
+        return !employeeIds.includes(x.employeeId);
+      });
+      st.qtyUnlocked = true;
+      st.arrivedObjectId = oid;
+      if (!obj.open.length) {
+        st.phase = "PAUSED_AT_OBJECT";
+        st.step = "AT_OBJECT_MENU";
+      }
+    }
+
+    if (type === "RTS_DAY_FINISH") {
+      st.driveActive = false;
+      st.phase = "WAIT_RETURN";
+      st.step = "RETURN_MENU";
+    }
+
+    if (type === "RTS_RETURN_START") {
+      st.returnActive = true;
+      st.driveActive = false;
+      st.phase = "RETURN_DRIVE";
+      st.step = "RETURN_MENU";
+      st.returnStartedAt = String(payload?.at ?? e.ts ?? "");
+    }
+
+    if (type === "RTS_RETURN_STOP") {
+      st.returnActive = false;
+      st.phase = "FINISHED";
+      st.step = "ODO_END";
+      st.returnStoppedAt = String(payload?.at ?? e.ts ?? "");
+    }
+
+    if (type === "RTS_ODO_END") {
+      const km = Number(payload?.odoEndKm ?? payload?.odoKm);
+      if (Number.isFinite(km)) st.odoEndKm = km;
+      st.phase = "FINISHED";
+      st.step = "SAVE";
+    }
+
+    if (type === "RTS_ODO_END_PHOTO") {
+      st.odoEndPhotoFileId = String(payload?.fileId ?? payload?.photoFileId ?? payload?.photo ?? "").trim() || st.odoEndPhotoFileId;
+    }
+
+    if (type === "ROAD_END" || type === "RTS_SAVE") {
+      (st as any).submittedForApproval = true;
+      st.phase = "FINISHED";
+      st.step = "START";
+      if (isApprovedRoadStatus(e.status)) {
+        (st as any).approvedRoadEventId = String(e.eventId ?? "");
+      }
+      if (String(e.status ?? "").trim().toUpperCase() === "ПОВЕРНУТО") {
+        (st as any).editReturned = true;
+      }
+    }
+  }
+
+  console.log("[RTS][RESTORE] restored", {
+    date,
+    foremanTgId,
+    step: st.step,
+    phase: st.phase,
+    carId: st.carId ?? "",
+    plannedObjectIds: st.plannedObjectIds,
+    inCarIds: st.inCarIds,
+    approvedRoadEventId: (st as any).approvedRoadEventId ?? "",
+    editReturned: Boolean((st as any).editReturned),
+  });
+
+  return st;
+}
+
 export const RoadTimesheetFlow: FlowModule = {
   flow: FLOW,
   menuText: TEXTS.buttons.roadTimesheet,
@@ -1562,24 +1820,25 @@ start: async (bot, chatId, s) => {
       return render(bot, chatId, s, foremanTgId);
     }
 
-    const st: State = {
-      step: "START",
-      date: todayISO(),
-      phase: "SETUP",
-      plannedObjectIds: [],
-      objects: {},
-      inCarIds: [],
-      members: [],
-      driveActive: false,
-      returnActive: false,
-      qtyUnlocked: false,
-      foremanName: String(
-    (s as any)?.userName ??
-    (s as any)?.name ??
-    (s as any)?.fullName ??
-    `Бригадир ${foremanTgId}`
-  ),
-    };
+    const skipRestore = Boolean((s as any).rtsSkipRestoreByForeman?.[foremanTgId]);
+    const restored = await restoreRoadStateFromEvents({ foremanTgId, skipRestore });
+    const st: State = restored ?? makeEmptyRoadState(foremanTgId);
+    st.foremanName = String(
+      (s as any)?.userName ??
+      (s as any)?.name ??
+      (s as any)?.fullName ??
+      st.foremanName ??
+      `Бригадир ${foremanTgId}`
+    );
+
+    console.log("[RTS][START]", {
+      foremanTgId,
+      restored: Boolean(restored),
+      skipRestore,
+      step: st.step,
+      phase: st.phase,
+      date: st.date,
+    });
 
     root[foremanTgId] = st;
     setFlowState(s, FLOW, root);
@@ -1601,6 +1860,67 @@ const foremanTgId = q.from?.id ?? 0;
 
 const root = getFlowState<Record<number, State>>(s, FLOW) || {};
 s.flow = FLOW;
+
+if (data === cb.RESET_STATE) {
+  console.log("[RTS][RESET] requested", {
+    foremanTgId,
+    chatId,
+    hasState: Boolean(root[foremanTgId]),
+  });
+
+  await safeEditMessageText(
+    bot,
+    chatId,
+    msgId,
+    "🧹 Скидання поточного стану\n\n" +
+      "Ви точно хочете скинути поточний стан робочого дня? Це очистить поточну сесію бригадира, але не видалить вже записані події з журналу.",
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "✅ Так, скинути", callback_data: cb.RESET_STATE_CONFIRM }],
+          [{ text: "❌ Ні, назад", callback_data: cb.RESET_STATE_CANCEL }],
+        ],
+      },
+    },
+  );
+  return true;
+}
+
+if (data === cb.RESET_STATE_CANCEL) {
+  console.log("[RTS][RESET] cancelled", { foremanTgId, chatId });
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
+
+if (data === cb.RESET_STATE_CONFIRM) {
+  const date = todayISO();
+  const events = await fetchEvents({ date, foremanTgId } as any).catch(() => []);
+  const approvedRoadEnds = (events ?? []).filter(
+    (e: any) => String(e.type ?? "") === "ROAD_END" && isApprovedRoadStatus(e.status),
+  );
+
+  delete root[foremanTgId];
+  setFlowState(s, FLOW, root);
+  (s as any).rtsSkipRestoreByForeman ??= {};
+  (s as any).rtsSkipRestoreByForeman[foremanTgId] = Date.now();
+
+  const fresh = makeEmptyRoadState(foremanTgId);
+  root[foremanTgId] = fresh;
+  setFlowState(s, FLOW, root);
+
+  console.log("[RTS][RESET] confirmed", {
+    foremanTgId,
+    date,
+    clearedRuntimeState: true,
+    eventsToday: events?.length ?? 0,
+    approvedRoadEnds: approvedRoadEnds.length,
+    touchedSheets: false,
+  });
+
+  await bot.answerCallbackQuery(q.id, { text: "✅ Поточну сесію очищено" }).catch(() => {});
+  await render(bot, chatId, s, foremanTgId);
+  return true;
+}
 
 //    const handledAdmin = await handleRoadAdminCallbacks({ bot, q, data });
 //    if (handledAdmin) return true;
