@@ -14,7 +14,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "snapshot": "tsx scripts/project.snapshot.ts",
     "smoke_all": "tsx scripts/smoke_all.ts",
-    "sheets:stage1": "tsx scripts/sheets.stage1.test.ts"
+    "sheets:stage1": "tsx scripts/sheets.stage1.test.ts",
+    "e2e:rts": "tsx scripts/e2e-road-timesheet-hybrid.ts"
   },
 
   "dependencies": {
