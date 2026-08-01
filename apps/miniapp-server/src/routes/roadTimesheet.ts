@@ -88,18 +88,39 @@ type ObjectInput = {
  * mockup's step 3.13) and the real POST / save (which additionally persists
  * everything). Never mutates the database.
  */
+// A "car left on errands while the crew worked" side trip: one of the
+// people at the object drives off and comes back, and that mileage
+// (odoBack - odoOut) is excluded from the trip-class / allowance km.
+type Errand = { driverId?: string; odoOut?: number; odoBack?: number | null };
+
+function sumErrandKm(errands?: Errand[]): number {
+  if (!Array.isArray(errands)) return 0;
+  return errands.reduce((acc, e) => {
+    const out = Number(e?.odoOut);
+    const back = Number(e?.odoBack);
+    if (!Number.isFinite(out) || !Number.isFinite(back)) return acc; // open (no return yet) or malformed -> ignore
+    return acc + Math.max(0, back - out);
+  }, 0);
+}
+
 async function computePayroll(params: {
   odoStart: number;
   odoEnd: number;
   employeeIds: string[];
   objects: ObjectInput[];
   selfTransportIds?: string[];
+  excludedKm?: number;
 }) {
-  const { odoStart, odoEnd, employeeIds, objects, selfTransportIds = [] } = params;
+  const { odoStart, odoEnd, employeeIds, objects, selfTransportIds = [], excludedKm = 0 } = params;
 
-  const km = Number.isFinite(odoEnd) && Number.isFinite(odoStart) ? odoEnd - odoStart : undefined;
+  // grossKm = what the odometer actually moved. billableKm subtracts any
+  // "car left on errands" mileage (see the errands payload) so those side
+  // trips don't inflate the trip class / travel allowance -- but grossKm is
+  // still what we report as the real distance and store in the odometer row.
+  const grossKm = Number.isFinite(odoEnd) && Number.isFinite(odoStart) ? odoEnd - odoStart : undefined;
+  const billableKm = grossKm === undefined ? undefined : Math.max(0, grossKm - Math.max(0, excludedKm));
   const tripClass: "S" | "M" | "L" | "XL" =
-    km === undefined || km <= 0 ? "S" : km <= 20 ? "S" : km <= 50 ? "M" : km <= 100 ? "L" : "XL";
+    billableKm === undefined || billableKm <= 0 ? "S" : billableKm <= 20 ? "S" : billableKm <= 50 ? "M" : billableKm <= 100 ? "L" : "XL";
 
   const allWorkIds = [...new Set(objects.flatMap((o) => (o.works ?? []).map((w) => w.workId)))];
   const [workRows, employeeRows, settingRows] = await Promise.all([
@@ -167,7 +188,9 @@ async function computePayroll(params: {
   const perPerson = riders.length ? roadAllowanceTotal / riders.length : 0;
 
   return {
-    km,
+    km: grossKm,
+    billableKm,
+    excludedKm: Math.max(0, excludedKm),
     tripClass,
     salaryPacks,
     roadAllowance: { total: roadAllowanceTotal, perPerson: Math.round(perPerson * 100) / 100 },
@@ -184,16 +207,19 @@ async function computePayroll(params: {
  * (mockup step 3.13) before they commit to "Відправити на підтвердження".
  */
 roadTimesheetRouter.post("/preview", async (req, res) => {
-  const { odoStart, odoEnd, employeeIds, objects, selfTransportIds } = req.body as {
+  const { odoStart, odoEnd, employeeIds, objects, selfTransportIds, errands } = req.body as {
     odoStart: number;
     odoEnd: number;
     employeeIds: string[];
     objects: ObjectInput[];
     selfTransportIds?: string[];
+    errands?: Errand[];
   };
-  const result = await computePayroll({ odoStart, odoEnd, employeeIds, objects, selfTransportIds });
+  const result = await computePayroll({ odoStart, odoEnd, employeeIds, objects, selfTransportIds, excludedKm: sumErrandKm(errands) });
   res.json({
     km: result.km,
+    billableKm: result.billableKm,
+    excludedKm: result.excludedKm,
     tripClass: result.tripClass,
     salaryPacks: result.salaryPacks,
     roadAllowance: result.roadAllowance,
@@ -341,6 +367,7 @@ type StoredTrip = {
   odoEnd?: number;
   km?: number;
   tripClass?: string;
+  errands?: Errand[];
 };
 
 /** Every leg submitted so far today for this foreman, one entry per tripSeq
@@ -364,6 +391,7 @@ async function fetchAllTrips(date: string, foremanTgId: number, executor: typeof
       km?: number;
       tripClass?: string;
       selfTransportIds?: string[];
+      errands?: Errand[];
     } = {};
     try {
       payload = JSON.parse(row.payload ?? "{}");
@@ -390,6 +418,7 @@ async function fetchAllTrips(date: string, foremanTgId: number, executor: typeof
       odoEnd: payload.odoEnd,
       km: payload.km,
       tripClass: payload.tripClass,
+      errands: payload.errands ?? [],
     });
   }
   return [...byTripSeq.values()].sort((a, b) => a.tripSeq - b.tripSeq);
@@ -459,7 +488,7 @@ function mergeObjects(objectsByLeg: ObjectInput[][]): ObjectInput[] {
  * last submission.
  */
 roadTimesheetRouter.post("/", async (req, res) => {
-  const { date, carId, odoStart, odoStartPhoto, odoEnd, odoEndPhoto, employeeIds, objects, idempotencyKey, tripSeq, selfTransportIds } =
+  const { date, carId, odoStart, odoStartPhoto, odoEnd, odoEndPhoto, employeeIds, objects, idempotencyKey, tripSeq, selfTransportIds, errands } =
     req.body as {
       date: string;
       carId: string;
@@ -472,6 +501,7 @@ roadTimesheetRouter.post("/", async (req, res) => {
       idempotencyKey?: string;
       tripSeq?: number;
       selfTransportIds?: string[];
+      errands?: Errand[];
     };
 
   if (!date || !carId || !Array.isArray(objects) || !objects.length || !Array.isArray(employeeIds) || !employeeIds.length) {
@@ -510,7 +540,7 @@ roadTimesheetRouter.post("/", async (req, res) => {
   // card -- separate from the day-combined totals computed below. Read-only
   // dictionary lookups, doesn't depend on any other foreman's/leg's state,
   // so it's fine to compute before the lock.
-  const legResult = await computePayroll({ odoStart, odoEnd, employeeIds, objects, selfTransportIds });
+  const legResult = await computePayroll({ odoStart, odoEnd, employeeIds, objects, selfTransportIds, excludedKm: sumErrandKm(errands) });
 
   // The idempotency key (generated once per "Відправити" tap on the client,
   // reused across its own network retries) makes the eventId stable across
@@ -529,6 +559,7 @@ roadTimesheetRouter.post("/", async (req, res) => {
   // just-written data instead of being serialized against it.
   let effectiveTripSeq = 0;
   let totalKm = 0;
+  let totalExcludedKm = 0;
   let combined!: Awaited<ReturnType<typeof computePayroll>>;
   let newMergedObjectsForNotify: ObjectInput[] = [];
 
@@ -584,6 +615,7 @@ roadTimesheetRouter.post("/", async (req, res) => {
           objects,
           odoStart,
           odoEnd,
+          errands: errands ?? [],
         },
       ];
       const newMergedObjects = mergeObjects(tripsAfter.map((t) => t.objects));
@@ -593,6 +625,10 @@ roadTimesheetRouter.post("/", async (req, res) => {
         const legKm = typeof t.odoStart === "number" && typeof t.odoEnd === "number" ? t.odoEnd - t.odoStart : 0;
         return acc + (Number.isFinite(legKm) ? legKm : 0);
       }, 0);
+      // Errand km summed across every leg of the day -- excluded from the
+      // combined trip class / allowance below (but NOT from totalKm, which
+      // stays the real odometer distance shown in the report).
+      totalExcludedKm = tripsAfter.reduce((acc, t) => acc + sumErrandKm(t.errands), 0);
       // Day-combined totals: what actually gets written to reports/timesheet/
       // allowances below, since those tables have no per-trip dimension.
       combined = await computePayroll({
@@ -601,6 +637,7 @@ roadTimesheetRouter.post("/", async (req, res) => {
         employeeIds: unionEmployeeIds,
         objects: newMergedObjects,
         selfTransportIds: unionSelfTransportIds,
+        excludedKm: totalExcludedKm,
       });
       newMergedObjectsForNotify = newMergedObjects;
 
@@ -758,7 +795,7 @@ roadTimesheetRouter.post("/", async (req, res) => {
             employeeName: combined.employeeById.get(employeeId)?.name ?? employeeId,
             objectId: "ROAD",
             amount: combined.roadAllowance.perPerson,
-            meta: JSON.stringify({ km: totalKm, tripClass: combined.tripClass }),
+            meta: JSON.stringify({ km: totalKm, excludedKm: totalExcludedKm, billableKm: combined.billableKm, tripClass: combined.tripClass }),
             dayStatus: "ЧЕРНЕТКА",
           })),
           tx,
@@ -785,7 +822,7 @@ roadTimesheetRouter.post("/", async (req, res) => {
             employeeName: combined.employeeById.get(employeeId)?.name ?? employeeId,
             objectId: "ROAD",
             amount: 0,
-            meta: JSON.stringify({ km: totalKm, tripClass: combined.tripClass }),
+            meta: JSON.stringify({ km: totalKm, excludedKm: totalExcludedKm, billableKm: combined.billableKm, tripClass: combined.tripClass }),
             dayStatus: "СКАСОВАНО",
           })),
           tx,
@@ -809,6 +846,7 @@ roadTimesheetRouter.post("/", async (req, res) => {
             tripClass: legResult.tripClass,
             objects,
             selfTransportIds: selfTransportIds ?? [],
+            errands: errands ?? [],
             salaryPacks: legResult.salaryPacks,
             roadAllowance: legResult.roadAllowance,
           }),
@@ -830,7 +868,7 @@ roadTimesheetRouter.post("/", async (req, res) => {
       `🆕 *Новий звіт на підтвердження*`,
       `👤 Бригадир: ${req.user!.pib}`,
       `📅 Дата: ${date}`,
-      `🚗 ${totalKm} км · клас ${combined.tripClass}`,
+      `🚗 ${totalKm} км · клас ${combined.tripClass}${totalExcludedKm > 0 ? ` (−${totalExcludedKm} км по справам)` : ""}`,
       `📍 Обʼєкти: ${newMergedObjectsForNotify.map((o) => o.objectName).join(", ") || "—"}`,
       `💰 Фонд: ${Math.round(combinedFund * 100) / 100} грн`,
     ].join("\n"),
@@ -846,7 +884,14 @@ roadTimesheetRouter.post("/", async (req, res) => {
     roadAllowance: legResult.roadAllowance,
     brigadierEmployeeId: legResult.brigadierEmployeeId,
     seniorEmployeeIds: legResult.seniorEmployeeIds,
-    combined: { km: totalKm, tripClass: combined.tripClass, roadAllowance: combined.roadAllowance, salaryPacks: combined.salaryPacks },
+    combined: {
+      km: totalKm,
+      excludedKm: totalExcludedKm,
+      billableKm: combined.billableKm,
+      tripClass: combined.tripClass,
+      roadAllowance: combined.roadAllowance,
+      salaryPacks: combined.salaryPacks,
+    },
   });
 });
 
@@ -1190,12 +1235,14 @@ roadTimesheetRouter.get("/submitted-today", async (req, res) => {
     const legKm = typeof t.odoStart === "number" && typeof t.odoEnd === "number" ? t.odoEnd - t.odoStart : 0;
     return acc + (Number.isFinite(legKm) ? legKm : 0);
   }, 0);
+  const totalExcludedKm = trips.reduce((acc, t) => acc + sumErrandKm(t.errands), 0);
   const combined = await computePayroll({
     odoStart: 0,
     odoEnd: totalKm,
     employeeIds: unionEmployeeIds,
     objects: mergedObjects,
     selfTransportIds: unionSelfTransportIds,
+    excludedKm: totalExcludedKm,
   });
 
   res.json({
@@ -1216,9 +1263,17 @@ roadTimesheetRouter.get("/submitted-today", async (req, res) => {
         objects: t.objects,
         km: t.km,
         tripClass: t.tripClass,
+        errands: t.errands ?? [],
       };
     }),
-    combined: { km: totalKm, tripClass: combined.tripClass, roadAllowance: combined.roadAllowance, salaryPacks: combined.salaryPacks },
+    combined: {
+      km: totalKm,
+      excludedKm: totalExcludedKm,
+      billableKm: combined.billableKm,
+      tripClass: combined.tripClass,
+      roadAllowance: combined.roadAllowance,
+      salaryPacks: combined.salaryPacks,
+    },
   });
 });
 

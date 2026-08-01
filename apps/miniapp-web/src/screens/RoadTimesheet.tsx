@@ -73,8 +73,17 @@ type Location = { kind: "onboard" } | { kind: "object"; objectId: string } | { k
 
 type CoefPair = { disciplineCoef: number; productivityCoef: number };
 
+// "Car left on errands while the crew worked": one of the people at the
+// object drives off and comes back. odoBack === null means it's still out.
+// The mileage (odoBack - odoOut) is excluded from the trip-class / travel
+// allowance server-side (see the errands payload) but not from the real
+// odometer total.
+type Errand = { id: string; objectId: string; objectName: string; driverId: string; odoOut: number; odoBack: number | null };
+
 type PayrollPreview = {
   km?: number;
+  excludedKm?: number; // errand km excluded from the trip class / allowance
+  billableKm?: number; // km actually used for the class (gross - excluded)
   tripClass: string;
   salaryPacks: SalaryPack[];
   roadAllowance: { total: number; perPerson: number };
@@ -83,7 +92,14 @@ type PayrollPreview = {
 };
 // The day-combined totals -- what actually gets paid out -- once more than
 // one trip has been submitted for the same day (see SubmittedTrip below).
-type DayCombined = { km: number; tripClass: string; roadAllowance: { total: number; perPerson: number }; salaryPacks: SalaryPack[] };
+type DayCombined = {
+  km: number;
+  excludedKm?: number;
+  billableKm?: number;
+  tripClass: string;
+  roadAllowance: { total: number; perPerson: number };
+  salaryPacks: SalaryPack[];
+};
 type SaveResponse = PayrollPreview & { eventId: string; tripSeq: number; combined: DayCombined };
 
 type DayStatus = { hasSubmission: boolean; approved: boolean; eventId: string | null; editRequested: boolean };
@@ -112,6 +128,7 @@ type SubmittedTrip = {
   objects: SubmittedObject[];
   km?: number;
   tripClass?: string;
+  errands?: Errand[];
 };
 type SubmittedTodayResponse = { found: false; trips: []; combined: null } | { found: true; trips: SubmittedTrip[]; combined: DayCombined };
 type LastTripResponse =
@@ -140,6 +157,7 @@ type DraftShape = {
   odoEndPhoto: string | null;
   employeeIds: string[];
   selfTransportIds: string[];
+  errands: Errand[];
   plans: ObjPlan[];
   onboard: string[];
   tripStartedAt: string | null;
@@ -327,11 +345,20 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
   const [showManualHours, setShowManualHours] = useState(false);
   const [manualHoursEmployeeId, setManualHoursEmployeeId] = useState<string | null>(null);
   const [manualHoursBuffer, setManualHoursBuffer] = useState("");
-  // Never carry an open manual-hours editor from one object to the next,
-  // whichever way the object changes (arrive, switch, or an ✏️ edit entry).
+  // "Машина вибула по справам": errands is day-level (one open at a time --
+  // odoBack null). errandMode drives the start (pick driver + odoOut) and
+  // return (odoBack) sub-screens on AT_OBJECT.
+  const [errands, setErrands] = useState<Errand[]>([]);
+  const [errandMode, setErrandMode] = useState<null | "start" | "return">(null);
+  const [errandDriverId, setErrandDriverId] = useState<string | null>(null);
+  const [errandOdoBuffer, setErrandOdoBuffer] = useState("");
+  // Never carry an open manual-hours / errand editor from one object to the
+  // next, whichever way the object changes (arrive, switch, or an ✏️ edit).
   useEffect(() => {
     setShowManualHours(false);
     setManualHoursEmployeeId(null);
+    setErrandMode(null);
+    setErrandDriverId(null);
   }, [atObjectId]);
   // People who show up at an object on their own (their own car, etc.) --
   // never picked in PICK_PEOPLE, so not in employeeIds/onboard/here at all
@@ -435,6 +462,7 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
       setOdoEndPhoto(draft.odoEndPhoto);
       setEmployeeIds(draft.employeeIds);
       setSelfTransportIds(draft.selfTransportIds ?? []);
+      setErrands(draft.errands ?? []);
       setPlans((draft.plans ?? []).map(normalizeDraftPlan));
       setOnboard(draft.onboard);
       setTripStartedAt(draft.tripStartedAt);
@@ -503,6 +531,7 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
       odoEndPhoto,
       employeeIds,
       selfTransportIds,
+      errands,
       plans,
       onboard,
       tripStartedAt,
@@ -524,6 +553,7 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
     odoEndPhoto,
     employeeIds,
     selfTransportIds,
+    errands,
     plans,
     onboard,
     tripStartedAt,
@@ -643,6 +673,8 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
     setOdoEndPhoto(null);
     setEmployeeIds([]);
     setSelfTransportIds([]);
+    setErrands([]);
+    setErrandMode(null);
     setPlans([]);
     setCoefs({});
     setOnboard([]);
@@ -703,6 +735,12 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
             <span className="cell-title">💸 Доплата за виїзд{isMultiTrip ? " (загальна)" : ""}</span>
             <span className="cell-sub">{masked ? "🔒 •••" : `${dayCombined.roadAllowance.perPerson} грн/особу`}</span>
           </div>
+          {!!dayCombined.excludedKm && (
+            <div className="cell" style={{ cursor: "default" }}>
+              <span className="cell-title">🚗 По справам</span>
+              <span className="cell-sub">{dayCombined.excludedKm} км — не в доплаті</span>
+            </div>
+          )}
         </div>
 
         <div className="section-title">Виплати</div>
@@ -818,6 +856,7 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
     setOdoEndPhoto(trip.odoEndPhoto);
     setEmployeeIds(trip.employeeIds);
     setSelfTransportIds(trip.selfTransportIds ?? []);
+    setErrands(trip.errands ?? []);
     setOnboard(trip.employeeIds);
     const restoredPlans = objectsToPlans(trip.objects);
     setPlans(restoredPlans);
@@ -830,6 +869,7 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
         odoEnd: trip.odoEnd ?? 0,
         employeeIds: trip.employeeIds,
         selfTransportIds: trip.selfTransportIds ?? [],
+        errands: trip.errands ?? [],
         objects: restoredPlans.map((p) => ({
           objectId: p.objectId,
           objectName: p.objectName,
@@ -858,6 +898,8 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
     setOdoEndPhoto(null);
     setEmployeeIds([]);
     setSelfTransportIds([]);
+    setErrands([]);
+    setErrandMode(null);
     setPlans([]);
     setCoefs({});
     setOnboard([]);
@@ -1573,6 +1615,23 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
     logChange(`Години вручну: ${employeeName(employeeId)} — ${hours} год на ${planFor(objectId).objectName}`);
   }
 
+  // The one errand currently in progress (car out), if any.
+  const openErrand = errands.find((e) => e.odoBack === null) ?? null;
+
+  function startErrand(objectId: string, driverId: string, odoOut: number) {
+    const objectName = planFor(objectId).objectName;
+    setErrands((prev) => [...prev, { id: crypto.randomUUID(), objectId, objectName, driverId, odoOut, odoBack: null }]);
+    haptic("light");
+    logChange(`🚗 Машина вибула по справам (водій ${employeeName(driverId)}, ${odoOut} км)`);
+  }
+
+  function finishErrand(odoBack: number) {
+    if (!openErrand) return;
+    setErrands((prev) => prev.map((e) => (e.id === openErrand.id ? { ...e, odoBack } : e)));
+    haptic("success");
+    logChange(`↩️ Машина повернулась (${odoBack} км, по справам ${Math.max(0, odoBack - openErrand.odoOut)} км)`);
+  }
+
   // Handles both halves of "who's here now": people stepping out of the car
   // (dropSelected, from onboard) and people who showed up under their own
   // transport (addArrivedSelected, never on the trip roster until now) --
@@ -1731,6 +1790,7 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
         odoEnd: Number(odoEnd),
         employeeIds,
         selfTransportIds,
+        errands,
         objects: buildObjectsPayload(),
       });
       setPreview(res);
@@ -1757,6 +1817,17 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
       if (!ok) return;
     }
 
+    // An errand still open (no return odometer) means its mileage can't be
+    // computed, so it WON'T be excluded from the allowance. Warn so the
+    // foreman closes it first if the car really did come back.
+    if (openErrand) {
+      const ok = await confirmDialog(
+        `🚗 Машина ще у роз'їздах (водій ${employeeName(openErrand.driverId)}) — не введено спідометр повернення.\n\n` +
+          `Без нього ці км НЕ буде виключено з доплати за виїзд. Відправити все одно?`,
+      );
+      if (!ok) return;
+    }
+
     setSaving(true);
     setError(null);
     try {
@@ -1776,6 +1847,7 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
         odoEndPhoto,
         employeeIds,
         selfTransportIds,
+        errands,
         objects: buildObjectsPayload(),
         idempotencyKey,
         tripSeq: editingTripSeq ?? undefined,
@@ -1796,6 +1868,7 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
         objects: buildObjectsPayload(),
         km: res.km,
         tripClass: res.tripClass,
+        errands,
       };
       setSubmittedTrips((prev) => [...prev.filter((t) => t.tripSeq !== res.tripSeq), savedTrip].sort((a, b) => a.tripSeq - b.tripSeq));
       setStep("DONE");
@@ -1883,6 +1956,11 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
         // Step out of the per-person keypad first, then out of the list.
         if (manualHoursEmployeeId) setManualHoursEmployeeId(null);
         else setShowManualHours(false);
+        return;
+      }
+      if (errandMode) {
+        setErrandMode(null);
+        setErrandDriverId(null);
         return;
       }
       // Same resume rule as the in-screen "✅ Готово" button below -- leaving
@@ -3271,14 +3349,14 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
                   </>
                 )}
 
-                {plan.here.length > 0 && !showDropPicker && !showMovePicker && !showManualHours && (
+                {plan.here.length > 0 && !showDropPicker && !showMovePicker && !showManualHours && !errandMode && (
                   <>
                     <div className="section-title">Як люди їдуть з обʼєкта</div>
                     {renderDepartureChoices(plan, { allowBus: carPresent, pauseForBus: false })}
                   </>
                 )}
 
-                {!showDropPicker && !showMovePicker && !showManualHours && (
+                {!showDropPicker && !showMovePicker && !showManualHours && !errandMode && (
                   <div className="list" style={{ marginTop: 8 }}>
                     <button
                       className="cell"
@@ -3335,10 +3413,43 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
                       <span className="cell-title">🕒 Ввести години вручну</span>
                       <span className="cell-sub">якщо забули таймер</span>
                     </button>
+                    {!openErrand && (
+                      <button
+                        className="cell"
+                        onClick={() => {
+                          setErrandDriverId(null);
+                          setErrandOdoBuffer("");
+                          setErrandMode("start");
+                        }}
+                        disabled={!plan.here.length}
+                      >
+                        <span className="cell-title">🚗 Машина вибула по справам</span>
+                        <span className="cell-sub">ці км не йдуть у доплату за виїзд</span>
+                      </button>
+                    )}
                   </div>
                 )}
 
-                {plans.length > 1 && !showDropPicker && !showMovePicker && !showManualHours && (
+                {openErrand && !errandMode && !showDropPicker && !showMovePicker && !showManualHours && (
+                  <div className="list" style={{ marginTop: 8 }}>
+                    <div className="cell" style={{ cursor: "default", background: "rgba(255,159,10,0.12)" }}>
+                      <span className="cell-title">🚗 Машина у роз'їздах</span>
+                      <span className="cell-sub">водій {employeeName(openErrand.driverId)} · виїхав на {openErrand.odoOut}</span>
+                    </div>
+                    <button
+                      className="cell"
+                      onClick={() => {
+                        setErrandOdoBuffer("");
+                        setErrandMode("return");
+                      }}
+                    >
+                      <span className="cell-title">↩️ Машина повернулась</span>
+                      <span className="cell-sub">ввести спідометр</span>
+                    </button>
+                  </div>
+                )}
+
+                {plans.length > 1 && !showDropPicker && !showMovePicker && !showManualHours && !errandMode && (
                   <>
                     <div className="section-title">Інші обʼєкти — переключитись</div>
                     <div className="list">
@@ -3564,6 +3675,95 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
                       </div>
                     </>
                   ))}
+
+                {errandMode === "start" && (
+                  <>
+                    <div className="section-title">🚗 Машина вибула по справам — {plan.objectName}</div>
+                    <div className="hint" style={{ padding: "0 16px 8px" }}>
+                      Ці кілометри не враховуються в доплату за виїзд. Оберіть водія (з тих, хто на об'єкті) і введіть спідометр при виїзді.
+                    </div>
+                    <div className="section-title">Хто за кермом</div>
+                    <div className="chip-row">
+                      {plan.here.map((id) => (
+                        <button
+                          key={id}
+                          className={`chip ${errandDriverId === id ? "selected" : ""}`}
+                          onClick={() => setErrandDriverId(id)}
+                        >
+                          {employeeName(id)}
+                        </button>
+                      ))}
+                    </div>
+                    {errandDriverId && (
+                      <>
+                        <div className="section-title">Спідометр при виїзді</div>
+                        <div className="big-number">{errandOdoBuffer || "0"}</div>
+                        <NumericKeypad value={errandOdoBuffer} onChange={setErrandOdoBuffer} />
+                      </>
+                    )}
+                    <div style={{ display: "flex", gap: 8, padding: "8px 16px" }}>
+                      <button
+                        className="chip"
+                        onClick={() => {
+                          setErrandMode(null);
+                          setErrandDriverId(null);
+                          setErrandOdoBuffer("");
+                        }}
+                      >
+                        Скасувати
+                      </button>
+                      <button
+                        className="chip selected"
+                        disabled={!errandDriverId || !errandOdoBuffer || !Number.isFinite(Number(errandOdoBuffer))}
+                        onClick={() => {
+                          startErrand(atObjectId, errandDriverId!, Number(errandOdoBuffer));
+                          setErrandMode(null);
+                          setErrandDriverId(null);
+                          setErrandOdoBuffer("");
+                        }}
+                      >
+                        Зберегти
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {errandMode === "return" && openErrand && (
+                  <>
+                    <div className="section-title">↩️ Машина повернулась</div>
+                    <div className="hint" style={{ padding: "0 16px 8px" }}>
+                      Водій {employeeName(openErrand.driverId)} · виїхав на {openErrand.odoOut}. Введіть спідометр при поверненні.
+                    </div>
+                    <div className="big-number">{errandOdoBuffer || "0"}</div>
+                    <NumericKeypad value={errandOdoBuffer} onChange={setErrandOdoBuffer} />
+                    {errandOdoBuffer && Number(errandOdoBuffer) < openErrand.odoOut && (
+                      <div className="hint" style={{ padding: "0 16px 8px", color: "#d70015" }}>
+                        ⚠️ Спідометр при поверненні не може бути меншим за {openErrand.odoOut}.
+                      </div>
+                    )}
+                    {errandOdoBuffer && Number(errandOdoBuffer) >= openErrand.odoOut && (
+                      <div className="hint" style={{ padding: "0 16px 8px" }}>
+                        По справам: {Math.max(0, Number(errandOdoBuffer) - openErrand.odoOut)} км — не піде в доплату.
+                      </div>
+                    )}
+                    <div style={{ display: "flex", gap: 8, padding: "8px 16px" }}>
+                      <button className="chip" onClick={() => setErrandMode(null)}>
+                        Пізніше
+                      </button>
+                      <button
+                        className="chip selected"
+                        disabled={!errandOdoBuffer || Number(errandOdoBuffer) < openErrand.odoOut}
+                        onClick={() => {
+                          finishErrand(Number(errandOdoBuffer));
+                          setErrandMode(null);
+                          setErrandOdoBuffer("");
+                        }}
+                      >
+                        Зберегти
+                      </button>
+                    </div>
+                  </>
+                )}
 
                 <div className="hint" style={{ padding: "0 16px 8px", textAlign: "center" }}>
                   Можна їхати далі з тими, хто залишився в машині — робота тут триватиме без вас.
@@ -3827,6 +4027,14 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
                 {preview ? `${preview.km} км · клас ${preview.tripClass}` : "рахую…"}
               </span>
             </div>
+            {preview && !!preview.excludedKm && (
+              <div className="cell">
+                <span className="cell-title">З них по справам</span>
+                <span className="cell-sub">
+                  {preview.excludedKm} км — не враховано в доплату{preview.billableKm != null ? ` (до класу: ${preview.billableKm} км)` : ""}
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="section-title row">
