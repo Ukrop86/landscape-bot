@@ -246,7 +246,7 @@ function fmtHours(ms: number) {
   return Math.round((ms / 3_600_000) * 100) / 100;
 }
 
-export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved: () => void }) {
+export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => void; onSaved: () => void; onOpenRetro: () => void }) {
   const [step, setStep] = useState<Step>("HUB");
   const [now, setNow] = useState(Date.now());
 
@@ -2206,6 +2206,19 @@ export function RoadTimesheet({ onBack, onSaved }: { onBack: () => void; onSaved
           </div>
           <div className="hint" style={{ padding: "0 16px 8px" }}>
             Можна повертатись сюди у будь-який момент і змінювати авто, людей чи обʼєкти.
+          </div>
+
+          {/* Escape hatch from the live, step-by-step day above: a day that's
+              already been worked can't be re-lived with timers, so it gets a
+              flat form where hours are typed in instead of measured. */}
+          <div className="list">
+            <button className="cell" onClick={onOpenRetro}>
+              <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span className="setup-icon accent-teal">🗓</span>
+                <span className="cell-title">Внести день заднім числом</span>
+              </span>
+              <span className="cell-sub">без таймерів ›</span>
+            </button>
           </div>
 
           {tripStartedAt && (

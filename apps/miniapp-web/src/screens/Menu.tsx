@@ -1,4 +1,9 @@
-export type Screen = "menu" | "logistics" | "roadTimesheet" | "materials" | "stats" | "tools" | "approval";
+// "roadTimesheetRetro" has no tile of its own on purpose -- it's reached from
+// the road timesheet's own hub screen (it's a mode of that same journal, not a
+// separate part of the app), but it lives as its own top-level screen so only
+// one of the two is ever mounted, keeping a single owner of Telegram's back
+// button at any time.
+export type Screen = "menu" | "logistics" | "roadTimesheet" | "roadTimesheetRetro" | "materials" | "stats" | "tools" | "approval";
 
 type Accent = "blue" | "green" | "orange" | "purple" | "teal" | "gray";
 

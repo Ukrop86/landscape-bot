@@ -6,6 +6,7 @@ import { Logistics } from "./screens/Logistics";
 import { Materials } from "./screens/Materials";
 import { Stats } from "./screens/Stats";
 import { RoadTimesheet } from "./screens/RoadTimesheet";
+import { RetroEntry } from "./screens/RetroEntry";
 import { Approval } from "./screens/Approval";
 import { ComingSoon } from "./screens/ComingSoon";
 import { SyncStatusPill } from "./components/SyncStatusPill";
@@ -64,7 +65,10 @@ export default function App() {
       {screen === "menu" && <Menu userName={user?.first_name} isAdmin={me?.role === "ADMIN"} onNavigate={setScreen} />}
       {screen === "logistics" && <Logistics onBack={goMenu} onSaved={showSavedToast} />}
       {screen === "materials" && <Materials onBack={goMenu} onSaved={showSavedToast} />}
-      {screen === "roadTimesheet" && <RoadTimesheet onBack={goMenu} onSaved={showSavedToast} />}
+      {screen === "roadTimesheet" && (
+        <RoadTimesheet onBack={goMenu} onSaved={showSavedToast} onOpenRetro={() => setScreen("roadTimesheetRetro")} />
+      )}
+      {screen === "roadTimesheetRetro" && <RetroEntry onBack={() => setScreen("roadTimesheet")} onSaved={showSavedToast} />}
       {screen === "stats" && <Stats onBack={goMenu} isAdmin={me?.role === "ADMIN"} />}
       {screen === "tools" && <ComingSoon title="🧰 Інструменти" onBack={goMenu} />}
       {screen === "approval" && (

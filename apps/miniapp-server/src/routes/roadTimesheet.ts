@@ -22,7 +22,7 @@ import {
   writeAccountingReportForDay,
   type LockedTx,
 } from "@landscape/core";
-import { and, eq, inArray, desc, lt, gte, ne } from "drizzle-orm";
+import { and, eq, inArray, desc, lt, gte } from "drizzle-orm";
 import { normRole } from "../authMiddleware.js";
 
 /** 403s and returns true if the caller isn't an admin -- lets a route bail with `if (blockNonAdmin(req, res)) return;`. */
@@ -521,13 +521,17 @@ roadTimesheetRouter.post("/", async (req, res) => {
   const foremanTgId = req.user!.tgId;
 
   // Same "can't be less than the last known reading" rule as the client's
-  // ODO_START screen -- excludes THIS date's own row (unique per date+carId)
-  // so resubmitting/editing today's own already-saved trip with an
-  // unchanged odoStart never compares against its own later odoEnd.
+  // ODO_START screen. Only rows from STRICTLY EARLIER dates count: this
+  // skips THIS date's own row (unique per date+carId), so resubmitting/
+  // editing an already-saved trip with an unchanged odoStart never compares
+  // against its own later odoEnd -- and it skips LATER dates too, so a day
+  // entered after the fact (see the retro-entry screen) is checked against
+  // where the car actually stood back then, not against today's reading,
+  // which is naturally higher and would reject every backdated entry.
   const priorOdoRows = await db
     .select()
     .from(schema.odometerDays)
-    .where(and(eq(schema.odometerDays.carId, carId), ne(schema.odometerDays.date, date)))
+    .where(and(eq(schema.odometerDays.carId, carId), lt(schema.odometerDays.date, date)))
     .orderBy(desc(schema.odometerDays.date), desc(schema.odometerDays.updatedAt))
     .limit(1);
   const lastKnownOdo = priorOdoRows[0] ? (priorOdoRows[0].endValue ?? priorOdoRows[0].startValue) : null;

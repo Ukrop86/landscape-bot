@@ -202,6 +202,27 @@ body {
   font: inherit;
 }
 
+/* Two fields side by side (odometer start/finish) already get their spacing
+   from .grid-2's own padding/gap -- .field's default margin on top of that
+   pushes them out of line with every other row on the screen. */
+.grid-2 .field {
+  margin: 0;
+}
+
+/* Compact number box that sits on the right of a .cell row, where a full
+   .field would break the row's title/value layout -- used for the typed
+   hours and volumes on the backdated-entry screen. */
+.hours-input {
+  width: 84px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--tg-border);
+  background: var(--tg-secondary-bg);
+  color: var(--tg-text);
+  font: inherit;
+  text-align: right;
+}
+
 .stepper {
   display: flex;
   align-items: center;
