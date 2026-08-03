@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import express from "express";
 import cors from "cors";
+import { sql } from "drizzle-orm";
 import { startSyncLoop, runSyncCycle, runMigrations, config, db, schema } from "@landscape/core";
 import { requireTelegramAuth } from "./authMiddleware.js";
 import { registerTelegramWebhook, setupTelegramWebhook } from "./telegramWebhook.js";
@@ -63,6 +64,50 @@ app.post("/internal/reset-odometer", requireBotToken, async (_req, res) => {
     const deleted = await db.delete(schema.odometerDays).returning({ id: schema.odometerDays.id });
     console.log(`[maintenance] odometer_days cleared: ${deleted.length} rows`);
     res.json({ ok: true, deleted: deleted.length });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// Everything the app PRODUCES while it's used, as opposed to the dictionaries
+// the office maintains in Google Sheets (users, employees, objects, works,
+// cars, logistic_directions, materials, tools, settings) -- those are never
+// touched here, and wiping `users` in particular would lock everyone out of
+// the Mini App, since roles are read from it.
+//
+// closures and sync_cursors are in the list for completeness: both are
+// declared in the schema but nothing reads or writes them today.
+const WORKING_DATA_TABLES = [
+  "events",
+  "reports",
+  "timesheet_entries",
+  "odometer_days",
+  "allowances",
+  "day_statuses",
+  "closures",
+  "material_moves",
+  "tool_moves",
+  "sync_cursors",
+] as const;
+
+// Full reset of a test run's accumulated data, so real-world testing can
+// start from a clean slate without hand-writing SQL each time.
+//
+// Clear the matching Google Sheets tabs FIRST -- ЖУРНАЛ_ПОДІЙ, ОДОМЕТР_ДЕНЬ,
+// ДОПЛАТИ, СТАТУС_ДНЯ, МАТЕРІАЛИ_РУХ and ІНСТРУМЕНТ_РУХ are all read back by
+// runSyncCycle, so clearing Postgres alone would just have the next sync
+// cycle (~45s later) put those six straight back. ЗВІТИ and ТАБЕЛЬ aren't
+// synced, so those two stay cleared either way.
+app.post("/internal/reset-working-data", requireBotToken, async (_req, res) => {
+  try {
+    const countQuery = WORKING_DATA_TABLES.map((t) => `SELECT '${t}' AS "table", count(*)::int AS rows FROM ${t}`).join(" UNION ALL ");
+    const before = await db.execute(sql.raw(countQuery));
+    // TRUNCATE rather than DELETE: it also resets the serial id sequences, so
+    // a cleared database starts numbering from 1 like a fresh one. No table
+    // here is referenced by a foreign key, so no CASCADE is needed.
+    await db.execute(sql.raw(`TRUNCATE TABLE ${WORKING_DATA_TABLES.join(", ")} RESTART IDENTITY`));
+    console.log(`[maintenance] working data cleared: ${JSON.stringify(before)}`);
+    res.json({ ok: true, cleared: before });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }
