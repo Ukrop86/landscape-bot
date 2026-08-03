@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import express from "express";
 import cors from "cors";
-import { startSyncLoop, runSyncCycle, runMigrations, config } from "@landscape/core";
+import { startSyncLoop, runSyncCycle, runMigrations, config, db, schema } from "@landscape/core";
 import { requireTelegramAuth } from "./authMiddleware.js";
 import { registerTelegramWebhook, setupTelegramWebhook } from "./telegramWebhook.js";
 import { dictionariesRouter } from "./routes/dictionaries.js";
@@ -26,21 +26,43 @@ app.use(express.json());
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-// Lets the legacy bot (apps/bot) trigger an immediate Sheets -> Postgres
-// sync right after approving/rejecting a user registration, instead of the
-// new user hitting "Access denied" in the Mini App for up to
-// SYNC_INTERVAL_MS until the next scheduled background sync picks it up.
-// Authenticated with the shared BOT_TOKEN (both services already have it)
-// since the caller is the bot process itself, not a Telegram Mini App
-// session -- there's no Telegram initData to validate here.
-app.post("/internal/sync-now", async (req, res) => {
+// Guard for /internal/* endpoints. The caller is one of our own processes
+// (or an operator), not a Telegram Mini App session, so there's no initData
+// to validate -- authenticate with the shared BOT_TOKEN instead.
+function requireBotToken(req: express.Request, res: express.Response, next: express.NextFunction) {
   if (!config.botToken || req.header("x-bot-token") !== config.botToken) {
     res.status(403).json({ error: "forbidden" });
     return;
   }
+  next();
+}
+
+// Lets the legacy bot (apps/bot) trigger an immediate Sheets -> Postgres
+// sync right after approving/rejecting a user registration, instead of the
+// new user hitting "Access denied" in the Mini App for up to
+// SYNC_INTERVAL_MS until the next scheduled background sync picks it up.
+app.post("/internal/sync-now", requireBotToken, async (_req, res) => {
   try {
     await runSyncCycle();
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// Wipes the Postgres copy of the odometer readings, so a fresh test run
+// starts with blank speedometers next to every car in PICK_CAR (those come
+// from GET /api/road-timesheet/cars-last-odometer, which reads this table).
+//
+// Needed because runSyncCycle only ever upserts and never deletes: emptying
+// the ОДОМЕТР_ДЕНЬ sheet by hand leaves the old rows sitting in Postgres
+// forever. Clear the sheet first (it stays the source of truth), then call
+// this -- otherwise the next sync cycle just mirrors the readings back in.
+app.post("/internal/reset-odometer", requireBotToken, async (_req, res) => {
+  try {
+    const deleted = await db.delete(schema.odometerDays).returning({ id: schema.odometerDays.id });
+    console.log(`[maintenance] odometer_days cleared: ${deleted.length} rows`);
+    res.json({ ok: true, deleted: deleted.length });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }
