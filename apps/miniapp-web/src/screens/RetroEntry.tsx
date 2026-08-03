@@ -12,12 +12,17 @@ import { MainButton } from "../components/MainButton";
  * walks the foreman through the day step by step and derives hours from
  * start/stop timers that only exist while the day is actually being worked.
  *
- * Nothing here is a new data path: it posts the exact same payload to the
- * exact same POST /api/road-timesheet as the live flow, so payroll, the trip
- * class, the travel allowance and the admin approval all behave identically.
- * The only difference is where the numbers come from -- hours are typed in
- * per person per object instead of measured, and the timestamps sent as
- * sessions are synthesised from those hours (see buildSessions).
+ * The shape follows how a finished day is actually remembered: one car for
+ * the whole trip, then each object in turn with the people who were there,
+ * their hours, the works done and how much of each. People are picked PER
+ * OBJECT rather than once for the day -- on a finished day there's no "crew
+ * on board" left to model, only who ended up working where.
+ *
+ * Nothing here is a new data path: it posts the same payload to the same
+ * POST /api/road-timesheet as the live flow, so payroll, the trip class, the
+ * travel allowance and the admin approval all behave identically. The only
+ * difference is where the numbers come from -- hours are typed in instead of
+ * measured, and the sessions sent to the server are synthesised from them.
  */
 
 type RetroWork = { workId: string; workName: string; unit: string; volume: string };
@@ -25,13 +30,16 @@ type RetroObject = {
   objectId: string;
   objectName: string;
   works: RetroWork[];
+  // Who worked at THIS object. The day's overall roster (what the travel
+  // allowance gets split between) is the union of these across every object.
+  employeeIds: string[];
   // Typed hours per employee, kept as raw strings so a half-typed "1." or an
   // intentionally blank field survives re-renders. Anything that isn't a
-  // positive number is treated as "this person wasn't here" at submit time.
+  // positive number is treated as "no hours recorded" at submit time.
   hoursByEmployeeId: Record<string, string>;
 };
 
-type Stage = "form" | "volumes";
+type Stage = "form" | "review";
 
 type PreviewResponse = {
   km: number;
@@ -41,8 +49,6 @@ type PreviewResponse = {
   roadAllowance: { total: number; perPerson: number };
 };
 
-type TakenCars = { taken: { carId: string; foremanName: string }[] };
-type TakenPeople = { taken: { employeeId: string; foremanName: string }[] };
 type DayStatusResponse = { hasSubmission: boolean; approved: boolean };
 
 // Sessions are only ever read as a duration (pickedUpAt - droppedAt) by the
@@ -70,18 +76,18 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
   const [carId, setCarId] = useState("");
   const [odoStart, setOdoStart] = useState("");
   const [odoEnd, setOdoEnd] = useState("");
-  const [employeeIds, setEmployeeIds] = useState<string[]>([]);
   const [plans, setPlans] = useState<RetroObject[]>([]);
 
-  const [takenCars, setTakenCars] = useState<Map<string, string>>(new Map());
-  const [busyEmployees, setBusyEmployees] = useState<Map<string, string>>(new Map());
   const [dayApproved, setDayApproved] = useState(false);
   const [daySubmitted, setDaySubmitted] = useState(false);
 
+  const [showObjectPicker, setShowObjectPicker] = useState(false);
+  const [objectSearch, setObjectSearch] = useState("");
+  // Which object's sub-picker is open, if any. Only one is ever open at a
+  // time so the screen stays a short, readable list of object cards.
+  const [peoplePickerObjectId, setPeoplePickerObjectId] = useState<string | null>(null);
   const [peopleSearch, setPeopleSearch] = useState("");
   const [expandedBrigadeId, setExpandedBrigadeId] = useState<string | null>(null);
-  const [objectSearch, setObjectSearch] = useState("");
-  const [showObjectPicker, setShowObjectPicker] = useState(false);
   const [worksPickerObjectId, setWorksPickerObjectId] = useState<string | null>(null);
   const [worksSearch, setWorksSearch] = useState("");
 
@@ -96,21 +102,15 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
     api.get<WorkObject[]>("/api/dictionaries/objects").then(setObjects).catch((e) => setError(e.message));
   }, []);
 
-  // Everything below is keyed by the date being entered, not by today, so the
-  // "already taken by another foreman" locks and the "day is approved" block
-  // reflect that past day -- the server enforces all three on submit anyway,
-  // and finding out here beats a 409 after the whole form is filled in.
+  // Deliberately does NOT check who else had this car or these people that
+  // day: on a finished day there's no double-booking race left to lose, and
+  // a stale reservation (another foreman who reserved and never submitted)
+  // would block recording what actually happened. The server skips the same
+  // checks for a past date -- see `backdated` in the save payload. An
+  // already-approved day is still off limits.
   useEffect(() => {
     if (!date) return;
     let cancelled = false;
-    api
-      .get<TakenCars>(`/api/road-timesheet/car-status?date=${date}`)
-      .then((r) => !cancelled && setTakenCars(new Map(r.taken.map((t) => [t.carId, t.foremanName]))))
-      .catch(() => undefined);
-    api
-      .get<TakenPeople>(`/api/road-timesheet/people-status?date=${date}`)
-      .then((r) => !cancelled && setBusyEmployees(new Map(r.taken.map((t) => [t.employeeId, t.foremanName]))))
-      .catch(() => undefined);
     api
       .get<DayStatusResponse>(`/api/road-timesheet/day-status?date=${date}`)
       .then((r) => {
@@ -141,42 +141,20 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
   const today = todayISO();
   const dateInFuture = !!date && date > today;
 
-  function planFor(objectId: string) {
-    return plans.find((p) => p.objectId === objectId);
-  }
+  // The day's roster: everyone who was at at least one object. This is what
+  // the server splits the travel allowance between, so the review screen
+  // spells it out instead of leaving it implicit.
+  const allEmployeeIds = [...new Set(plans.flatMap((p) => p.employeeIds))];
 
   function updatePlan(objectId: string, patch: (p: RetroObject) => RetroObject) {
     setPlans((prev) => prev.map((p) => (p.objectId === objectId ? patch(p) : p)));
-  }
-
-  function toggleEmployee(id: string) {
-    if (busyEmployees.has(id)) return;
-    if (employeeIds.includes(id)) {
-      setEmployeeIds((prev) => prev.filter((x) => x !== id));
-      // Dropping someone from the day has to drop their typed hours too:
-      // buildSessions filters by employeeIds, so a leftover entry would go
-      // quiet rather than wrong -- but it would come back the moment the
-      // same person is re-picked, silently restoring hours the foreman
-      // thought they had cleared.
-      setPlans((cur) =>
-        cur.map((p) => {
-          if (!(id in p.hoursByEmployeeId)) return p;
-          const rest = { ...p.hoursByEmployeeId };
-          delete rest[id];
-          return { ...p, hoursByEmployeeId: rest };
-        }),
-      );
-    } else {
-      setEmployeeIds((prev) => [...prev, id]);
-    }
-    haptic("selection");
   }
 
   function toggleObject(obj: WorkObject) {
     setPlans((prev) =>
       prev.some((p) => p.objectId === obj.id)
         ? prev.filter((p) => p.objectId !== obj.id)
-        : [...prev, { objectId: obj.id, objectName: obj.name, works: [], hoursByEmployeeId: {} }],
+        : [...prev, { objectId: obj.id, objectName: obj.name, works: [], employeeIds: [], hoursByEmployeeId: {} }],
     );
     haptic("selection");
   }
@@ -184,6 +162,34 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
   function removeObject(objectId: string) {
     setPlans((prev) => prev.filter((p) => p.objectId !== objectId));
     if (worksPickerObjectId === objectId) setWorksPickerObjectId(null);
+    if (peoplePickerObjectId === objectId) setPeoplePickerObjectId(null);
+    haptic("selection");
+  }
+
+  function toggleEmployeeAtObject(objectId: string, employeeId: string) {
+    updatePlan(objectId, (p) => {
+      if (!p.employeeIds.includes(employeeId)) return { ...p, employeeIds: [...p.employeeIds, employeeId] };
+      // Taking someone off an object clears their hours there too, so
+      // re-adding them later starts blank instead of silently restoring a
+      // number the foreman thought they had removed.
+      const hours = { ...p.hoursByEmployeeId };
+      delete hours[employeeId];
+      return { ...p, employeeIds: p.employeeIds.filter((x) => x !== employeeId), hoursByEmployeeId: hours };
+    });
+    haptic("selection");
+  }
+
+  function toggleBrigadeAtObject(objectId: string, members: Employee[], allSelected: boolean) {
+    updatePlan(objectId, (p) => {
+      if (!allSelected) return { ...p, employeeIds: [...new Set([...p.employeeIds, ...members.map((e) => e.id)])] };
+      const hours = { ...p.hoursByEmployeeId };
+      for (const e of members) delete hours[e.id];
+      return {
+        ...p,
+        employeeIds: p.employeeIds.filter((id) => !members.some((e) => e.id === id)),
+        hoursByEmployeeId: hours,
+      };
+    });
     haptic("selection");
   }
 
@@ -208,9 +214,9 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
   function buildSessions(plan: RetroObject) {
     const base = new Date(`${date}T${String(DAY_START_HOUR).padStart(2, "0")}:00:00`).getTime();
     if (!Number.isFinite(base)) return [];
-    return Object.entries(plan.hoursByEmployeeId)
-      .map(([employeeId, raw]) => ({ employeeId, hours: Number(raw) }))
-      .filter((x) => employeeIds.includes(x.employeeId) && Number.isFinite(x.hours) && x.hours > 0)
+    return plan.employeeIds
+      .map((employeeId) => ({ employeeId, hours: Number(plan.hoursByEmployeeId[employeeId]) }))
+      .filter((x) => Number.isFinite(x.hours) && x.hours > 0)
       .map((x) => ({
         employeeId: x.employeeId,
         employeeName: employeeName(x.employeeId),
@@ -240,20 +246,32 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
     });
   }
 
-  const peopleWithHours = new Set(plans.flatMap((p) => buildSessions(p).map((s) => s.employeeId)));
+  function objectHours(p: RetroObject) {
+    return p.employeeIds.reduce((acc, id) => {
+      const h = Number(p.hoursByEmployeeId[id]);
+      return acc + (Number.isFinite(h) && h > 0 ? h : 0);
+    }, 0);
+  }
+
+  const totalHours = plans.reduce((acc, p) => acc + objectHours(p), 0);
+  const emptyVolumeCount = plans.reduce((acc, p) => acc + p.works.filter((w) => !w.volume).length, 0);
+  const peopleWithoutHours = allEmployeeIds.filter(
+    (id) => !plans.some((p) => p.employeeIds.includes(id) && Number(p.hoursByEmployeeId[id]) > 0),
+  );
 
   const formComplete =
-    !!date && !dateInFuture && !dayApproved && !!carId && km !== null && km >= 0 && employeeIds.length > 0 && plans.length > 0;
+    !!date && !dateInFuture && !dayApproved && !!carId && km !== null && km >= 0 && plans.length > 0 && allEmployeeIds.length > 0;
 
-  async function goToVolumes() {
+  async function goToReview() {
     if (!formComplete) return;
     setError(null);
-    setStage("volumes");
+    setPreview(null);
+    setStage("review");
     try {
       const res = await api.post<PreviewResponse>("/api/road-timesheet/preview", {
         odoStart: Number(odoStart),
         odoEnd: Number(odoEnd),
-        employeeIds,
+        employeeIds: allEmployeeIds,
         objects: buildObjects(),
       });
       setPreview(res);
@@ -291,10 +309,9 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
       if (!ok) return;
     }
 
-    const emptyVolumes = plans.flatMap((p) => p.works.filter((w) => !w.volume)).length;
-    if (emptyVolumes) {
+    if (emptyVolumeCount) {
       const ok = await confirmDialog(
-        `Не заповнено обсяг у ${emptyVolumes} робіт${emptyVolumes === 1 ? "и" : "ах"} — вони підуть як «не заповнено» ` +
+        `Не заповнено обсяг у ${emptyVolumeCount} робіт${emptyVolumeCount === 1 ? "и" : "ах"} — вони підуть як «не заповнено» ` +
           `і за них не нарахується оплата.\n\nВідправити все одно?`,
       );
       if (!ok) return;
@@ -312,9 +329,13 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
         carId,
         odoStart: Number(odoStart),
         odoEnd: Number(odoEnd),
-        employeeIds,
+        employeeIds: allEmployeeIds,
         objects: buildObjects(),
         idempotencyKey,
+        // Tells the server this is a finished day being recorded, so it skips
+        // the car/people reservation checks that only mean anything while a
+        // day is being worked live. Honoured only for a genuinely past date.
+        backdated: true,
       });
       haptic("success");
       onSaved();
@@ -327,8 +348,12 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
   }
 
   const goBack = () => {
-    if (stage === "volumes") {
+    if (stage === "review") {
       setStage("form");
+      return;
+    }
+    if (peoplePickerObjectId) {
+      setPeoplePickerObjectId(null);
       return;
     }
     if (worksPickerObjectId) {
@@ -343,9 +368,6 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
   };
   useTelegramBackButton(goBack);
 
-  const totalHours = plans.reduce((acc, p) => acc + buildSessions(p).reduce((a, s) => a + (new Date(s.pickedUpAt).getTime() - new Date(s.droppedAt).getTime()) / 3_600_000, 0), 0);
-  const allWorksCount = plans.reduce((acc, p) => acc + p.works.length, 0);
-
   return (
     <div>
       <BackRow onBack={goBack} />
@@ -358,16 +380,14 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
 
       {stage === "form" && (
         <>
-          <div className="step-badge">📅 ДАТА</div>
+          <div className="step-badge">1 · 📅 ДЕНЬ І АВТО</div>
           <div className="field">
-            <label>День, який вносимо</label>
+            <label>Дата, яку вносимо</label>
             <input type="date" max={today} value={date} onChange={(e) => setDate(e.target.value)} />
           </div>
           {dateInFuture && <div className="empty-state">⚠️ Дата в майбутньому — оберіть сьогодні або раніше.</div>}
           {dayApproved && (
-            <div className="empty-state">
-              🔒 Цей день уже затверджено — редагування недоступне без запиту на редагування.
-            </div>
+            <div className="empty-state">🔒 Цей день уже затверджено — редагування недоступне без запиту на редагування.</div>
           )}
           {daySubmitted && !dayApproved && (
             <div className="hint" style={{ padding: "0 16px 8px" }}>
@@ -375,29 +395,24 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
             </div>
           )}
 
-          <div className="step-badge">🚙 АВТО ТА КІЛОМЕТРАЖ</div>
+          <div className="section-title">🚙 Яким авто їздили</div>
           <div className="list">
-            {cars.map((c) => {
-              const takenBy = takenCars.get(c.id);
-              return (
-                <button
-                  key={c.id}
-                  className={`cell ${carId === c.id ? "selected" : ""}`}
-                  disabled={!!takenBy}
-                  style={takenBy ? { opacity: 0.4 } : undefined}
-                  onClick={() => {
-                    setCarId(c.id);
-                    haptic("selection");
-                  }}
-                >
-                  <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <span className="setup-icon accent-blue">🚙</span>
-                    <span className="cell-title">{c.name}</span>
-                  </span>
-                  {takenBy ? <span className="badge warn">🔒 {takenBy}</span> : <span className="cell-sub">{c.plate ?? ""}</span>}
-                </button>
-              );
-            })}
+            {cars.map((c) => (
+              <button
+                key={c.id}
+                className={`cell ${carId === c.id ? "selected" : ""}`}
+                onClick={() => {
+                  setCarId(c.id);
+                  haptic("selection");
+                }}
+              >
+                <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <span className="setup-icon accent-blue">🚙</span>
+                  <span className="cell-title">{c.name}</span>
+                </span>
+                <span className="cell-sub">{c.plate ?? ""}</span>
+              </button>
+            ))}
           </div>
 
           <div className="grid-2">
@@ -416,64 +431,18 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
             </div>
           )}
 
+          <div className="step-badge">2 · 📍 ОБʼЄКТИ</div>
           <div className="section-title row">
-            <span>👥 Люди — обрано {employeeIds.length}</span>
-            {employeeIds.length > 0 && (
-              <button className="chip" onClick={() => setEmployeeIds([])}>
-                🗑 Очистити
-              </button>
-            )}
-          </div>
-          <input className="search-box" placeholder="Пошук людини…" value={peopleSearch} onChange={(e) => setPeopleSearch(e.target.value)} />
-          <div className="list">
-            {groupByBrigade(employees.filter((e) => e.name.toLowerCase().includes(peopleSearch.toLowerCase())), employees).map((g) => {
-              const expanded = expandedBrigadeId === g.id || !!peopleSearch;
-              const selectedCount = g.members.filter((e) => employeeIds.includes(e.id)).length;
-              return (
-                <div key={g.id}>
-                  <button className="cell" onClick={() => setExpandedBrigadeId(expanded ? null : g.id)}>
-                    <span className="cell-title">
-                      {expanded ? "▾" : "▸"} {g.title}
-                    </span>
-                    <span className="badge">
-                      {selectedCount}/{g.members.length}
-                    </span>
-                  </button>
-                  {expanded && (
-                    <div style={{ paddingLeft: 12 }}>
-                      {g.members.map((emp) => {
-                        const busyBy = busyEmployees.get(emp.id);
-                        const checked = employeeIds.includes(emp.id);
-                        return (
-                          <button
-                            key={emp.id}
-                            className={`cell ${checked ? "selected" : ""}`}
-                            disabled={!!busyBy}
-                            style={busyBy ? { opacity: 0.4 } : undefined}
-                            onClick={() => toggleEmployee(emp.id)}
-                          >
-                            <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                              <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
-                              <span className={`avatar-circle ${roleAccent(employeeRole(emp))}`}>{initials(emp.name)}</span>
-                              {emp.name}
-                            </span>
-                            {busyBy ? <span className="badge warn">🔒 {busyBy}</span> : <span className="role-tag">{employeeRole(emp)}</span>}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="section-title row">
-            <span>📍 Обʼєкти — обрано {plans.length}</span>
+            <span>Куди їздили — обрано {plans.length}</span>
             <button className="chip" onClick={() => setShowObjectPicker((v) => !v)}>
-              {showObjectPicker ? "▾ Згорнути" : "➕ Додати"}
+              {showObjectPicker ? "▾ Згорнути" : "➕ Додати обʼєкт"}
             </button>
           </div>
+          {!plans.length && !showObjectPicker && (
+            <div className="hint" style={{ padding: "0 16px 8px" }}>
+              Додайте обʼєкти — у кожному оберете своїх людей, години, роботи та обсяги.
+            </div>
+          )}
           {showObjectPicker && (
             <>
               <input className="search-box" placeholder="Пошук обʼєкта…" value={objectSearch} onChange={(e) => setObjectSearch(e.target.value)} />
@@ -481,7 +450,7 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
                 {objects
                   .filter((o) => o.name.toLowerCase().includes(objectSearch.toLowerCase()))
                   .map((o) => {
-                    const checked = !!planFor(o.id);
+                    const checked = plans.some((p) => p.objectId === o.id);
                     return (
                       <button key={o.id} className={`cell ${checked ? "selected" : ""}`} onClick={() => toggleObject(o)}>
                         <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -496,35 +465,124 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
             </>
           )}
 
-          {plans.map((p) => {
-            const sessions = buildSessions(p);
+          {plans.map((p, idx) => {
+            const peopleOpen = peoplePickerObjectId === p.objectId;
+            const worksOpen = worksPickerObjectId === p.objectId;
             return (
               <div key={p.objectId}>
+                <div className="step-badge">
+                  ОБʼЄКТ {idx + 1} · {p.objectName}
+                </div>
+
                 <div className="section-title row">
-                  <span>📍 {p.objectName}</span>
-                  <button className="chip danger-btn" onClick={() => removeObject(p.objectId)}>
-                    🗑 Прибрати
+                  <span>👥 Хто тут працював — {p.employeeIds.length}</span>
+                  <button
+                    className="chip"
+                    onClick={() => {
+                      setPeopleSearch("");
+                      setWorksPickerObjectId(null);
+                      setPeoplePickerObjectId(peopleOpen ? null : p.objectId);
+                    }}
+                  >
+                    {peopleOpen ? "▾ Готово" : "➕ Обрати людей"}
                   </button>
                 </div>
 
-                <div className="chip-row">
-                  {p.works.map((w) => (
-                    <button key={w.workId} className="chip selected" onClick={() => setWorksPickerObjectId(p.objectId)}>
-                      🧱 {w.workName}
-                    </button>
-                  ))}
+                {peopleOpen && (
+                  <>
+                    <input className="search-box" placeholder="Пошук людини…" value={peopleSearch} onChange={(e) => setPeopleSearch(e.target.value)} />
+                    <div className="list">
+                      {groupByBrigade(employees.filter((e) => e.name.toLowerCase().includes(peopleSearch.toLowerCase())), employees).map((g) => {
+                        const expanded = expandedBrigadeId === g.id || !!peopleSearch;
+                        const selectedCount = g.members.filter((e) => p.employeeIds.includes(e.id)).length;
+                        const allSelected = g.members.length > 0 && g.members.every((e) => p.employeeIds.includes(e.id));
+                        return (
+                          <div key={g.id}>
+                            <button className="cell" onClick={() => setExpandedBrigadeId(expanded ? null : g.id)}>
+                              <span className="cell-title">
+                                {expanded ? "▾" : "▸"} {g.title}
+                              </span>
+                              <span className="badge">
+                                {selectedCount}/{g.members.length}
+                              </span>
+                            </button>
+                            {expanded && (
+                              <div style={{ paddingLeft: 12 }}>
+                                <button
+                                  className={`bulk-select-btn ${allSelected ? "active" : ""}`}
+                                  onClick={() => toggleBrigadeAtObject(p.objectId, g.members, allSelected)}
+                                >
+                                  {allSelected ? "✕ Зняти всю бригаду" : "✓ Обрати всю бригаду"}
+                                </button>
+                                {g.members.map((emp) => {
+                                  const checked = p.employeeIds.includes(emp.id);
+                                  return (
+                                    <button
+                                      key={emp.id}
+                                      className={`cell ${checked ? "selected" : ""}`}
+                                      onClick={() => toggleEmployeeAtObject(p.objectId, emp.id)}
+                                    >
+                                      <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                        <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
+                                        <span className={`avatar-circle ${roleAccent(employeeRole(emp))}`}>{initials(emp.name)}</span>
+                                        {emp.name}
+                                      </span>
+                                      <span className="role-tag">{employeeRole(emp)}</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+
+                {!p.employeeIds.length ? (
+                  <div className="hint" style={{ padding: "0 16px 8px" }}>Ще нікого не обрано на цей обʼєкт.</div>
+                ) : (
+                  <>
+                    <div className="hint" style={{ padding: "0 16px 4px" }}>Скільки годин кожен відпрацював тут</div>
+                    <div className="list">
+                      {p.employeeIds.map((id) => (
+                        <div key={id} className="cell" style={{ cursor: "default" }}>
+                          <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <span className={`avatar-circle ${roleAccent(roleFor(id))}`}>{initials(employeeName(id))}</span>
+                            {employeeName(id)}
+                          </span>
+                          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <input
+                              className="hours-input"
+                              inputMode="decimal"
+                              placeholder="0"
+                              value={p.hoursByEmployeeId[id] ?? ""}
+                              onChange={(e) => setHours(p.objectId, id, e.target.value)}
+                            />
+                            <span className="cell-sub">год</span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                <div className="section-title row">
+                  <span>🧱 Що робили — {p.works.length}</span>
                   <button
                     className="chip"
                     onClick={() => {
                       setWorksSearch("");
-                      setWorksPickerObjectId(worksPickerObjectId === p.objectId ? null : p.objectId);
+                      setPeoplePickerObjectId(null);
+                      setWorksPickerObjectId(worksOpen ? null : p.objectId);
                     }}
                   >
-                    {worksPickerObjectId === p.objectId ? "▾ Згорнути роботи" : "➕ Роботи"}
+                    {worksOpen ? "▾ Готово" : "➕ Обрати роботи"}
                   </button>
                 </div>
 
-                {worksPickerObjectId === p.objectId && (
+                {worksOpen && (
                   <>
                     <input className="search-box" placeholder="Пошук роботи…" value={worksSearch} onChange={(e) => setWorksSearch(e.target.value)} />
                     <div className="list">
@@ -548,60 +606,80 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
                   </>
                 )}
 
-                <div className="hint" style={{ padding: "0 16px 4px" }}>
-                  Години на цьому обʼєкті ({sessions.length} з {employeeIds.length} людей)
-                </div>
-                {!employeeIds.length && <div className="hint" style={{ padding: "0 16px 8px" }}>Спочатку оберіть людей вище.</div>}
-                <div className="list">
-                  {employeeIds.map((id) => (
-                    <div key={id} className="cell" style={{ cursor: "default" }}>
-                      <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span className={`avatar-circle ${roleAccent(roleFor(id))}`}>{initials(employeeName(id))}</span>
-                        {employeeName(id)}
-                      </span>
-                      <input
-                        className="hours-input"
-                        inputMode="decimal"
-                        placeholder="год"
-                        value={p.hoursByEmployeeId[id] ?? ""}
-                        onChange={(e) => setHours(p.objectId, id, e.target.value)}
-                      />
+                {!p.works.length ? (
+                  <div className="hint" style={{ padding: "0 16px 8px" }}>Ще не обрано робіт на цьому обʼєкті.</div>
+                ) : (
+                  <>
+                    <div className="hint" style={{ padding: "0 16px 4px" }}>Обсяг виконаного</div>
+                    <div className="list">
+                      {p.works.map((w) => (
+                        <div key={w.workId} className="cell" style={{ cursor: "default" }}>
+                          <span className="cell-title">{w.workName}</span>
+                          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <input
+                              className="hours-input"
+                              inputMode="decimal"
+                              placeholder="0"
+                              value={w.volume}
+                              onChange={(e) => setVolume(p.objectId, w.workId, e.target.value)}
+                            />
+                            <span className="cell-sub">{w.unit || "од."}</span>
+                          </span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  </>
+                )}
+
+                <div style={{ padding: "0 16px 12px", textAlign: "center" }}>
+                  <button className="back-btn danger-btn" onClick={() => removeObject(p.objectId)}>
+                    🗑 Прибрати «{p.objectName}»
+                  </button>
                 </div>
               </div>
             );
           })}
 
-          <MainButton text="Далі → Обсяги робіт" onClick={goToVolumes} disabled={!formComplete} />
+          <MainButton text="Далі → Перевірка" onClick={goToReview} disabled={!formComplete} />
         </>
       )}
 
-      {stage === "volumes" && (
+      {stage === "review" && (
         <>
-          <div className="step-badge">📦 ОБСЯГИ РОБІТ</div>
-          {!allWorksCount && <div className="empty-state">Роботи не додані — повернись назад і додай їх.</div>}
+          <div className="step-badge">3 · ✅ ПЕРЕВІРКА</div>
 
           {plans.map((p) => (
             <div key={p.objectId}>
-              <div className="section-title">📍 {p.objectName}</div>
-              {!p.works.length && <div className="hint" style={{ padding: "0 16px 8px" }}>Без робіт</div>}
+              <div className="section-title row">
+                <span>📍 {p.objectName}</span>
+                <span className="badge">{Math.round(objectHours(p) * 100) / 100} год</span>
+              </div>
               <div className="list">
+                {p.employeeIds.map((id) => {
+                  const h = Number(p.hoursByEmployeeId[id]);
+                  const ok = Number.isFinite(h) && h > 0;
+                  return (
+                    <div key={id} className="cell" style={{ cursor: "default" }}>
+                      <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span className={`avatar-circle ${roleAccent(roleFor(id))}`}>{initials(employeeName(id))}</span>
+                        {employeeName(id)}
+                      </span>
+                      <span className={`badge ${ok ? "ok" : "warn"}`}>{ok ? `${h} год` : "без годин"}</span>
+                    </div>
+                  );
+                })}
                 {p.works.map((w) => (
                   <div key={w.workId} className="cell" style={{ cursor: "default" }}>
-                    <span className="cell-title">{w.workName}</span>
-                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <input
-                        className="hours-input"
-                        inputMode="decimal"
-                        placeholder="0"
-                        value={w.volume}
-                        onChange={(e) => setVolume(p.objectId, w.workId, e.target.value)}
-                      />
-                      <span className="cell-sub">{w.unit || "од."}</span>
-                    </span>
+                    <span className="cell-title">🧱 {w.workName}</span>
+                    <span className={`badge ${w.volume ? "ok" : "warn"}`}>{w.volume ? `${w.volume} ${w.unit || "од."}` : "без обсягу"}</span>
                   </div>
                 ))}
+                {!p.works.length && (
+                  <div className="cell" style={{ cursor: "default" }}>
+                    <span className="cell-title">🧱 Роботи</span>
+                    <span className="badge warn">не додані</span>
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -621,7 +699,7 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
             <div className="cell" style={{ cursor: "default" }}>
               <span className="cell-title">Людей · годин</span>
               <span className="cell-sub">
-                {employeeIds.length} · {Math.round(totalHours * 100) / 100} год
+                {allEmployeeIds.length} · {Math.round(totalHours * 100) / 100} год
               </span>
             </div>
             {preview && (
@@ -639,9 +717,18 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
               </>
             )}
           </div>
-          {peopleWithHours.size < employeeIds.length && (
+
+          <div className="hint" style={{ padding: "0 16px 8px" }}>
+            Доплату за виїзд поділять між усіма {allEmployeeIds.length} людьми з цих обʼєктів.
+          </div>
+          {peopleWithoutHours.length > 0 && (
             <div className="hint" style={{ padding: "0 16px 8px" }}>
-              ⚠️ {employeeIds.length - peopleWithHours.size} з обраних людей без годин — вони отримають лише доплату за виїзд.
+              ⚠️ Без годин: {peopleWithoutHours.map(employeeName).join(", ")} — вони отримають лише доплату за виїзд.
+            </div>
+          )}
+          {emptyVolumeCount > 0 && (
+            <div className="hint" style={{ padding: "0 16px 8px" }}>
+              ⚠️ Без обсягу: {emptyVolumeCount} робіт — за них не нарахується оплата. Поверніться назад, щоб заповнити.
             </div>
           )}
 

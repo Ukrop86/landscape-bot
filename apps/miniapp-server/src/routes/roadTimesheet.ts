@@ -37,6 +37,12 @@ function blockNonAdmin(req: import("express").Request, res: Response): boolean {
 /** Thrown to signal a 409 (reservation conflict) from inside a withLock() callback. */
 class ReservationConflictError extends Error {}
 
+/** Today's date in the timezone the crews actually work in, matching the
+ * client's todayISO() -- used to tell a genuinely past day from the live one. */
+function todayKyivISO(): string {
+  return new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Kyiv" });
+}
+
 /** Bounds coefficients server-side -- the client UI only offers 0.7-1.2 presets, but a
  * direct API call could send anything, and this number directly drives payroll splits. */
 function clampCoef(value: number | undefined): number {
@@ -488,21 +494,35 @@ function mergeObjects(objectsByLeg: ObjectInput[][]): ObjectInput[] {
  * last submission.
  */
 roadTimesheetRouter.post("/", async (req, res) => {
-  const { date, carId, odoStart, odoStartPhoto, odoEnd, odoEndPhoto, employeeIds, objects, idempotencyKey, tripSeq, selfTransportIds, errands } =
-    req.body as {
-      date: string;
-      carId: string;
-      odoStart: number;
-      odoStartPhoto?: string;
-      odoEnd: number;
-      odoEndPhoto?: string;
-      employeeIds: string[];
-      objects: ObjectInput[];
-      idempotencyKey?: string;
-      tripSeq?: number;
-      selfTransportIds?: string[];
-      errands?: Errand[];
-    };
+  const {
+    date,
+    carId,
+    odoStart,
+    odoStartPhoto,
+    odoEnd,
+    odoEndPhoto,
+    employeeIds,
+    objects,
+    idempotencyKey,
+    tripSeq,
+    selfTransportIds,
+    errands,
+    backdated,
+  } = req.body as {
+    date: string;
+    carId: string;
+    odoStart: number;
+    odoStartPhoto?: string;
+    odoEnd: number;
+    odoEndPhoto?: string;
+    employeeIds: string[];
+    objects: ObjectInput[];
+    idempotencyKey?: string;
+    tripSeq?: number;
+    selfTransportIds?: string[];
+    errands?: Errand[];
+    backdated?: boolean;
+  };
 
   if (!date || !carId || !Array.isArray(objects) || !objects.length || !Array.isArray(employeeIds) || !employeeIds.length) {
     res.status(400).json({ error: "date, carId, at least one employee and at least one object are required" });
@@ -567,16 +587,26 @@ roadTimesheetRouter.post("/", async (req, res) => {
   let combined!: Awaited<ReturnType<typeof computePayroll>>;
   let newMergedObjectsForNotify: ObjectInput[] = [];
 
+  // Car/people reservations exist to stop two foremen double-booking the
+  // SAME car or person while a day is being worked in real time. On a day
+  // that's already over there's no such race to lose: whatever those two
+  // actually did is now just a fact being recorded, and a stale lock (say,
+  // another foreman reserved the car that day and never submitted) would
+  // block the record forever. So the backdated-entry screen opts out --
+  // but only for a genuinely past date, so a client can't send the flag to
+  // wave away a real conflict on today's live day.
+  const skipReservationChecks = backdated === true && date < todayKyivISO();
+
   try {
     await withLock(`reserve:${date}`, async (tx) => {
       // Enforce the car reservation server-side too, not just as a UI hint --
       // and do the check-then-write atomically under the lock, so two
       // concurrent requests can't both pass the check before either commits.
-      if (await findCarConflict(tx, date, carId, foremanTgId)) {
+      if (!skipReservationChecks && (await findCarConflict(tx, date, carId, foremanTgId))) {
         throw new ReservationConflictError("Це авто вже зарезервоване іншим бригадиром на сьогодні");
       }
 
-      const employeeConflicts = await findEmployeeConflicts(tx, date, employeeIds ?? [], foremanTgId);
+      const employeeConflicts = skipReservationChecks ? [] : await findEmployeeConflicts(tx, date, employeeIds ?? [], foremanTgId);
       if (employeeConflicts.length) {
         throw new ReservationConflictError(`Деякі люди вже зайняті іншим бригадиром сьогодні: ${employeeConflicts.join(", ")}`);
       }
