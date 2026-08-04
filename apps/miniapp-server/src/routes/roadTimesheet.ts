@@ -1581,72 +1581,50 @@ function money(n: number): string {
 }
 
 /**
- * The short payout summary a foreman gets the moment an admin approves their
- * day: what each object earned, who earned what on it, and the day's total
- * fund. Same numbers as the БУХЗВІТ export -- both are built from the one
- * computeApprovedDayTotals result.
+ * The short payout note a foreman gets the moment an admin approves their
+ * day: which object, who earned how much there, and the day's total fund.
+ * Deliberately brief -- the itemised view (hours, works, volumes, per-object
+ * funds) is the ADMIN's, on the approval screen they act from. This is just
+ * the outcome, for the person who has to tell the crew what they made.
  *
  * `pay` in a salary pack row is already role-adjusted (the brigadier's 20%
- * and the senior gardener's 10% are taken off the top, the rest split
- * between workers by hours), so listing the rows as-is IS the real per-person
- * work pay. The travel allowance is separate and per-person, so it's
- * reported on its own line rather than folded into those numbers.
+ * and the senior gardener's 10% come off the top, the rest splits between
+ * workers by hours), so the rows as listed ARE the real per-person work pay.
+ * The travel allowance is per-person and separate from the object funds, so
+ * it stays its own line instead of being folded into those numbers -- drop
+ * it and the amounts stop adding up to what people actually receive.
  */
 function buildApprovalReport(date: string, totals: ApprovedDayTotals): string {
-  const { combined, totalKm, totalExcludedKm, unionEmployeeIds, unionSelfTransportIds } = totals;
+  const { combined } = totals;
   const packs = combined.salaryPacks.filter((p) => p.objectTotal > 0 || p.rows.length > 0);
   const totalFund = packs.reduce((acc, p) => acc + p.objectTotal, 0);
-  const allowanceCount = unionEmployeeIds.filter((id) => !unionSelfTransportIds.includes(id)).length;
 
-  const head = [`✅ *День затверджено*`, `📅 Дата: ${date}`, ``];
+  const head = [`✅ *День затверджено*`, `📅 ${date}`, ``];
   const foot = [
-    `🚗 ${totalKm} км · клас ${combined.tripClass}${totalExcludedKm > 0 ? ` (−${totalExcludedKm} км по справам)` : ""}`,
-    `➕ Доплата за виїзд: ${money(combined.roadAllowance.perPerson)} грн/особу на ${allowanceCount} осіб`,
+    `➕ Доплата за виїзд: ${money(combined.roadAllowance.perPerson)} грн/особу`,
     `💰 *Загальний фонд: ${money(totalFund)} грн*`,
   ];
 
   const perObject = (withPeople: boolean) =>
     packs.flatMap((pack) => {
-      const lines = [`📍 *${escapeMd(pack.objectName)}* — фонд ${money(pack.objectTotal)} грн`];
+      const lines = [`📍 *${escapeMd(pack.objectName)}*`];
       if (withPeople) {
         if (!pack.rows.length) lines.push(`  _немає годин — оплата не розподілена_`);
-        for (const row of pack.rows) lines.push(`  • ${escapeMd(row.employeeName)} — ${row.hours} год · ${money(row.pay)} грн`);
+        for (const row of pack.rows) lines.push(`  • ${escapeMd(row.employeeName)} — ${money(row.pay)} грн`);
       }
       lines.push(``);
       return lines;
     });
 
-  // Only worth its own block when more than one object is involved -- with a
-  // single object it would just restate the per-object list above.
-  const dayTotalsPerPerson = () => {
-    if (packs.length <= 1) return [];
-    const payByEmployee = new Map<string, { name: string; pay: number }>();
-    for (const pack of packs) {
-      for (const row of pack.rows) {
-        const current = payByEmployee.get(row.employeeId) ?? { name: row.employeeName, pay: 0 };
-        current.pay += row.pay;
-        payByEmployee.set(row.employeeId, current);
-      }
-    }
-    return [
-      `👥 *Разом за роботи*`,
-      ...[...payByEmployee.values()].sort((a, b) => b.pay - a.pay).map(({ name, pay }) => `  • ${escapeMd(name)} — ${money(pay)} грн`),
-      ``,
-    ];
-  };
-
-  // Telegram rejects anything over 4096 characters outright, so a big enough
-  // day has to shed detail. It sheds it from the INSIDE: the per-person lines
-  // under each object go first, then the objects themselves -- the day's
-  // totals at the end are the whole point of the message and always survive.
-  // In practice a normal day (2-4 objects) lands around 900-2100 characters
-  // and none of this ever triggers.
+  // Telegram rejects anything over 4096 characters outright. At this size
+  // that needs a truly enormous day, but if it ever happens the note sheds
+  // the per-person lines rather than its tail -- the total fund is the whole
+  // point of the message and always survives.
   const LIMIT = 3900;
   const note = [`_Деталі скорочено — повний розклад у застосунку._`, ``];
   const variants = [
-    [...head, ...perObject(true), ...dayTotalsPerPerson(), ...foot],
-    [...head, ...perObject(false), ...dayTotalsPerPerson(), ...note, ...foot],
-    [...head, ...dayTotalsPerPerson(), ...note, ...foot],
+    [...head, ...perObject(true), ...foot],
+    [...head, ...perObject(false), ...note, ...foot],
     [...head, ...note, ...foot],
   ];
   const chosen = variants.find((v) => v.join("\n").length <= LIMIT) ?? variants[variants.length - 1];
