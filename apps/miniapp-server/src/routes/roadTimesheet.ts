@@ -1596,50 +1596,61 @@ function buildApprovalReport(date: string, totals: ApprovedDayTotals): string {
   const { combined, totalKm, totalExcludedKm, unionEmployeeIds, unionSelfTransportIds } = totals;
   const packs = combined.salaryPacks.filter((p) => p.objectTotal > 0 || p.rows.length > 0);
   const totalFund = packs.reduce((acc, p) => acc + p.objectTotal, 0);
-
-  const lines: string[] = [`✅ *День затверджено*`, `📅 Дата: ${date}`, ``];
-
-  for (const pack of packs) {
-    lines.push(`📍 *${escapeMd(pack.objectName)}* — фонд ${money(pack.objectTotal)} грн`);
-    if (!pack.rows.length) {
-      lines.push(`  _немає годин — оплата не розподілена_`);
-    }
-    for (const row of pack.rows) {
-      lines.push(`  • ${escapeMd(row.employeeName)} — ${row.hours} год · ${money(row.pay)} грн`);
-    }
-    lines.push(``);
-  }
-
-  // Only worth repeating when more than one object is involved -- with a
-  // single object it would just restate the list above.
-  if (packs.length > 1) {
-    const payByEmployee = new Map<string, { name: string; pay: number }>();
-    for (const pack of packs) {
-      for (const row of pack.rows) {
-        const cur = payByEmployee.get(row.employeeId) ?? { name: row.employeeName, pay: 0 };
-        cur.pay += row.pay;
-        payByEmployee.set(row.employeeId, cur);
-      }
-    }
-    lines.push(`👥 *Разом за роботи*`);
-    for (const { name, pay } of [...payByEmployee.values()].sort((a, b) => b.pay - a.pay)) {
-      lines.push(`  • ${escapeMd(name)} — ${money(pay)} грн`);
-    }
-    lines.push(``);
-  }
-
   const allowanceCount = unionEmployeeIds.filter((id) => !unionSelfTransportIds.includes(id)).length;
-  lines.push(
+
+  const head = [`✅ *День затверджено*`, `📅 Дата: ${date}`, ``];
+  const foot = [
     `🚗 ${totalKm} км · клас ${combined.tripClass}${totalExcludedKm > 0 ? ` (−${totalExcludedKm} км по справам)` : ""}`,
     `➕ Доплата за виїзд: ${money(combined.roadAllowance.perPerson)} грн/особу на ${allowanceCount} осіб`,
     `💰 *Загальний фонд: ${money(totalFund)} грн*`,
-  );
+  ];
 
-  // Telegram rejects anything over 4096 characters outright, and a day with
-  // many objects and a big crew can get there -- better a trimmed report than
-  // no report at all.
-  const text = lines.join("\n");
-  return text.length > 3900 ? `${text.slice(0, 3900)}\n\n… звіт скорочено, повні дані у застосунку` : text;
+  const perObject = (withPeople: boolean) =>
+    packs.flatMap((pack) => {
+      const lines = [`📍 *${escapeMd(pack.objectName)}* — фонд ${money(pack.objectTotal)} грн`];
+      if (withPeople) {
+        if (!pack.rows.length) lines.push(`  _немає годин — оплата не розподілена_`);
+        for (const row of pack.rows) lines.push(`  • ${escapeMd(row.employeeName)} — ${row.hours} год · ${money(row.pay)} грн`);
+      }
+      lines.push(``);
+      return lines;
+    });
+
+  // Only worth its own block when more than one object is involved -- with a
+  // single object it would just restate the per-object list above.
+  const dayTotalsPerPerson = () => {
+    if (packs.length <= 1) return [];
+    const payByEmployee = new Map<string, { name: string; pay: number }>();
+    for (const pack of packs) {
+      for (const row of pack.rows) {
+        const current = payByEmployee.get(row.employeeId) ?? { name: row.employeeName, pay: 0 };
+        current.pay += row.pay;
+        payByEmployee.set(row.employeeId, current);
+      }
+    }
+    return [
+      `👥 *Разом за роботи*`,
+      ...[...payByEmployee.values()].sort((a, b) => b.pay - a.pay).map(({ name, pay }) => `  • ${escapeMd(name)} — ${money(pay)} грн`),
+      ``,
+    ];
+  };
+
+  // Telegram rejects anything over 4096 characters outright, so a big enough
+  // day has to shed detail. It sheds it from the INSIDE: the per-person lines
+  // under each object go first, then the objects themselves -- the day's
+  // totals at the end are the whole point of the message and always survive.
+  // In practice a normal day (2-4 objects) lands around 900-2100 characters
+  // and none of this ever triggers.
+  const LIMIT = 3900;
+  const note = [`_Деталі скорочено — повний розклад у застосунку._`, ``];
+  const variants = [
+    [...head, ...perObject(true), ...dayTotalsPerPerson(), ...foot],
+    [...head, ...perObject(false), ...dayTotalsPerPerson(), ...note, ...foot],
+    [...head, ...dayTotalsPerPerson(), ...note, ...foot],
+    [...head, ...note, ...foot],
+  ];
+  const chosen = variants.find((v) => v.join("\n").length <= LIMIT) ?? variants[variants.length - 1];
+  return chosen.join("\n").slice(0, LIMIT);
 }
 
 /** POST /api/road-timesheet/pending/approve — admin-only. { date, foremanTgId } */
