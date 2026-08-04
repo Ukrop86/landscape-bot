@@ -1485,6 +1485,37 @@ async function setDayStatus(date: string, foremanTgId: number, status: string, t
   return rowsToUpdate.length;
 }
 
+/** The whole day rolled up from its legs -- merged objects plus the combined
+ * payroll -- computed ONCE and shared by everything that reports on an
+ * approved day, so the accountant's БУХЗВІТ rows and the summary the foreman
+ * receives can never disagree about the same day's money. */
+async function computeApprovedDayTotals(trips: StoredTrip[]) {
+  const mergedObjects = mergeObjects(trips.map((t) => t.objects));
+  const unionEmployeeIds = [...new Set(trips.flatMap((t) => t.employeeIds))];
+  const unionSelfTransportIds = [...new Set(trips.flatMap((t) => t.selfTransportIds ?? []))];
+  const totalKm = trips.reduce((acc, t) => {
+    const legKm = typeof t.odoStart === "number" && typeof t.odoEnd === "number" ? t.odoEnd - t.odoStart : 0;
+    return acc + (Number.isFinite(legKm) ? legKm : 0);
+  }, 0);
+  // Errand km ("машина вибула по справам") are excluded from the trip class
+  // and the travel allowance, exactly as POST / does when it computes the
+  // day at submit time. Without this the approved day would be reclassified
+  // upward here and pay a bigger allowance into БУХЗВІТ than the foreman was
+  // shown when they submitted it.
+  const totalExcludedKm = trips.reduce((acc, t) => acc + sumErrandKm(t.errands), 0);
+  const combined = await computePayroll({
+    odoStart: 0,
+    odoEnd: totalKm,
+    employeeIds: unionEmployeeIds,
+    objects: mergedObjects,
+    selfTransportIds: unionSelfTransportIds,
+    excludedKm: totalExcludedKm,
+  });
+  return { mergedObjects, unionEmployeeIds, unionSelfTransportIds, totalKm, totalExcludedKm, combined };
+}
+
+type ApprovedDayTotals = Awaited<ReturnType<typeof computeApprovedDayTotals>>;
+
 /** Builds and writes this day's payroll into the shared БУХЗВІТ report for the
  * accountant, split per work item (see buildAccountingRows) -- mirrors what
  * the legacy bot does on ITS OWN approval flow, which never fires for a day
@@ -1495,22 +1526,10 @@ async function exportApprovedDayToAccounting(
   date: string,
   foremanTgId: number,
   trips: StoredTrip[],
+  totals: ApprovedDayTotals,
 ): Promise<{ ok: boolean; rows: number }> {
   try {
-    const mergedObjects = mergeObjects(trips.map((t) => t.objects));
-    const unionEmployeeIds = [...new Set(trips.flatMap((t) => t.employeeIds))];
-    const unionSelfTransportIds = [...new Set(trips.flatMap((t) => t.selfTransportIds ?? []))];
-    const totalKm = trips.reduce((acc, t) => {
-      const legKm = typeof t.odoStart === "number" && typeof t.odoEnd === "number" ? t.odoEnd - t.odoStart : 0;
-      return acc + (Number.isFinite(legKm) ? legKm : 0);
-    }, 0);
-    const combined = await computePayroll({
-      odoStart: 0,
-      odoEnd: totalKm,
-      employeeIds: unionEmployeeIds,
-      objects: mergedObjects,
-      selfTransportIds: unionSelfTransportIds,
-    });
+    const { mergedObjects, unionEmployeeIds, unionSelfTransportIds, combined } = totals;
 
     const workIds = [...new Set(mergedObjects.flatMap((o) => (o.works ?? []).map((w) => w.workId)))];
     const [workRows, foremanUser] = await Promise.all([
@@ -1546,6 +1565,81 @@ async function exportApprovedDayToAccounting(
     console.error(`[accounting] failed to export date=${date} foremanTgId=${foremanTgId}: ${(e as Error).message}`);
     return { ok: false, rows: 0 };
   }
+}
+
+/** Telegram's legacy Markdown breaks on unescaped _ * [ ` in the text, and a
+ * broken message is silently rejected by the API -- which for a payout
+ * summary means the foreman just never hears about their money. Object and
+ * employee names come from the office's spreadsheets, so they can contain
+ * anything. */
+function escapeMd(s: string): string {
+  return s.replace(/([_*[\]`])/g, "\\$1");
+}
+
+function money(n: number): string {
+  return String(Math.round(n * 100) / 100);
+}
+
+/**
+ * The short payout summary a foreman gets the moment an admin approves their
+ * day: what each object earned, who earned what on it, and the day's total
+ * fund. Same numbers as the БУХЗВІТ export -- both are built from the one
+ * computeApprovedDayTotals result.
+ *
+ * `pay` in a salary pack row is already role-adjusted (the brigadier's 20%
+ * and the senior gardener's 10% are taken off the top, the rest split
+ * between workers by hours), so listing the rows as-is IS the real per-person
+ * work pay. The travel allowance is separate and per-person, so it's
+ * reported on its own line rather than folded into those numbers.
+ */
+function buildApprovalReport(date: string, totals: ApprovedDayTotals): string {
+  const { combined, totalKm, totalExcludedKm, unionEmployeeIds, unionSelfTransportIds } = totals;
+  const packs = combined.salaryPacks.filter((p) => p.objectTotal > 0 || p.rows.length > 0);
+  const totalFund = packs.reduce((acc, p) => acc + p.objectTotal, 0);
+
+  const lines: string[] = [`✅ *День затверджено*`, `📅 Дата: ${date}`, ``];
+
+  for (const pack of packs) {
+    lines.push(`📍 *${escapeMd(pack.objectName)}* — фонд ${money(pack.objectTotal)} грн`);
+    if (!pack.rows.length) {
+      lines.push(`  _немає годин — оплата не розподілена_`);
+    }
+    for (const row of pack.rows) {
+      lines.push(`  • ${escapeMd(row.employeeName)} — ${row.hours} год · ${money(row.pay)} грн`);
+    }
+    lines.push(``);
+  }
+
+  // Only worth repeating when more than one object is involved -- with a
+  // single object it would just restate the list above.
+  if (packs.length > 1) {
+    const payByEmployee = new Map<string, { name: string; pay: number }>();
+    for (const pack of packs) {
+      for (const row of pack.rows) {
+        const cur = payByEmployee.get(row.employeeId) ?? { name: row.employeeName, pay: 0 };
+        cur.pay += row.pay;
+        payByEmployee.set(row.employeeId, cur);
+      }
+    }
+    lines.push(`👥 *Разом за роботи*`);
+    for (const { name, pay } of [...payByEmployee.values()].sort((a, b) => b.pay - a.pay)) {
+      lines.push(`  • ${escapeMd(name)} — ${money(pay)} грн`);
+    }
+    lines.push(``);
+  }
+
+  const allowanceCount = unionEmployeeIds.filter((id) => !unionSelfTransportIds.includes(id)).length;
+  lines.push(
+    `🚗 ${totalKm} км · клас ${combined.tripClass}${totalExcludedKm > 0 ? ` (−${totalExcludedKm} км по справам)` : ""}`,
+    `➕ Доплата за виїзд: ${money(combined.roadAllowance.perPerson)} грн/особу на ${allowanceCount} осіб`,
+    `💰 *Загальний фонд: ${money(totalFund)} грн*`,
+  );
+
+  // Telegram rejects anything over 4096 characters outright, and a day with
+  // many objects and a big crew can get there -- better a trimmed report than
+  // no report at all.
+  const text = lines.join("\n");
+  return text.length > 3900 ? `${text.slice(0, 3900)}\n\n… звіт скорочено, повні дані у застосунку` : text;
 }
 
 /** POST /api/road-timesheet/pending/approve — admin-only. { date, foremanTgId } */
@@ -1585,10 +1679,21 @@ roadTimesheetRouter.post("/pending/approve", async (req, res) => {
     return;
   }
 
-  const accounting = await exportApprovedDayToAccounting(date, foremanTgId, pendingTrips);
+  // The approval itself is already committed, so nothing below may fail the
+  // request: the accountant's export swallows its own errors, and if the
+  // payroll roll-up itself breaks, the foreman still gets told their day was
+  // approved -- just without the breakdown.
+  let accountingExported = false;
+  try {
+    const totals = await computeApprovedDayTotals(pendingTrips);
+    accountingExported = (await exportApprovedDayToAccounting(date, foremanTgId, pendingTrips, totals)).ok;
+    await sendTelegramMessage(foremanTgId, buildApprovalReport(date, totals));
+  } catch (e) {
+    console.error(`[approve] summary/export failed date=${date} foremanTgId=${foremanTgId}: ${(e as Error).message}`);
+    await sendTelegramMessage(foremanTgId, `✅ *День затверджено адміністратором*\n📅 Дата: ${date}`);
+  }
 
-  await sendTelegramMessage(foremanTgId, `✅ *День затверджено адміністратором*\n📅 Дата: ${date}`);
-  res.json({ ok: true, accountingExported: accounting.ok });
+  res.json({ ok: true, accountingExported });
 });
 
 /** POST /api/road-timesheet/pending/return — admin-only. { date, foremanTgId, reasonCode, note? } */
