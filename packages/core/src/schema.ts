@@ -45,6 +45,9 @@ export const works = pgTable("works", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   category: text("category"),
+  // Optional second level under category -- null/empty means the work sits
+  // directly in its category (see groupWorks on the client).
+  subcategory: text("subcategory"),
   unit: text("unit"),
   tariff: real("tariff").notNull().default(0),
   active: boolean("active").notNull().default(true),

@@ -80,6 +80,7 @@ export async function readWorks() {
       id: getCell(row, map, WORKS_HEADERS.id),
       name: getCell(row, map, WORKS_HEADERS.name),
       category: getCell(row, map, WORKS_HEADERS.category) || null,
+      subcategory: getCell(row, map, WORKS_HEADERS.subcategory) || null,
       unit: getCell(row, map, WORKS_HEADERS.unit) || null,
       tariff: parseNumber(getCell(row, map, WORKS_HEADERS.tariff)) ?? 0,
       active: toBool(getCell(row, map, WORKS_HEADERS.active)),

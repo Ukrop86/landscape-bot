@@ -111,7 +111,17 @@ export const api = {
 
 export type Employee = { id: string; name: string; brigadeId: string | null; position: string | null; active: boolean };
 export type WorkObject = { id: string; name: string; address: string | null; active: boolean };
-export type Work = { id: string; name: string; category: string | null; unit: string | null; tariff: number; active: boolean };
+export type Work = {
+  id: string;
+  name: string;
+  category: string | null;
+  // Optional second level under category -- null when the ПІДКАТЕГОРІЯ cell
+  // is empty, which is the normal case (see groupWorks in lib/works.ts).
+  subcategory: string | null;
+  unit: string | null;
+  tariff: number;
+  active: boolean;
+};
 export type Car = { id: string; name: string; plate: string | null; active: boolean };
 export type Material = { id: string; name: string; unit: string; active: boolean; category: string | null };
 export type LogisticDirection = { id: string; name: string; tariff: number; discountsByQty: Record<string, number> };

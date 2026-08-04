@@ -3,6 +3,7 @@ import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPa
 import { todayISO } from "../lib/date";
 import { confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, initials, roleAccent, groupByBrigade } from "../lib/employee";
+import { groupWorks } from "../lib/works";
 import { saveDraft, loadDraft, clearDraft } from "../lib/draft";
 import { BackRow } from "../components/BackRow";
 import { MainButton } from "../components/MainButton";
@@ -220,20 +221,6 @@ function groupByCity(objects: WorkObject[]) {
     .sort((a, b) => (a.id === NO_CITY ? 1 : b.id === NO_CITY ? -1 : a.title.localeCompare(b.title)));
 }
 
-function groupByWorkCategory(worksList: Work[]) {
-  const NO_CATEGORY = "__NO_CATEGORY__";
-  const map = new Map<string, Work[]>();
-  for (const w of worksList) {
-    const cat = (w.category ?? "").trim() || NO_CATEGORY;
-    const list = map.get(cat) ?? [];
-    list.push(w);
-    map.set(cat, list);
-  }
-  return [...map.entries()]
-    .map(([id, members]) => ({ id, title: id === NO_CATEGORY ? "Без категорії" : id, members: [...members].sort((a, b) => a.name.localeCompare(b.name)) }))
-    .sort((a, b) => (a.id === NO_CATEGORY ? 1 : b.id === NO_CATEGORY ? -1 : a.title.localeCompare(b.title)));
-}
-
 function fmtHMS(ms: number) {
   const total = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(total / 3600);
@@ -292,6 +279,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   const [planObjectId, setPlanObjectId] = useState<string | null>(null);
   const [planWorksSearch, setPlanWorksSearch] = useState("");
   const [expandedWorkCategoryId, setExpandedWorkCategoryId] = useState<string | null>(null);
+  const [expandedWorkSubcategoryId, setExpandedWorkSubcategoryId] = useState<string | null>(null);
   const [selectedWorksExpanded, setSelectedWorksExpanded] = useState(false);
   const [planVolumeWorkId, setPlanVolumeWorkId] = useState<string | null>(null);
   const [volumeBuffer, setVolumeBuffer] = useState("");
@@ -1207,6 +1195,20 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   function clearWorks(objectId: string) {
     setPlans((prev) => prev.map((p) => (p.objectId !== objectId ? p : { ...p, works: [] })));
     haptic("selection");
+  }
+
+  /** One selectable work row in the PLAN_WORKS picker -- rendered both
+   * directly under a category and inside a subcategory group. */
+  function workPickerCell(objectId: string, w: Work) {
+    const checked = planFor(objectId).works.some((pw) => pw.workId === w.id);
+    return (
+      <button key={w.id} className={`cell ${checked ? "selected" : ""}`} onClick={() => toggleWork(objectId, w)}>
+        <span className="cell-title" style={{ display: "flex", alignItems: "center" }}>
+          <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
+          {w.name}
+        </span>
+      </button>
+    );
   }
 
   function toggleAllWorksInCategory(objectId: string, categoryWorks: Work[]) {
@@ -2645,7 +2647,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
           <div className="hint" style={{ padding: "0 16px 8px" }}>Обери роботи. Обсяги вкажете пізніше, під час виконання на обʼєкті</div>
           <input className="search-box" placeholder="Пошук роботи…" value={planWorksSearch} onChange={(e) => setPlanWorksSearch(e.target.value)} />
           <div className="list">
-            {groupByWorkCategory(works.filter((w) => w.name.toLowerCase().includes(planWorksSearch.toLowerCase()))).map((g) => {
+            {groupWorks(works.filter((w) => w.name.toLowerCase().includes(planWorksSearch.toLowerCase()))).map((g) => {
               const expanded = expandedWorkCategoryId === g.id || !!planWorksSearch;
               const selectedCount = g.members.filter((w) => planFor(planObjectId).works.some((pw) => pw.workId === w.id)).length;
               const allSelected = g.members.length > 0 && selectedCount === g.members.length;
@@ -2667,15 +2669,35 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       >
                         {allSelected ? "✕ Зняти всі в категорії" : "✓ Обрати всі в категорії"}
                       </button>
-                      {g.members.map((w) => {
-                        const checked = planFor(planObjectId).works.some((pw) => pw.workId === w.id);
+                      {/* Works that named no subcategory sit straight under the
+                          category; the named groups follow below them. */}
+                      {g.direct.map((w) => workPickerCell(planObjectId, w))}
+                      {g.subgroups.map((sg) => {
+                        const subExpanded = expandedWorkSubcategoryId === sg.id || !!planWorksSearch;
+                        const subSelected = sg.members.filter((w) => planFor(planObjectId).works.some((pw) => pw.workId === w.id)).length;
+                        const subAllSelected = sg.members.length > 0 && subSelected === sg.members.length;
                         return (
-                          <button key={w.id} className={`cell ${checked ? "selected" : ""}`} onClick={() => toggleWork(planObjectId, w)}>
-                            <span className="cell-title" style={{ display: "flex", alignItems: "center" }}>
-                              <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
-                              {w.name}
-                            </span>
-                          </button>
+                          <div key={sg.id}>
+                            <button className="cell" onClick={() => setExpandedWorkSubcategoryId(subExpanded ? null : sg.id)}>
+                              <span className="cell-title">
+                                {subExpanded ? "▾" : "▸"} {sg.title}
+                              </span>
+                              <span className="badge">
+                                {subSelected}/{sg.members.length}
+                              </span>
+                            </button>
+                            {subExpanded && (
+                              <div style={{ paddingLeft: 12 }}>
+                                <button
+                                  className={`bulk-select-btn ${subAllSelected ? "active" : ""}`}
+                                  onClick={() => toggleAllWorksInCategory(planObjectId, sg.members)}
+                                >
+                                  {subAllSelected ? "✕ Зняти всі в підкатегорії" : "✓ Обрати всі в підкатегорії"}
+                                </button>
+                                {sg.members.map((w) => workPickerCell(planObjectId, w))}
+                              </div>
+                            )}
+                          </div>
                         );
                       })}
                     </div>

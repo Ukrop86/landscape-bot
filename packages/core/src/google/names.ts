@@ -48,6 +48,10 @@ export const WORKS_HEADERS = {
   id: "ID",
   name: "НАЗВА",
   category: "КАТЕГОРІЯ",
+  // Optional second level under КАТЕГОРІЯ. Leave the cell empty and the work
+  // simply sits directly in its category -- the pickers only split a category
+  // into subcategories when at least one work in it actually has one.
+  subcategory: "ПІДКАТЕГОРІЯ",
   unit: "ОДИНИЦЯ",
   tariff: "СТАВКА",
   active: "АКТИВ",

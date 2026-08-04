@@ -34,6 +34,7 @@ export async function runSyncCycle() {
   await upsertBatch(schema.works, await sheets.readWorks(), schema.works.id, [
     "name",
     "category",
+    "subcategory",
     "unit",
     "tariff",
     "active",

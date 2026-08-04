@@ -3,6 +3,7 @@ import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPa
 import { todayISO } from "../lib/date";
 import { confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, initials, roleAccent, groupByBrigade, type EmployeeRole } from "../lib/employee";
+import { groupWorks } from "../lib/works";
 import { BackRow } from "../components/BackRow";
 import { MainButton } from "../components/MainButton";
 
@@ -90,6 +91,8 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
   const [expandedBrigadeId, setExpandedBrigadeId] = useState<string | null>(null);
   const [worksPickerObjectId, setWorksPickerObjectId] = useState<string | null>(null);
   const [worksSearch, setWorksSearch] = useState("");
+  const [expandedWorkCategoryId, setExpandedWorkCategoryId] = useState<string | null>(null);
+  const [expandedWorkSubcategoryId, setExpandedWorkSubcategoryId] = useState<string | null>(null);
 
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [saving, setSaving] = useState(false);
@@ -200,6 +203,23 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
         : { ...p, works: [...p.works, { workId: work.id, workName: work.name, unit: work.unit ?? "", volume: "" }] },
     );
     haptic("selection");
+  }
+
+  /** One selectable work row -- rendered both directly under a category and
+   * inside a subcategory group. */
+  function workCell(plan: RetroObject, w: Work) {
+    const checked = plan.works.some((pw) => pw.workId === w.id);
+    return (
+      <button key={w.id} className={`cell ${checked ? "selected" : ""}`} onClick={() => toggleWork(plan.objectId, w)}>
+        <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
+          {w.name}
+        </span>
+        <span className="cell-sub">
+          {w.tariff} грн/{w.unit ?? "од."}
+        </span>
+      </button>
+    );
   }
 
   function setHours(objectId: string, employeeId: string, raw: string) {
@@ -586,22 +606,46 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
                   <>
                     <input className="search-box" placeholder="Пошук роботи…" value={worksSearch} onChange={(e) => setWorksSearch(e.target.value)} />
                     <div className="list">
-                      {works
-                        .filter((w) => w.name.toLowerCase().includes(worksSearch.toLowerCase()))
-                        .map((w) => {
-                          const checked = p.works.some((pw) => pw.workId === w.id);
-                          return (
-                            <button key={w.id} className={`cell ${checked ? "selected" : ""}`} onClick={() => toggleWork(p.objectId, w)}>
-                              <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
-                                {w.name}
+                      {groupWorks(works.filter((w) => w.name.toLowerCase().includes(worksSearch.toLowerCase()))).map((g) => {
+                        const catOpen = expandedWorkCategoryId === g.id || !!worksSearch;
+                        const catSelected = g.members.filter((w) => p.works.some((pw) => pw.workId === w.id)).length;
+                        return (
+                          <div key={g.id}>
+                            <button className="cell" onClick={() => setExpandedWorkCategoryId(catOpen ? null : g.id)}>
+                              <span className="cell-title">
+                                {catOpen ? "▾" : "▸"} {g.title}
                               </span>
-                              <span className="cell-sub">
-                                {w.tariff} грн/{w.unit ?? "од."}
+                              <span className="badge">
+                                {catSelected}/{g.members.length}
                               </span>
                             </button>
-                          );
-                        })}
+                            {catOpen && (
+                              <div style={{ paddingLeft: 12 }}>
+                                {/* Works with no subcategory sit straight under
+                                    the category; named groups follow below. */}
+                                {g.direct.map((w) => workCell(p, w))}
+                                {g.subgroups.map((sg) => {
+                                  const subOpen = expandedWorkSubcategoryId === sg.id || !!worksSearch;
+                                  const subSelected = sg.members.filter((w) => p.works.some((pw) => pw.workId === w.id)).length;
+                                  return (
+                                    <div key={sg.id}>
+                                      <button className="cell" onClick={() => setExpandedWorkSubcategoryId(subOpen ? null : sg.id)}>
+                                        <span className="cell-title">
+                                          {subOpen ? "▾" : "▸"} {sg.title}
+                                        </span>
+                                        <span className="badge">
+                                          {subSelected}/{sg.members.length}
+                                        </span>
+                                      </button>
+                                      {subOpen && <div style={{ paddingLeft: 12 }}>{sg.members.map((w) => workCell(p, w))}</div>}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </>
                 )}
