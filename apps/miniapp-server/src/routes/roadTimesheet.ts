@@ -1210,7 +1210,7 @@ roadTimesheetRouter.get("/day-status", async (req, res) => {
   }
   const foremanTgId = BigInt(req.user!.tgId);
 
-  const [saveRows, editRequestRows] = await Promise.all([
+  const [saveRows, editRequestRows, returnRows] = await Promise.all([
     db
       .select()
       .from(schema.events)
@@ -1222,11 +1222,36 @@ roadTimesheetRouter.get("/day-status", async (req, res) => {
       .where(and(eq(schema.events.date, date), eq(schema.events.foremanTgId, foremanTgId), eq(schema.events.type, "RTS_EDIT_REQUEST")))
       .orderBy(desc(schema.events.ts))
       .limit(1),
+    db
+      .select()
+      .from(schema.events)
+      .where(and(eq(schema.events.date, date), eq(schema.events.foremanTgId, foremanTgId), eq(schema.events.type, "RTS_RETURN")))
+      .orderBy(desc(schema.events.ts))
+      .limit(1),
   ]);
+
+  // Status has to come from the LATEST event per trip, the same rule
+  // fetchAllTrips uses -- not from "any RTS_SAVE row says ПОВЕРНУТО". A
+  // resubmit appends a fresh АКТИВНА event and leaves the returned one in
+  // place as the audit trail, so scanning every row would keep the day
+  // flagged as returned forever, long after it was fixed and sent back.
+  const trips = await fetchAllTrips(date, req.user!.tgId);
+  const returned = trips.some((t) => t.status === "ПОВЕРНУТО");
+  let returnReason: string | null = null;
+  if (returned && returnRows[0]) {
+    try {
+      const payload = JSON.parse(returnRows[0].payload ?? "{}") as { reasonText?: string; note?: string };
+      returnReason = [payload.reasonText, payload.note].filter(Boolean).join(" — ") || null;
+    } catch {
+      returnReason = null;
+    }
+  }
 
   res.json({
     hasSubmission: saveRows.length > 0,
-    approved: saveRows.some((r) => r.status === "ЗАТВЕРДЖЕНО"),
+    approved: trips.some((t) => t.status === "ЗАТВЕРДЖЕНО"),
+    returned,
+    returnReason,
     eventId: saveRows[0]?.eventId ?? null,
     editRequested: editRequestRows.length > 0,
   });
@@ -1701,6 +1726,20 @@ roadTimesheetRouter.post("/pending/return", async (req, res) => {
   }
 
   const reasonText = RETURN_REASONS[reasonCode] ?? RETURN_REASONS.OTHER;
+
+  // The reason has to outlive the Telegram message: the foreman reads it once
+  // in a chat that keeps scrolling, then opens the app to act on it. GET
+  // /day-status serves it back from here so it's on screen the whole time
+  // they're fixing the day.
+  await writeEvent({
+    eventId: makeEventId("RTSRET"),
+    status: "АКТИВНА",
+    date,
+    foremanTgId,
+    type: "RTS_RETURN",
+    payload: JSON.stringify({ reasonCode, reasonText, note: note ?? "" }),
+  });
+
   await sendTelegramMessage(
     foremanTgId,
     `🔴 *День повернено адміністратором*\n📅 Дата: ${date}\n📝 Причина: ${reasonText}${note ? ` — ${note}` : ""}\n\nРедагування знову доступне. Відкрий "Дорожній табель", виправ дані і надішли повторно.`,

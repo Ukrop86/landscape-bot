@@ -103,7 +103,16 @@ type DayCombined = {
 };
 type SaveResponse = PayrollPreview & { eventId: string; tripSeq: number; combined: DayCombined };
 
-type DayStatus = { hasSubmission: boolean; approved: boolean; eventId: string | null; editRequested: boolean };
+type DayStatus = {
+  hasSubmission: boolean;
+  approved: boolean;
+  // Admin sent the day back for corrections. It behaves exactly like a
+  // not-yet-submitted day again -- fully editable, resubmitted the same way.
+  returned: boolean;
+  returnReason: string | null;
+  eventId: string | null;
+  editRequested: boolean;
+};
 type SubmittedObject = {
   objectId: string;
   objectName: string;
@@ -498,12 +507,26 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
         if (!res.found) return;
         setSubmittedTrips(res.trips);
         setDayCombined(res.combined);
+
+        // A returned day is the one case where the foreman has been asked to
+        // do something specific, so drop them straight back into the same
+        // editable state they had before submitting instead of the "sent for
+        // approval" summary -- but only when there's exactly one trip to fix
+        // and nothing else is in flight. With several returned trips there's
+        // no single right one to open, and clobbering a restored draft for a
+        // NEW trip would throw away work they haven't submitted yet.
+        const returnedTrips = res.trips.filter((t) => t.status !== "ЗАТВЕРДЖЕНО");
+        if (status.returned && returnedTrips.length === 1 && !draftRestoredRef.current) {
+          editTrip(returnedTrips[0]);
+          return;
+        }
+
         // Land on DONE regardless of approval -- an approved trip earlier
         // today must not block starting another one (see the DONE screen's
         // pending/approved split below).
         setStep("DONE");
       })
-      .catch(() => setDayStatus({ hasSubmission: false, approved: false, eventId: null, editRequested: false }));
+      .catch(() => setDayStatus({ hasSubmission: false, approved: false, returned: false, returnReason: null, eventId: null, editRequested: false }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date]);
 
@@ -2000,15 +2023,28 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     const approvedTrips = submittedTrips.filter((t) => t.status === "ЗАТВЕРДЖЕНО");
     const dayFullyApproved = approvedTrips.length > 0 && pendingTrips.length === 0;
     const isMulti = submittedTrips.length > 1;
+    // Only meaningful while something is still un-approved: an approved trip
+    // plus an older return event is just history, not a call to action.
+    const returned = !!dayStatus?.returned && pendingTrips.length > 0;
     return (
       <div>
         <BackRow onBack={goBack} />
         <div className="header">
-          <h1>{isMulti ? `✅ Поїздки за ${date}` : pendingTrips.length ? "✅ Відправлено на підтвердження" : "✅ День затверджено"}</h1>
+          <h1>
+            {returned
+              ? "🔴 Повернено на доопрацювання"
+              : isMulti
+                ? `✅ Поїздки за ${date}`
+                : pendingTrips.length
+                  ? "✅ Відправлено на підтвердження"
+                  : "✅ День затверджено"}
+          </h1>
           <div className="hint">
-            {pendingTrips.length
-              ? "Можна й далі редагувати та надсилати повторно, поки адміністратор не затвердить."
-              : "Можна розпочати ще одну поїздку за цей день."}
+            {returned
+              ? `${dayStatus?.returnReason ? `Причина: ${dayStatus.returnReason}. ` : ""}Оберіть поїздку нижче, виправте і надішліть повторно.`
+              : pendingTrips.length
+                ? "Можна й далі редагувати та надсилати повторно, поки адміністратор не затвердить."
+                : "Можна розпочати ще одну поїздку за цей день."}
           </div>
         </div>
 
@@ -2086,7 +2122,19 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
       {error && <div className="empty-state">⚠️ {error}</div>}
 
-      {submittedEditBanner && (
+      {/* Stays visible on every step while the day is in the returned state,
+          not just on the one screen it was opened from -- the foreman is
+          walking back through the day looking for what to fix, and the
+          reason has to still be in front of them when they find it. */}
+      {dayStatus?.returned && (
+        <div className="empty-state" style={{ textAlign: "left" }}>
+          🔴 <b>Звіт повернено на доопрацювання.</b>
+          {dayStatus.returnReason ? ` Причина: ${dayStatus.returnReason}.` : ""} Редагується так само, як перед першою відправкою —
+          виправте і надішліть повторно.
+        </div>
+      )}
+
+      {submittedEditBanner && !dayStatus?.returned && (
         <div className="hint" style={{ padding: "0 16px 8px" }}>
           📤 Це вже відправлений звіт. Можна редагувати — після збереження буде надіслано нову версію, поки адміністратор не затвердить.
         </div>
