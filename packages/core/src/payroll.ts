@@ -110,19 +110,23 @@ export function buildSalaryPacksWithRoles(params: {
     const brigadierOnePay = brigadierRows.length ? (o.objectTotal * brigadierPercent) / brigadierRows.length : 0;
     const seniorOnePay = seniorRows.length ? (o.objectTotal * seniorPercent) / seniorRows.length : 0;
     // The worker share (70%/90% of the object's total, after the brigadier/
-    // senior cuts above) is split PROPORTIONALLY to the real hours each
-    // worker put in at this object. Coefficients are kept per person for the
-    // record but don't weight the split. Fallback to an even split only if
-    // no hours were recorded at all (so nobody's pay silently vanishes).
+    // senior cuts above) is split EQUALLY between the workers who were at
+    // this object -- everyone in rowsSrc has hours > 0, so hours decide who
+    // is in the split, never how much of it each takes.
+    //
+    // Deliberately not proportional to hours: an object's fund is earned by
+    // the crew finishing the work there, and a stint recorded as 15 minutes
+    // (a timer started and stopped again, which happens constantly in the
+    // field) would otherwise collapse that person's pay to a rounding error
+    // while whoever's timer ran longest took nearly the whole pool.
     const workerPool = o.objectTotal * workerPercent;
-    const totalWorkerHours = workerRows.reduce((a, r) => a + Number(r.hours || 0), 0);
+    const workerOnePay = workerRows.length ? workerPool / workerRows.length : 0;
 
     const rows: SalaryRow[] = rowsSrc.map((r) => {
       let pay = 0;
       if (hasBrigadier && r.employeeId === brigadierEmployeeId) pay = brigadierOnePay;
       else if (hasSenior && seniorSet.has(r.employeeId)) pay = seniorOnePay;
-      else if (totalWorkerHours > 0) pay = workerPool * (Number(r.hours || 0) / totalWorkerHours);
-      else if (workerRows.length) pay = workerPool / workerRows.length;
+      else pay = workerOnePay;
 
       return {
         employeeId: r.employeeId,

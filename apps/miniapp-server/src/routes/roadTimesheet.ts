@@ -74,8 +74,9 @@ type WorkSession = { employeeId: string; employeeName: string; droppedAt: string
 // not just that the object had some work done) -- stored in the event payload for record.
 type WorkInput = { workId: string; workName: string; volume?: string | number; employeeIds?: string[] };
 // disciplineCoef/productivityCoef default to 1.0, same as the bot -- the foreman can
-// adjust them per employee per object (affects only how the *worker* share of the
-// object's payroll fund is split between workers, not the fund total itself).
+// adjust them per employee per object. They are recorded per person and reported in
+// the salary pack, but they do NOT move any money: the worker share is split equally
+// between everyone who was at the object (see buildSalaryPacksWithRoles).
 type CoefInput = { employeeId: string; disciplineCoef?: number; productivityCoef?: number };
 type ObjectInput = {
   objectId: string;
