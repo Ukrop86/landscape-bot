@@ -17,11 +17,27 @@ declare global {
   }
 }
 
-export function normRole(v: string): "ADMIN" | "BRIGADIER" | null {
+/**
+ * The app has exactly two levels of access: admins, who approve days and see
+ * the money, and everyone else, who fill in their own days. So the РОЛЬ column
+ * in КОРИСТУВАЧІ only has to answer one question -- is this person an admin --
+ * and anything that isn't one is a brigadier.
+ *
+ * Defaulting instead of rejecting is deliberate. The old version accepted only
+ * an exact "АДМІН"/"БРИГАДИР" and locked out anything else, so a perfectly
+ * legitimate job title in that column ("Керівник ландшафту") meant the person
+ * simply could not open the app, with nothing on screen to explain why. Access
+ * is still gated -- the row must exist in КОРИСТУВАЧІ and be АКТИВ -- this
+ * only stops the wording of a job title from being a second, invisible gate.
+ *
+ * Matched on a word boundary rather than the whole cell, so "Адміністратор"
+ * and "головний адмін" both grant admin. Admin is kept the narrow, explicit
+ * side of the check: mistaking a brigadier for an admin would hand them
+ * approval of payroll, while the reverse only costs them a button.
+ */
+export function normRole(v: string): "ADMIN" | "BRIGADIER" {
   const raw = v.trim().toUpperCase();
-  if (["ADMIN", "АДМІН", "АДМИН", "АДМІНІСТРАТОР", "АДМИНИСТРАТОР"].includes(raw)) return "ADMIN";
-  if (["BRIGADIER", "БРИГАДИР"].includes(raw)) return "BRIGADIER";
-  return null;
+  return /(^|\s)(АДМІН|АДМИН|ADMIN)/.test(raw) ? "ADMIN" : "BRIGADIER";
 }
 
 /**
@@ -49,12 +65,6 @@ export async function requireTelegramAuth(req: Request, res: Response, next: Nex
     return;
   }
 
-  const role = normRole(row.role);
-  if (!role) {
-    res.status(403).json({ error: `Unknown role "${row.role}"` });
-    return;
-  }
-
-  req.user = { tgId: Number(row.tgId), pib: row.pib, role };
+  req.user = { tgId: Number(row.tgId), pib: row.pib, role: normRole(row.role) };
   next();
 }
