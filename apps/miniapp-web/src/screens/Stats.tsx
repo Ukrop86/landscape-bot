@@ -18,6 +18,18 @@ type EmployeeStat = {
 };
 type CarDayStat = { date: string; km: number; tripClass: string; riderNames: string[]; objectNames: string[] };
 type CarStat = { carId: string; carName: string; totalKm: number; days: CarDayStat[] };
+type ForemanDayStat = { date: string; km: number; fund: number; crewCount: number; objectNames: string[]; approved: boolean };
+type ForemanStat = {
+  foremanTgId: string;
+  foremanName: string;
+  days: number;
+  approvedDays: number;
+  totalKm: number;
+  totalFund: number;
+  objectsCount: number;
+  crewCount: number;
+  dayList: ForemanDayStat[];
+};
 type StatsRangeResponse = {
   from: string;
   to: string;
@@ -26,9 +38,12 @@ type StatsRangeResponse = {
   byObject: ObjectStat[];
   byEmployee: EmployeeStat[];
   byCar: CarStat[];
+  byForeman: ForemanStat[];
 };
 
-type Tab = "objects" | "employees" | "cars";
+// «Бригадири» має сенс лише адміну: бригадиру запит і так повертає тільки
+// його власні дані, тож вкладка показувала б один рядок про нього самого.
+type Tab = "objects" | "employees" | "cars" | "foremen";
 
 function daysAgoISO(n: number): string {
   const d = new Date();
@@ -93,6 +108,11 @@ export function Stats({ onBack, isAdmin }: { onBack: () => void; isAdmin?: boole
         <button className={`unit-tab ${tab === "employees" ? "selected" : ""}`} onClick={() => selectTab("employees")}>
           👥 Люди
         </button>
+        {isAdmin && (
+          <button className={`unit-tab ${tab === "foremen" ? "selected" : ""}`} onClick={() => selectTab("foremen")}>
+            🧑‍🔧 Бригадири
+          </button>
+        )}
         <button className={`unit-tab ${tab === "cars" ? "selected" : ""}`} onClick={() => selectTab("cars")}>
           🚙 Машини
         </button>
@@ -197,6 +217,43 @@ export function Stats({ onBack, isAdmin }: { onBack: () => void; isAdmin?: boole
                           ) : (
                             <div className="hint">Без обʼєктів (лише доплата за виїзд)</div>
                           )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {tab === "foremen" && (
+            <>
+              {!data.byForeman.length && <div className="empty-state">Немає даних за цей період</div>}
+              <div className="list">
+                {data.byForeman.map((f) => {
+                  const expanded = expandedId === f.foremanTgId;
+                  const pending = f.days - f.approvedDays;
+                  return (
+                    <div key={f.foremanTgId}>
+                      <button className="cell" onClick={() => setExpandedId(expanded ? null : f.foremanTgId)}>
+                        <span className="cell-title">
+                          {expanded ? "▾" : "▸"} 🧑‍🔧 {f.foremanName}
+                        </span>
+                        <span className="badge ok">{data.moneyApproved ? `${f.totalFund} ₴` : "🔒 •••"}</span>
+                      </button>
+                      {expanded && (
+                        <div style={{ padding: "4px 16px 12px" }}>
+                          <div className="hint" style={{ marginBottom: 8 }}>
+                            📅 Днів: {f.days}
+                            {pending > 0 ? ` (${pending} без затвердження)` : ""}
+                            <br />🚗 {f.totalKm} км · 📍 обʼєктів: {f.objectsCount} · 👥 людей: {f.crewCount}
+                          </div>
+                          {f.dayList.map((d) => (
+                            <div key={d.date} className="hint" style={{ marginBottom: 8 }}>
+                              <b>{d.date}</b> {d.approved ? "✅" : "⏳"} — {d.km} км · {data.moneyApproved ? `${d.fund} ₴` : "🔒 •••"} · 👥 {d.crewCount}
+                              <br />📍 {d.objectNames.join(", ") || "—"}
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>

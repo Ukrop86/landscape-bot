@@ -45,7 +45,7 @@ statsRouter.get("/range", async (req, res) => {
   const isAdmin = req.user!.role === "ADMIN";
   const foremanTgId = BigInt(req.user!.tgId);
 
-  const [eventRows, reportRows, odoRows, timesheetRows, worksDict, objectsDict, employeesDict, carsDict] = await Promise.all([
+  const [eventRows, reportRows, odoRows, timesheetRows, worksDict, objectsDict, employeesDict, carsDict, usersDict] = await Promise.all([
     db
       .select()
       .from(schema.events)
@@ -75,12 +75,16 @@ statsRouter.get("/range", async (req, res) => {
     db.select().from(schema.objects),
     db.select().from(schema.employees),
     db.select().from(schema.cars),
+    db.select().from(schema.users),
   ]);
 
   const workUnitById = new Map(worksDict.map((w) => [w.id, w.unit ?? ""]));
   const objectNameById = new Map(objectsDict.map((o) => [o.id, o.name]));
   const employeeNameById = new Map(employeesDict.map((e) => [e.id, e.name]));
   const carNameById = new Map(carsDict.map((c) => [c.id, c.name]));
+  // Бригадир — це користувач із КОРИСТУВАЧІ (той, хто здав день), а не рядок
+  // із ПРАЦІВНИКИ: у поїздці він фігурує як employeeId, а день підписує tgId.
+  const foremanNameByTgId = new Map(usersDict.map((u) => [String(u.tgId), u.pib]));
 
   // Only the latest RTS_SAVE per (date, foreman) counts -- a resubmit fully
   // replaces it. Keyed by foreman too (not just date), since an admin's
@@ -122,7 +126,7 @@ statsRouter.get("/range", async (req, res) => {
     } catch {
       employeeIds = [];
     }
-    return { date: e.date, carId: e.carId, employeeIds, ...payload };
+    return { date: e.date, carId: e.carId, foremanTgId: String(e.foremanTgId), status: e.status, employeeIds, ...payload };
   });
 
   // (date, employeeId) pairs this foreman actually submitted a trip for --
@@ -237,6 +241,48 @@ statsRouter.get("/range", async (req, res) => {
   }
 
   const odoByDateCar = new Map(odoRows.map((o) => [`${o.date}|${o.carId}`, o.kmDay ?? 0]));
+
+  // Зріз по бригадирах: скільки днів здав, який фонд згенерував, скільки
+  // проїхав і якою бригадою керував. Рахується з тих самих подій, що й решта,
+  // тож числа не можуть розійтися з вкладками «Обʼєкти» та «Люди».
+  type ForemanAgg = {
+    foremanTgId: string;
+    foremanName: string;
+    approvedDays: number;
+    totalKm: number;
+    totalFund: number;
+    objectNames: Set<string>;
+    crew: Set<string>;
+    days: Array<{ date: string; km: number; fund: number; crewCount: number; objectNames: string[]; approved: boolean }>;
+  };
+  const foremanAggs = new Map<string, ForemanAgg>();
+  for (const e of parsedEvents) {
+    const agg = foremanAggs.get(e.foremanTgId) ?? {
+      foremanTgId: e.foremanTgId,
+      foremanName: foremanNameByTgId.get(e.foremanTgId) ?? `Бригадир ${e.foremanTgId}`,
+      approvedDays: 0,
+      totalKm: 0,
+      totalFund: 0,
+      objectNames: new Set<string>(),
+      crew: new Set<string>(),
+      days: [],
+    };
+    const approved = e.status === "ЗАТВЕРДЖЕНО";
+    // Той самий пріоритет, що й у зрізі по авто: реальний одометр дня, а не
+    // число з payload, якщо рядок одометра є.
+    const km = (e.carId ? odoByDateCar.get(`${e.date}|${e.carId}`) : undefined) ?? e.km ?? 0;
+    const fund = (e.salaryPacks ?? []).reduce((a, p) => a + (p.objectTotal ?? 0), 0);
+    const objectNames = (e.objects ?? []).map((o) => o.objectName);
+
+    if (approved) agg.approvedDays += 1;
+    agg.totalKm += km;
+    agg.totalFund += fund;
+    for (const n of objectNames) agg.objectNames.add(n);
+    for (const id of e.employeeIds) agg.crew.add(id);
+    agg.days.push({ date: e.date, km: round2(km), fund: round2(fund), crewCount: e.employeeIds.length, objectNames, approved });
+    foremanAggs.set(e.foremanTgId, agg);
+  }
+
   type CarAgg = {
     carId: string;
     carName: string;
@@ -293,6 +339,20 @@ statsRouter.get("/range", async (req, res) => {
     byCar: [...carAggs.values()]
       .map((c) => ({ ...c, totalKm: round2(c.totalKm), days: c.days.sort((a, b) => a.date.localeCompare(b.date)) }))
       .sort((a, b) => a.carName.localeCompare(b.carName)),
+    // Найбільший фонд першим -- це те, за чим цей зріз відкривають.
+    byForeman: [...foremanAggs.values()]
+      .map((f) => ({
+        foremanTgId: f.foremanTgId,
+        foremanName: f.foremanName,
+        days: f.days.length,
+        approvedDays: f.approvedDays,
+        totalKm: round2(f.totalKm),
+        totalFund: round2(f.totalFund),
+        objectsCount: f.objectNames.size,
+        crewCount: f.crew.size,
+        dayList: f.days.sort((a, b) => a.date.localeCompare(b.date)),
+      }))
+      .sort((a, b) => b.totalFund - a.totalFund || a.foremanName.localeCompare(b.foremanName)),
   });
 });
 
