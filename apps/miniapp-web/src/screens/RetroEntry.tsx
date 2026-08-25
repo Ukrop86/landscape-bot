@@ -26,7 +26,9 @@ import { MainButton } from "../components/MainButton";
  * measured, and the sessions sent to the server are synthesised from them.
  */
 
-type RetroWork = { workId: string; workName: string; unit: string; volume: string };
+// employeeIds: кому зарахувати саме цю роботу. Порожньо = спільна для всіх,
+// кого обрали на цей обʼєкт (звичайний випадок).
+type RetroWork = { workId: string; workName: string; unit: string; volume: string; employeeIds?: string[] };
 type RetroObject = {
   objectId: string;
   objectName: string;
@@ -90,6 +92,8 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
   const [peopleSearch, setPeopleSearch] = useState("");
   const [expandedBrigadeId, setExpandedBrigadeId] = useState<string | null>(null);
   const [worksPickerObjectId, setWorksPickerObjectId] = useState<string | null>(null);
+  // Яка робота відкрита для призначення людей (ключ `${objectId}::${workId}`).
+  const [assigningWorkKey, setAssigningWorkKey] = useState<string | null>(null);
   const [worksSearch, setWorksSearch] = useState("");
   const [expandedWorkCategoryId, setExpandedWorkCategoryId] = useState<string | null>(null);
   const [expandedWorkSubcategoryId, setExpandedWorkSubcategoryId] = useState<string | null>(null);
@@ -200,7 +204,7 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
     updatePlan(objectId, (p) =>
       p.works.some((w) => w.workId === work.id)
         ? { ...p, works: p.works.filter((w) => w.workId !== work.id) }
-        : { ...p, works: [...p.works, { workId: work.id, workName: work.name, unit: work.unit ?? "", volume: "" }] },
+        : { ...p, works: [...p.works, { workId: work.id, workName: work.name, unit: work.unit ?? "", volume: "", employeeIds: [] }] },
     );
     haptic("selection");
   }
@@ -224,6 +228,20 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
 
   function setHours(objectId: string, employeeId: string, raw: string) {
     updatePlan(objectId, (p) => ({ ...p, hoursByEmployeeId: { ...p.hoursByEmployeeId, [employeeId]: raw } }));
+  }
+
+  /** Порожній список = робота спільна, тож зняття останньої людини повертає
+   * її всій бригаді на цьому обʼєкті. */
+  function toggleWorkAssignee(objectId: string, workId: string, employeeId: string) {
+    updatePlan(objectId, (p) => ({
+      ...p,
+      works: p.works.map((w) => {
+        if (w.workId !== workId) return w;
+        const current = w.employeeIds ?? [];
+        return { ...w, employeeIds: current.includes(employeeId) ? current.filter((x) => x !== employeeId) : [...current, employeeId] };
+      }),
+    }));
+    haptic("selection");
   }
 
   function setVolume(objectId: string, workId: string, raw: string) {
@@ -257,7 +275,7 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
           workId: w.workId,
           workName: w.workName,
           volume: w.volume || "?",
-          employeeIds: sessions.map((s) => s.employeeId),
+          employeeIds: w.employeeIds ?? [],
         })),
         sessions,
         notes: "",
@@ -656,21 +674,50 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
                   <>
                     <div className="hint" style={{ padding: "0 16px 4px" }}>Обсяг виконаного</div>
                     <div className="list">
-                      {p.works.map((w) => (
-                        <div key={w.workId} className="cell" style={{ cursor: "default" }}>
-                          <span className="cell-title">{w.workName}</span>
-                          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <input
-                              className="hours-input"
-                              inputMode="decimal"
-                              placeholder="0"
-                              value={w.volume}
-                              onChange={(e) => setVolume(p.objectId, w.workId, e.target.value)}
-                            />
-                            <span className="cell-sub">{w.unit || "од."}</span>
-                          </span>
-                        </div>
-                      ))}
+                      {p.works.map((w) => {
+                        const assigned = w.employeeIds ?? [];
+                        const key = `${p.objectId}::${w.workId}`;
+                        const picking = assigningWorkKey === key;
+                        return (
+                          <div key={w.workId} className="cell" style={{ cursor: "default", display: "block" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                              <span className="cell-title">{w.workName}</span>
+                              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <input
+                                  className="hours-input"
+                                  inputMode="decimal"
+                                  placeholder="0"
+                                  value={w.volume}
+                                  onChange={(e) => setVolume(p.objectId, w.workId, e.target.value)}
+                                />
+                                <span className="cell-sub">{w.unit || "од."}</span>
+                              </span>
+                            </div>
+                            <div style={{ marginTop: 6 }}>
+                              <button className={`chip ${assigned.length ? "selected" : ""}`} onClick={() => setAssigningWorkKey(picking ? null : key)}>
+                                {assigned.length ? `👤 ${assigned.map(employeeName).join(", ")}` : "👥 вся бригада"}
+                              </button>
+                            </div>
+                            {picking && (
+                              <div style={{ marginTop: 6 }}>
+                                <div className="hint">Кому зарахувати цю роботу? Нікого не обрано — гроші ділять усі з цього обʼєкта.</div>
+                                <div className="chip-row" style={{ padding: "6px 0" }}>
+                                  {p.employeeIds.map((id) => (
+                                    <button
+                                      key={id}
+                                      className={`chip ${assigned.includes(id) ? "selected" : ""}`}
+                                      onClick={() => toggleWorkAssignee(p.objectId, w.workId, id)}
+                                    >
+                                      {assigned.includes(id) ? "✓ " : ""}
+                                      {employeeName(id)}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </>
                 )}

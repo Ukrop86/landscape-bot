@@ -9,7 +9,7 @@ type PendingObject = {
   objectName: string;
   // unit comes from the РОБОТИ dictionary so a volume reads as "1878 м2"
   // rather than a bare number the admin has to guess the meaning of.
-  works: { workId: string; workName: string; volume?: string | number; unit?: string | null }[];
+  works: { workId: string; workName: string; volume?: string | number; unit?: string | null; employeeIds?: string[] }[];
 };
 type PendingItem = {
   date: string;
@@ -207,6 +207,11 @@ export function Approval({
                             <div key={w.workId} className="hint">
                               {w.workName}
                               {w.volume && w.volume !== "?" ? `: ${w.volume}${w.unit ? ` ${w.unit}` : ""}` : ""}
+                              {/* Робота без призначення ділиться всією бригадою --
+                                  показуємо лише виняток, щоб не засмічувати список. */}
+                              {w.employeeIds?.length
+                                ? ` · 👤 ${w.employeeIds.map((id) => employeeById.get(id)?.name ?? id).join(", ")}`
+                                : ""}
                             </div>
                           ))}
                           {/* Hours are what decide who is in the split at all,

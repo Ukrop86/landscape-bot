@@ -1464,7 +1464,15 @@ roadTimesheetRouter.get("/pending", async (req, res) => {
         objects: mergedObjects.map((o) => ({
           objectId: o.objectId,
           objectName: o.objectName,
-          works: (o.works ?? []).map((w) => ({ workId: w.workId, workName: w.workName, volume: w.volume, unit: unitByWorkId.get(w.workId) ?? "" })),
+          works: (o.works ?? []).map((w) => ({
+            workId: w.workId,
+            workName: w.workName,
+            volume: w.volume,
+            unit: unitByWorkId.get(w.workId) ?? "",
+            // Кому призначена робота -- саме це пояснює адміну, чому в однієї
+            // людини сума більша за решту бригади на тому ж обʼєкті.
+            employeeIds: w.employeeIds ?? [],
+          })),
         })),
         employeeIds: unionEmployeeIds,
         selfTransportIds: unionSelfTransportIds,
