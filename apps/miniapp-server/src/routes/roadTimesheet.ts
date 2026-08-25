@@ -1412,15 +1412,20 @@ roadTimesheetRouter.get("/pending", async (req, res) => {
   cutoff.setDate(cutoff.getDate() - 60);
   const cutoffIso = cutoff.toISOString().slice(0, 10);
 
-  const [rows, users] = await Promise.all([
+  const [rows, users, workRows] = await Promise.all([
     db
       .select()
       .from(schema.events)
       .where(and(eq(schema.events.type, "RTS_SAVE"), gte(schema.events.date, cutoffIso)))
       .orderBy(desc(schema.events.ts)),
     db.select().from(schema.users),
+    db.select().from(schema.works),
   ]);
   const nameByTgId = new Map(users.map((u) => [String(u.tgId), u.pib]));
+  // Units come from the dictionary, not from the submission -- the payload
+  // only carries workId/workName/volume, and a bare "1878" is not a number
+  // an admin can sanity-check without knowing whether it's m2 or hours.
+  const unitByWorkId = new Map(workRows.map((w) => [w.id, w.unit ?? ""]));
 
   const latestByGroup = new Map<string, (typeof rows)[number]>();
   for (const r of rows) {
@@ -1437,20 +1442,11 @@ roadTimesheetRouter.get("/pending", async (req, res) => {
       // reappear bundled into a LATER, unrelated leg's pending request just
       // because it shares the same date+foreman.
       const trips = (await fetchAllTrips(r.date, foremanTgId)).filter((t) => t.status !== "ЗАТВЕРДЖЕНО");
-      const mergedObjects = mergeObjects(trips.map((t) => t.objects));
-      const unionEmployeeIds = [...new Set(trips.flatMap((t) => t.employeeIds))];
-      const unionSelfTransportIds = [...new Set(trips.flatMap((t) => t.selfTransportIds ?? []))];
-      const totalKm = trips.reduce((acc, t) => {
-        const legKm = typeof t.odoStart === "number" && typeof t.odoEnd === "number" ? t.odoEnd - t.odoStart : 0;
-        return acc + (Number.isFinite(legKm) ? legKm : 0);
-      }, 0);
-      const combined = await computePayroll({
-        odoStart: 0,
-        odoEnd: totalKm,
-        employeeIds: unionEmployeeIds,
-        objects: mergedObjects,
-        selfTransportIds: unionSelfTransportIds,
-      });
+      // The same roll-up the approval and the БУХЗВІТ export run on, so what
+      // the admin decides from is exactly what gets written. Recomputing the
+      // day inline here used to omit excludedKm, quietly showing a higher
+      // trip class and travel allowance than approval would then record.
+      const { mergedObjects, unionEmployeeIds, unionSelfTransportIds, totalKm, combined } = await computeApprovedDayTotals(trips);
       return {
         date: r.date,
         foremanTgId,
@@ -1463,7 +1459,7 @@ roadTimesheetRouter.get("/pending", async (req, res) => {
         objects: mergedObjects.map((o) => ({
           objectId: o.objectId,
           objectName: o.objectName,
-          works: (o.works ?? []).map((w) => ({ workId: w.workId, workName: w.workName, volume: w.volume })),
+          works: (o.works ?? []).map((w) => ({ workId: w.workId, workName: w.workName, volume: w.volume, unit: unitByWorkId.get(w.workId) ?? "" })),
         })),
         employeeIds: unionEmployeeIds,
         selfTransportIds: unionSelfTransportIds,

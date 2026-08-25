@@ -4,7 +4,13 @@ import { confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, initials, roleAccent } from "../lib/employee";
 import { BackRow } from "../components/BackRow";
 
-type PendingObject = { objectId: string; objectName: string; works: { workId: string; workName: string; volume?: string | number }[] };
+type PendingObject = {
+  objectId: string;
+  objectName: string;
+  // unit comes from the РОБОТИ dictionary so a volume reads as "1878 м2"
+  // rather than a bare number the admin has to guess the meaning of.
+  works: { workId: string; workName: string; volume?: string | number; unit?: string | null }[];
+};
 type PendingItem = {
   date: string;
   foremanTgId: number;
@@ -200,12 +206,16 @@ export function Approval({
                           {o.works.map((w) => (
                             <div key={w.workId} className="hint">
                               {w.workName}
-                              {w.volume && w.volume !== "?" ? `: ${w.volume}` : ""}
+                              {w.volume && w.volume !== "?" ? `: ${w.volume}${w.unit ? ` ${w.unit}` : ""}` : ""}
                             </div>
                           ))}
+                          {/* Hours are what decide who is in the split at all,
+                              so an admin checking a payout needs them next to
+                              the money, not only the money. */}
                           {pack?.rows.map((r) => (
                             <div key={r.employeeId} className="hint">
-                              {r.employeeName}: {r.pay} грн
+                              {r.employeeName}: {r.hours > 0 ? `${r.hours} год · ` : ""}
+                              {r.pay} грн
                             </div>
                           ))}
                           {pack && pack.companyPay > 0 && <div className="hint">🏢 Фірма: {pack.companyPay} грн</div>}
