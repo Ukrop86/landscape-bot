@@ -142,6 +142,7 @@ async function computePayroll(params: {
     objectId: string;
     objectName: string;
     objectTotal: number;
+    works: Array<{ workId: string; value: number; employeeIds: string[] }>;
     rows: Array<{ employeeId: string; employeeName: string; hours: number; disciplineCoef: number; productivityCoef: number }>;
   }> = [];
 
@@ -159,17 +160,21 @@ async function computePayroll(params: {
     }
     perObjectHours.push({ objectId: obj.objectId, hoursByEmployee });
 
-    const objectTotal = (obj.works ?? []).reduce((acc, w) => {
+    // Each work's own money value, carried through to the payroll split so a
+    // work assigned to specific people can pay only them (WorkInput.employeeIds).
+    const workValues = (obj.works ?? []).map((w) => {
       const vol = Number(w.volume);
       const tariff = tariffByWorkId.get(w.workId) ?? 0;
-      return acc + (Number.isFinite(vol) ? vol : 0) * tariff;
-    }, 0);
+      return { workId: w.workId, value: (Number.isFinite(vol) ? vol : 0) * tariff, employeeIds: w.employeeIds ?? [] };
+    });
+    const objectTotal = workValues.reduce((acc, w) => acc + w.value, 0);
 
     const coefByEmployee = new Map((obj.coefs ?? []).map((c) => [c.employeeId, c]));
     payrollObjectInputs.push({
       objectId: obj.objectId,
       objectName: obj.objectName,
       objectTotal,
+      works: workValues,
       rows: [...hoursByEmployee.entries()].map(([employeeId, v]) => ({
         employeeId,
         employeeName: v.name,

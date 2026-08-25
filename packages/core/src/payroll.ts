@@ -58,22 +58,28 @@ export type ObjectSalaryPack = {
 };
 
 /**
- * Per-object payroll split: 1 brigadier (if present among that object's
- * workers) gets 20% split among brigadier rows (practically always just
- * one), seniors split 10%, and the remainder (70%, or 90% if no brigadier
- * worked at this object) is split among the workers PROPORTIONALLY TO THE
- * HOURS each actually worked at this object -- someone who put in 10h earns
- * more than someone who put in 4h (share = own hours / total worker hours ×
- * worker pool). The discipline/productivity coefficients stay entered per
- * person for the record but don't weight the split. If nobody senior worked
- * there, that 10% isn't handed to workers instead -- it stays with the
- * company (companyPay), exactly like the bot's roleTotals.company.
+ * Per-object payroll split. A brigadier who worked at this object takes 20%,
+ * seniors split 10%, and the remainder (70%, or 90% with no brigadier here)
+ * goes to the workers. If nobody senior worked there that 10% is not handed
+ * to the workers instead -- it stays with the company (companyPay), exactly
+ * like the bot's roleTotals.company.
+ *
+ * The worker remainder is split EQUALLY, not by hours. Works that name
+ * specific people form their own pool each, so a job one person did alone
+ * pays only that person; everything unassigned stays one pool for the whole
+ * crew at the object. The discipline/productivity coefficients are recorded
+ * per person but move no money.
  */
 export function buildSalaryPacksWithRoles(params: {
   objects: Array<{
     objectId: string;
     objectName: string;
     objectTotal: number;
+    // Each work's own money value (volume * tariff) and who it was assigned
+    // to. A work with nobody assigned is shared by the whole crew at the
+    // object, which is the normal case. Omit the array entirely and the
+    // object behaves as one shared pool, exactly as before this existed.
+    works?: Array<{ workId: string; value: number; employeeIds?: string[] }>;
     rows: Array<{ employeeId: string; employeeName: string; hours: number; disciplineCoef: number; productivityCoef: number }>;
   }>;
   brigadierEmployeeId: string;
@@ -107,26 +113,56 @@ export function buildSalaryPacksWithRoles(params: {
       return true;
     });
 
+    // The brigadier's and the senior's cuts, and the company's, are always
+    // taken off the OBJECT's total, never off individual works -- assigning a
+    // work to one person changes who splits the worker share, not the shape
+    // of the object's split.
     const brigadierOnePay = brigadierRows.length ? (o.objectTotal * brigadierPercent) / brigadierRows.length : 0;
     const seniorOnePay = seniorRows.length ? (o.objectTotal * seniorPercent) / seniorRows.length : 0;
-    // The worker share (70%/90% of the object's total, after the brigadier/
-    // senior cuts above) is split EQUALLY between the workers who were at
-    // this object -- everyone in rowsSrc has hours > 0, so hours decide who
-    // is in the split, never how much of it each takes.
+
+    // The worker share (70%/90% of the object's total, after the cuts above)
+    // is split EQUALLY -- everyone in rowsSrc has hours > 0, so hours decide
+    // who is in a split, never how much of it each takes.
     //
     // Deliberately not proportional to hours: an object's fund is earned by
     // the crew finishing the work there, and a stint recorded as 15 minutes
     // (a timer started and stopped again, which happens constantly in the
     // field) would otherwise collapse that person's pay to a rounding error
     // while whoever's timer ran longest took nearly the whole pool.
-    const workerPool = o.objectTotal * workerPercent;
-    const workerOnePay = workerRows.length ? workerPool / workerRows.length : 0;
+    //
+    // Works assigned to specific people get their own pool each, split only
+    // between those of them who were actually at the object; everything else
+    // stays in one shared pool for the whole crew. "One person drove out,
+    // watered the lawn and left" is the case this exists for.
+    //
+    // An assignment naming nobody who was there is treated as unassigned
+    // rather than dropped -- otherwise that work's money would silently
+    // vanish from the object.
+    const dedicated: Array<{ value: number; workers: typeof workerRows }> = [];
+    for (const w of o.works ?? []) {
+      const assigned = new Set(w.employeeIds ?? []);
+      if (!assigned.size) continue;
+      const workers = workerRows.filter((r) => assigned.has(r.employeeId));
+      if (!workers.length) continue;
+      dedicated.push({ value: Number(w.value) || 0, workers });
+    }
+    // Derived by subtraction, not by summing the unassigned works, so the
+    // buckets always add back up to objectTotal even if a caller's work
+    // values don't quite sum to the total it passed.
+    const sharedValue = Math.max(0, o.objectTotal - dedicated.reduce((a, d) => a + d.value, 0));
+    const sharedOnePay = workerRows.length ? (sharedValue * workerPercent) / workerRows.length : 0;
+
+    const dedicatedPayByEmployee = new Map<string, number>();
+    for (const d of dedicated) {
+      const onePay = (d.value * workerPercent) / d.workers.length;
+      for (const w of d.workers) dedicatedPayByEmployee.set(w.employeeId, (dedicatedPayByEmployee.get(w.employeeId) ?? 0) + onePay);
+    }
 
     const rows: SalaryRow[] = rowsSrc.map((r) => {
       let pay = 0;
       if (hasBrigadier && r.employeeId === brigadierEmployeeId) pay = brigadierOnePay;
       else if (hasSenior && seniorSet.has(r.employeeId)) pay = seniorOnePay;
-      else pay = workerOnePay;
+      else pay = sharedOnePay + (dedicatedPayByEmployee.get(r.employeeId) ?? 0);
 
       return {
         employeeId: r.employeeId,
