@@ -371,7 +371,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // asking afterwards -- and so the screen can name a real destination
   // rather than guessing at the first unvisited object in the list.
   const [headingToObjectId, setHeadingToObjectId] = useState<string>("");
-  const [objectsReturnStep, setObjectsReturnStep] = useState<Step>("HUB");
   const [atObjectReturnStep, setAtObjectReturnStep] = useState<Step>("DRIVE");
   const [atObjectDetailsExpanded, setAtObjectDetailsExpanded] = useState(false);
   const [volumesReturnStep, setVolumesReturnStep] = useState<Step>("AT_OBJECT");
@@ -2047,11 +2046,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       setEditReturnStep("HUB");
       return;
     }
-    if (step === "PICK_OBJECTS" && objectsReturnStep !== "HUB") {
-      setStep(objectsReturnStep);
-      setObjectsReturnStep("HUB");
-      return;
-    }
     if (step === "PLAN_WORKS") {
       setStep(worksReturnStep);
       return;
@@ -2812,13 +2806,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               );
             })}
           </div>
-          <MainButton
-            text="Зберегти"
-            onClick={() => {
-              setStep(objectsReturnStep);
-              setObjectsReturnStep("HUB");
-            }}
-          />
+          <MainButton text="Зберегти" onClick={() => setStep("HUB")} />
         </>
       )}
 
@@ -3226,7 +3214,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             <div className="hint" style={{ textAlign: "center" }}>
               Прямуємо до 📍 {headingTo.objectName}{" "}
               <button className="back-btn" onClick={() => setHeadingToObjectId("")}>
-                змінити
+                ✏️ їдемо в інше місце
               </button>
             </div>
           )}
@@ -3255,17 +3243,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               </div>
             </>
           )}
-          <div className="hint" style={{ padding: "4px 16px 8px", textAlign: "center" }}>
-            <button
-              className="back-btn"
-              onClick={() => {
-                setObjectsReturnStep("DRIVE");
-                setStep("PICK_OBJECTS");
-              }}
-            >
-              ✏️ Змінити маршрут
-            </button>
-          </div>
 
           <div className="section-title row">
             <span>По дорозі</span>
