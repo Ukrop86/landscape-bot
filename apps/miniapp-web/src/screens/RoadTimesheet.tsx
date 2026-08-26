@@ -180,6 +180,7 @@ type DraftShape = {
   drivingAccumulatedMs: number;
   drivingSegmentStartedAt: string | null;
   atObjectId: string | null;
+  headingToObjectId?: string;
   // Where AT_OBJECT's "✅ Готово" button should return to (DRIVE, RETURN,
   // etc). Without this an app-kill mid-AT_OBJECT restores to the default
   // "DRIVE", which can wrongly resume the driving-segment timer for a leg
@@ -234,6 +235,38 @@ function groupByCity(objects: WorkObject[]) {
   return [...map.entries()]
     .map(([id, members]) => ({ id, title: id === NO_CITY ? "Без адреси" : id, members: [...members].sort((a, b) => a.name.localeCompare(b.name)) }))
     .sort((a, b) => (a.id === NO_CITY ? 1 : b.id === NO_CITY ? -1 : a.title.localeCompare(b.title)));
+}
+
+// Compact people list for mid-drive fixes. Denser than the setup pickers on
+// purpose: it is opened in a moving car to touch one person, not to plan a
+// day -- but still grouped by brigade, because a wrapped run of name chips
+// gave no way to find anyone.
+function MiniPeopleList({
+  people,
+  roster,
+  sign,
+  onPick,
+}: {
+  people: Employee[];
+  roster: Employee[];
+  sign: "+" | "−";
+  onPick: (id: string) => void;
+}) {
+  return (
+    <div className="mini-list">
+      {groupByBrigade(people, roster).map((g) => (
+        <div key={g.id} className="mini-group">
+          <div className="mini-group-title">{g.title}</div>
+          {g.members.map((e) => (
+            <button key={e.id} className="mini-row" onClick={() => onPick(e.id)}>
+              <span className="mini-sign">{sign}</span>
+              <span>{shortName(e.name)}</span>
+            </button>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function fmtHMS(ms: number) {
@@ -333,6 +366,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
   // --- at object ---
   const [atObjectId, setAtObjectId] = useState<string | null>(null);
+  // Which object the car is currently driving to. Chosen when leaving, and
+  // again after each object, so "Прибув" knows where it arrived instead of
+  // asking afterwards -- and so the screen can name a real destination
+  // rather than guessing at the first unvisited object in the list.
+  const [headingToObjectId, setHeadingToObjectId] = useState<string>("");
   const [atObjectReturnStep, setAtObjectReturnStep] = useState<Step>("DRIVE");
   const [atObjectDetailsExpanded, setAtObjectDetailsExpanded] = useState(false);
   const [volumesReturnStep, setVolumesReturnStep] = useState<Step>("AT_OBJECT");
@@ -481,6 +519,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       setDrivingAccumulatedMs(draft.drivingAccumulatedMs ?? 0);
       setDrivingSegmentStartedAt(draft.drivingSegmentStartedAt ?? null);
       setAtObjectId(draft.atObjectId);
+      setHeadingToObjectId(draft.headingToObjectId ?? "");
       setAtObjectReturnStep(draft.atObjectReturnStep ?? "DRIVE");
       setPlanObjectId(draft.planObjectId ?? null);
       setCoefs(draft.coefs ?? {});
@@ -564,6 +603,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       drivingAccumulatedMs,
       drivingSegmentStartedAt,
       atObjectId,
+      headingToObjectId,
       atObjectReturnStep,
       planObjectId,
       coefs,
@@ -582,6 +622,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     errands,
     plans,
     onboard,
+    headingToObjectId,
     tripStartedAt,
     drivingAccumulatedMs,
     drivingSegmentStartedAt,
@@ -1346,6 +1387,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
   // ---------- depart ----------
   function startDrive() {
+    setHeadingToObjectId("");
     setOnboard(employeeIds);
     setTripStartedAt(new Date().toISOString());
     setDrivingAccumulatedMs(0);
@@ -1372,6 +1414,10 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   }
 
   const nextUnvisited = plans.find((p) => !p.visited) ?? null;
+  // The chosen destination, but only while it is still ahead of us: an object
+  // that got visited (or dropped from the route) must not keep steering the
+  // drive screen.
+  const headingTo = plans.find((p) => p.objectId === headingToObjectId && !p.visited) ?? null;
 
   // Where "↩️ Повернутися до поїздки" on HUB should actually land. Follows
   // the LIVE trip's state first (objects still to visit -> people to pick up
@@ -1394,6 +1440,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     if (!target) return;
     setPlans((prev) => prev.map((p) => (p.objectId !== objectId ? p : { ...p, visited: true })));
     setAtObjectId(objectId);
+    setHeadingToObjectId("");
     setAtObjectReturnStep("DRIVE");
     setStep("AT_OBJECT");
     setShowManualHours(false);
@@ -3160,16 +3207,39 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             {fmtHMS(drivingAccumulatedMs + (drivingSegmentStartedAt ? now - new Date(drivingSegmentStartedAt).getTime() : 0))}
           </div>
           <div className="hint" style={{ textAlign: "center" }}>лише час у дорозі — на об'єктах не рахується</div>
-          <div className="hint" style={{ textAlign: "center" }}>
-            {nextUnvisited ? (
-              <>
-                Прямуємо до
-                <br />📍 {nextUnvisited.objectName}
-              </>
-            ) : (
-              "Усі обʼєкти відвідано — час повертатись на базу"
-            )}
-          </div>
+          {!nextUnvisited && (
+            <div className="hint" style={{ textAlign: "center" }}>Усі обʼєкти відвідано — час повертатись на базу</div>
+          )}
+          {nextUnvisited && headingTo && (
+            <div className="hint" style={{ textAlign: "center" }}>
+              Прямуємо до 📍 {headingTo.objectName}{" "}
+              <button className="back-btn" onClick={() => setHeadingToObjectId("")}>
+                змінити
+              </button>
+            </div>
+          )}
+          {nextUnvisited && !headingTo && (
+            <>
+              <div className="section-title">Куди їдемо?</div>
+              <div className="list">
+                {plans
+                  .filter((p) => !p.visited)
+                  .map((p) => (
+                    <button
+                      key={p.objectId}
+                      className="cell"
+                      onClick={() => {
+                        setHeadingToObjectId(p.objectId);
+                        haptic("selection");
+                      }}
+                    >
+                      <span className="cell-title">📍 {p.objectName}</span>
+                      <span className="badge">{p.works.length ? nWorks(p.works.length) : "не обрано"}</span>
+                    </button>
+                  ))}
+              </div>
+            </>
+          )}
 
           <div className="section-title row">
             <span>По дорозі</span>
@@ -3180,30 +3250,30 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
           {showRoadsideActions &&
             (() => {
+              // Only people nobody else is holding and who are not already in
+              // the car or standing at an object -- the rest cannot be picked
+              // up anyway, so listing them would only make the list longer.
               const availableToPickUp = employees.filter(
                 (e) => !onboard.includes(e.id) && !plans.some((p) => p.here.includes(e.id)) && !busyEmployees.has(e.id),
               );
+              const onboardEmployees = onboard
+                .map((id) => employees.find((e) => e.id === id))
+                .filter((e): e is Employee => !!e);
               return (
                 <>
                   <div className="section-title">🔼 Забрати по дорозі</div>
-                  <div className="chip-row">
-                    {availableToPickUp.map((e) => (
-                      <button key={e.id} className="chip" onClick={() => roadsidePickup(e.id)}>
-                        + {e.name}
-                      </button>
-                    ))}
-                    {!availableToPickUp.length && <div className="hint">Немає кого забирати</div>}
-                  </div>
+                  {availableToPickUp.length ? (
+                    <MiniPeopleList people={availableToPickUp} roster={employees} sign="+" onPick={roadsidePickup} />
+                  ) : (
+                    <div className="hint" style={{ padding: "0 16px 8px" }}>Немає кого забирати</div>
+                  )}
 
                   <div className="section-title">🔽 Висадити по дорозі — в машині {onboard.length}</div>
-                  <div className="chip-row">
-                    {onboard.map((id) => (
-                      <button key={id} className="chip" onClick={() => roadsideDropoff(id)}>
-                        − {employeeName(id)}
-                      </button>
-                    ))}
-                    {!onboard.length && <div className="hint">Нікого немає в машині</div>}
-                  </div>
+                  {onboardEmployees.length ? (
+                    <MiniPeopleList people={onboardEmployees} roster={employees} sign="−" onPick={roadsideDropoff} />
+                  ) : (
+                    <div className="hint" style={{ padding: "0 16px 8px" }}>Нікого немає в машині</div>
+                  )}
                 </>
               );
             })()}
@@ -3288,7 +3358,22 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
           </div>
 
           {nextUnvisited ? (
-            <MainButton text="📍 Прибув на обʼєкт" onClick={() => setStep("ARRIVE_PICK")} />
+            <>
+              {headingTo && (
+                <div className="hint" style={{ padding: "0 16px 8px", textAlign: "center" }}>
+                  <button className="back-btn" onClick={() => setStep("ARRIVE_PICK")}>
+                    Прибули на інший обʼєкт?
+                  </button>
+                </div>
+              )}
+              <MainButton
+                text={headingTo ? `📍 Прибув: ${headingTo.objectName}` : "Оберіть, куди їдете"}
+                onClick={() => {
+                  if (headingTo) arriveAt(headingTo.objectId);
+                }}
+                disabled={!headingTo}
+              />
+            </>
           ) : (
             <MainButton
               // Distinct label from the last-object "🏁 Повертатись на базу"
