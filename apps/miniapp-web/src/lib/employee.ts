@@ -44,6 +44,17 @@ function brigadeTitleMap(roster: Employee[]): Map<string, string> {
   return titleById;
 }
 
+// Inside a brigade, rank matters more than the alphabet: the brigadier leads
+// the trip (and earns their 20% per object only if they are on it), the senior
+// gardener comes next, and everyone else follows by name. Alphabetical order
+// buried the two people a foreman looks for first somewhere in the middle.
+const ROLE_RANK: Record<EmployeeRole, number> = { бригадир: 0, старший: 1, робітник: 2 };
+
+function byRoleThenName(a: Employee, b: Employee) {
+  const rank = ROLE_RANK[employeeRole(a)] - ROLE_RANK[employeeRole(b)];
+  return rank !== 0 ? rank : a.name.localeCompare(b.name);
+}
+
 export function groupByBrigade(employees: Employee[], roster: Employee[] = employees) {
   const NO_BRIGADE = "__NO_BRIGADE__";
   const titleById = brigadeTitleMap(roster);
@@ -57,7 +68,7 @@ export function groupByBrigade(employees: Employee[], roster: Employee[] = emplo
   return [...map.entries()]
     .map(([id, members]) => {
       const title = id === NO_BRIGADE ? "Без бригади" : titleById.get(id) ?? id;
-      return { id, title, members: [...members].sort((a, b) => a.name.localeCompare(b.name)) };
+      return { id, title, members: [...members].sort(byRoleThenName) };
     })
     .sort((a, b) => (a.id === NO_BRIGADE ? 1 : b.id === NO_BRIGADE ? -1 : a.title.localeCompare(b.title)));
 }

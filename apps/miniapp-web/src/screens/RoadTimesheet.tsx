@@ -2510,20 +2510,33 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       {step === "PICK_PEOPLE" && (
         <>
           <div className="step-badge">👥 ЛЮДИ</div>
-          <div className="section-title row">
-            <span>Люди в поїздці — Обрано {employeeIds.length}</span>
-            {employeeIds.length > 0 && (
-              <button className="chip" onClick={() => removeEmployeesFromTrip(employeeIds, "Вибір людей очищено")}>
-                🗑 Очистити вибір
-              </button>
-            )}
-          </div>
+          <div className="section-title">Люди в поїздці</div>
           {employeeIds.length > 0 && (
-            <div style={{ padding: "0 16px 8px" }}>
-              <button className="back-btn" onClick={() => setSelectedPeopleExpanded((v) => !v)}>
-                {selectedPeopleExpanded ? "▾ Сховати обраних" : "▸ Показати обраних"}
-              </button>
-              {selectedPeopleExpanded && <div className="hint">{employeeIds.map(employeeName).join(", ")}</div>}
+            <div className="picked-panel">
+              <div className="picked-head">
+                <button className="picked-toggle" onClick={() => setSelectedPeopleExpanded((v) => !v)}>
+                  {selectedPeopleExpanded ? "▾" : "▸"} Обрано {employeeIds.length}
+                </button>
+                <button className="back-btn danger-btn" onClick={() => removeEmployeesFromTrip(employeeIds, "Вибір людей очищено")}>
+                  🗑 Очистити
+                </button>
+              </div>
+              {selectedPeopleExpanded && (
+                <div className="picked-list">
+                  {employeeIds.map((id) => (
+                    <div className="picked-item" key={id}>
+                      <span>{employeeName(id)}</span>
+                      <button
+                        className="picked-remove"
+                        aria-label={`Прибрати ${employeeName(id)}`}
+                        onClick={() => removeEmployeesFromTrip([id], `${employeeName(id)} — знято з поїздки`)}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           {retroAssignEmployeeId ? (
@@ -2608,7 +2621,12 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                           >
                             {allSelected ? "✕ Зняти всю бригаду" : "✓ Обрати всю бригаду"}
                           </button>
-                          {g.members.map((emp) => {
+                          {/* Role order comes from groupByBrigade; this only sinks
+                              the people another brigade is holding, who can't be
+                              picked at all, below the ones who can. */}
+                          {[...g.members]
+                            .sort((a, b) => (busyEmployees.has(a.id) ? 1 : 0) - (busyEmployees.has(b.id) ? 1 : 0))
+                            .map((emp) => {
                             const busyBy = busyEmployees.get(emp.id);
                             const checked = employeeIds.includes(emp.id);
                             return (
@@ -2652,20 +2670,29 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       {step === "PICK_OBJECTS" && (
         <>
           <div className="step-badge">📍 ОБʼЄКТИ</div>
-          <div className="section-title row">
-            <span>Обʼєкти маршруту — Обрано {plans.length}</span>
-            {plans.length > 0 && (
-              <button className="chip" onClick={clearAllObjects}>
-                🗑 Очистити вибір
-              </button>
-            )}
-          </div>
+          <div className="section-title">Обʼєкти маршруту</div>
           {plans.length > 0 && (
-            <div style={{ padding: "0 16px 8px" }}>
-              <button className="back-btn" onClick={() => setSelectedObjectsExpanded((v) => !v)}>
-                {selectedObjectsExpanded ? "▾ Сховати обрані" : "▸ Показати обрані"}
-              </button>
-              {selectedObjectsExpanded && <div className="hint">{plans.map((p) => p.objectName).join(", ")}</div>}
+            <div className="picked-panel">
+              <div className="picked-head">
+                <button className="picked-toggle" onClick={() => setSelectedObjectsExpanded((v) => !v)}>
+                  {selectedObjectsExpanded ? "▾" : "▸"} Обрано {plans.length}
+                </button>
+                <button className="back-btn danger-btn" onClick={clearAllObjects}>
+                  🗑 Очистити
+                </button>
+              </div>
+              {selectedObjectsExpanded && (
+                <div className="picked-list">
+                  {plans.map((p) => (
+                    <div className="picked-item" key={p.objectId}>
+                      <span>{p.objectName}</span>
+                      <button className="picked-remove" aria-label={`Прибрати ${p.objectName}`} onClick={() => removeObjectFromRoute(p.objectId)}>
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           <input className="search-box" placeholder="Пошук обʼєкта…" value={objectSearch} onChange={(e) => setObjectSearch(e.target.value)} />

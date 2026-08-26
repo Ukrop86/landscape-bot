@@ -866,3 +866,57 @@ body {
   color: var(--tg-hint);
   opacity: 0.5;
 }
+
+/* "What I've picked so far" panel, shared by the people and object pickers.
+   A comma-separated run told you the names but gave you nothing to do about
+   them -- taking one person back off the trip meant finding them again in
+   their brigade. Each row now carries its own ✕. */
+.picked-panel {
+  margin: 0 12px 8px;
+  border-radius: 12px;
+  background: var(--tg-secondary-bg);
+  overflow: hidden;
+}
+
+.picked-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.picked-toggle {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: inherit;
+  cursor: pointer;
+}
+
+.picked-list {
+  padding: 0 12px 8px;
+}
+
+.picked-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--tg-border);
+  font-size: 15px;
+}
+
+.picked-remove {
+  border: none;
+  background: none;
+  padding: 2px 6px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--tg-hint);
+  cursor: pointer;
+  flex-shrink: 0;
+}
