@@ -920,3 +920,19 @@ body {
   cursor: pointer;
   flex-shrink: 0;
 }
+
+/* A subcategory header inside an expanded category. Both used to be plain
+   .cell rows with a triangle and a counter, so at a glance a subcategory of
+   works was indistinguishable from a category of works -- and the loose works
+   between them made it worse. This one reads as a level down: a rule down its
+   left edge, smaller and lighter type. */
+.cell.subcat-cell {
+  border-left: 3px solid var(--tg-border);
+  background: transparent;
+}
+
+.cell.subcat-cell .cell-title {
+  font-size: 14px;
+  color: var(--tg-hint);
+  font-weight: 600;
+}

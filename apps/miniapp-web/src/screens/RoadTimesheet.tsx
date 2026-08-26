@@ -1106,6 +1106,14 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   }
 
   // ---------- objects helpers ----------
+  async function confirmRemoveObjectFromRoute(objectId: string) {
+    const plan = plans.find((p) => p.objectId === objectId);
+    if (!plan) return;
+    const extra = plan.works.length ? ` Разом із ним зникнуть обрані роботи (${plan.works.length}).` : "";
+    if (!(await confirmDialog(`Прибрати "${plan.objectName}" з маршруту?${extra}`))) return;
+    removeObjectFromRoute(objectId);
+  }
+
   function removeObjectFromRoute(objectId: string) {
     const plan = plans.find((p) => p.objectId === objectId);
     if (!plan) return;
@@ -1227,6 +1235,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
         };
       }),
     );
+    haptic("selection");
+  }
+
+  function removeWork(objectId: string, workId: string) {
+    setPlans((prev) => prev.map((p) => (p.objectId !== objectId ? p : { ...p, works: p.works.filter((w) => w.workId !== workId) })));
     haptic("selection");
   }
 
@@ -2769,13 +2782,10 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       setStep("PLAN_WORKS");
                     }}
                   >
-                    <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                      <span className="setup-icon accent-teal">📍</span>
-                      <span className="cell-title">{plan.objectName}</span>
-                    </span>
+                    <span className="cell-title">{plan.objectName}</span>
                     <span className={`badge ${ready ? "ok" : ""}`}>{plan.works.length ? `${plan.works.length} робіт` : "не обрано"}</span>
                   </button>
-                  <button className="cell-action" onClick={() => removeObjectFromRoute(plan.objectId)} title="Прибрати з маршруту">
+                  <button className="cell-action" onClick={() => confirmRemoveObjectFromRoute(plan.objectId)} title="Прибрати з маршруту">
                     🗑
                   </button>
                 </div>
@@ -2790,20 +2800,33 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       {step === "PLAN_WORKS" && planObjectId && (
         <>
           <div className="step-badge">{planFor(planObjectId).objectName.toUpperCase()} · РОБОТИ</div>
-          <div className="section-title row">
-            <span>Вибір робіт — Обрано {planFor(planObjectId).works.length}</span>
-            {planFor(planObjectId).works.length > 0 && (
-              <button className="chip" onClick={() => clearWorks(planObjectId)}>
-                🗑 Очистити вибір
-              </button>
-            )}
-          </div>
+          <div className="section-title">Вибір робіт</div>
           {planFor(planObjectId).works.length > 0 && (
-            <div style={{ padding: "0 16px 8px" }}>
-              <button className="back-btn" onClick={() => setSelectedWorksExpanded((v) => !v)}>
-                {selectedWorksExpanded ? "▾ Сховати обрані" : "▸ Показати обрані"}
-              </button>
-              {selectedWorksExpanded && <div className="hint">{planFor(planObjectId).works.map((w) => w.workName).join(", ")}</div>}
+            <div className="picked-panel">
+              <div className="picked-head">
+                <button className="picked-toggle" onClick={() => setSelectedWorksExpanded((v) => !v)}>
+                  {selectedWorksExpanded ? "▾" : "▸"} Обрано {planFor(planObjectId).works.length}
+                </button>
+                <button className="back-btn danger-btn" onClick={() => clearWorks(planObjectId)}>
+                  🗑 Очистити
+                </button>
+              </div>
+              {selectedWorksExpanded && (
+                <div className="picked-list">
+                  {planFor(planObjectId).works.map((w) => (
+                    <div className="picked-item" key={w.workId}>
+                      <span>{w.workName}</span>
+                      <button
+                        className="picked-remove"
+                        aria-label={`Прибрати ${w.workName}`}
+                        onClick={() => removeWork(planObjectId, w.workId)}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
           <div className="hint" style={{ padding: "0 16px 8px" }}>Обери роботи. Обсяги вкажете пізніше, під час виконання на обʼєкті</div>
@@ -2831,16 +2854,17 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       >
                         {allSelected ? "✕ Зняти всі в категорії" : "✓ Обрати всі в категорії"}
                       </button>
-                      {/* Works that named no subcategory sit straight under the
-                          category; the named groups follow below them. */}
-                      {g.direct.map((w) => workPickerCell(planObjectId, w))}
+                      {/* Named subcategories lead: they are the structure of the
+                          category, and a run of loose works before them buried
+                          them somewhere down the list. Works that named no
+                          subcategory follow underneath. */}
                       {g.subgroups.map((sg) => {
                         const subExpanded = expandedWorkSubcategoryId === sg.id || !!planWorksSearch;
                         const subSelected = sg.members.filter((w) => planFor(planObjectId).works.some((pw) => pw.workId === w.id)).length;
                         const subAllSelected = sg.members.length > 0 && subSelected === sg.members.length;
                         return (
                           <div key={sg.id}>
-                            <button className="cell" onClick={() => setExpandedWorkSubcategoryId(subExpanded ? null : sg.id)}>
+                            <button className="cell subcat-cell" onClick={() => setExpandedWorkSubcategoryId(subExpanded ? null : sg.id)}>
                               <span className="cell-title">
                                 {subExpanded ? "▾" : "▸"} {sg.title}
                               </span>
@@ -2862,13 +2886,13 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                           </div>
                         );
                       })}
+                      {g.direct.map((w) => workPickerCell(planObjectId, w))}
                     </div>
                   )}
                 </div>
               );
             })}
           </div>
-          <div className="hint" style={{ padding: "0 16px" }}>Робіт у пакеті: {planFor(planObjectId).works.length}</div>
 
           <div className="section-title">Нотатки (необовʼязково)</div>
           <textarea
