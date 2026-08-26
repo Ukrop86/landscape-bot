@@ -596,6 +596,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     return employees.find((e) => e.id === id)?.name ?? id;
   }
 
+  const ROLE_RANK: Record<"бригадир" | "старший" | "робітник", number> = { бригадир: 0, старший: 1, робітник: 2 };
+
   function roleFor(id: string): "бригадир" | "старший" | "робітник" {
     const emp = employees.find((e) => e.id === id);
     return emp ? employeeRole(emp) : "робітник";
@@ -3078,9 +3080,14 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               <div style={{ padding: "4px 16px 12px" }}>
                 {employeeIds.length ? (
                   <ul className="bullets">
-                    {employeeIds.map((id) => (
-                      <li key={id}>{employeeName(id)}</li>
-                    ))}
+                    {[...employeeIds]
+                      .sort((a, b) => ROLE_RANK[roleFor(a)] - ROLE_RANK[roleFor(b)])
+                      .map((id) => (
+                        <li key={id}>
+                          {employeeName(id)}
+                          {roleFor(id) !== "робітник" && <span className="role-tag" style={{ marginLeft: 6 }}>{roleFor(id)}</span>}
+                        </li>
+                      ))}
                   </ul>
                 ) : (
                   <div className="hint">Нікого не обрано</div>
@@ -3088,6 +3095,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               </div>
             )}
           </div>
+          {!employeeIds.some((id) => roleFor(id) === "бригадир") && (
+            <div className="hint" style={{ padding: "0 16px 8px" }}>
+              ⚠️ У поїздці немає бригадира — його 20% не нараховуватимуться, робітники поділять 90%.
+            </div>
+          )}
           <div className="section-title">Обʼєкти · роботи</div>
           <div className="list">
             {plans.map((p) => {
