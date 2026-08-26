@@ -371,6 +371,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // asking afterwards -- and so the screen can name a real destination
   // rather than guessing at the first unvisited object in the list.
   const [headingToObjectId, setHeadingToObjectId] = useState<string>("");
+  const [objectsReturnStep, setObjectsReturnStep] = useState<Step>("HUB");
   const [atObjectReturnStep, setAtObjectReturnStep] = useState<Step>("DRIVE");
   const [atObjectDetailsExpanded, setAtObjectDetailsExpanded] = useState(false);
   const [volumesReturnStep, setVolumesReturnStep] = useState<Step>("AT_OBJECT");
@@ -1417,7 +1418,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // The chosen destination, but only while it is still ahead of us: an object
   // that got visited (or dropped from the route) must not keep steering the
   // drive screen.
-  const headingTo = plans.find((p) => p.objectId === headingToObjectId && !p.visited) ?? null;
+  const headingTo = plans.find((p) => p.objectId === headingToObjectId) ?? null;
 
   // Where "↩️ Повернутися до поїздки" on HUB should actually land. Follows
   // the LIVE trip's state first (objects still to visit -> people to pick up
@@ -2044,6 +2045,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     if ((step === "PICK_CAR" || step === "PICK_PEOPLE") && editReturnStep !== "HUB") {
       setStep(editReturnStep);
       setEditReturnStep("HUB");
+      return;
+    }
+    if (step === "PICK_OBJECTS" && objectsReturnStep !== "HUB") {
+      setStep(objectsReturnStep);
+      setObjectsReturnStep("HUB");
       return;
     }
     if (step === "PLAN_WORKS") {
@@ -2806,7 +2812,13 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               );
             })}
           </div>
-          <MainButton text="Зберегти" onClick={() => setStep("HUB")} />
+          <MainButton
+            text="Зберегти"
+            onClick={() => {
+              setStep(objectsReturnStep);
+              setObjectsReturnStep("HUB");
+            }}
+          />
         </>
       )}
 
@@ -3221,25 +3233,39 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
           {nextUnvisited && !headingTo && (
             <>
               <div className="section-title">Куди їдемо?</div>
+              {/* The whole route, not just what is left: coming back to an
+                  object already visited is a normal day, and hiding the
+                  visited ones also hid what the day had covered so far. */}
               <div className="list">
-                {plans
-                  .filter((p) => !p.visited)
-                  .map((p) => (
-                    <button
-                      key={p.objectId}
-                      className="cell"
-                      onClick={() => {
-                        setHeadingToObjectId(p.objectId);
-                        haptic("selection");
-                      }}
-                    >
-                      <span className="cell-title">📍 {p.objectName}</span>
-                      <span className="badge">{p.works.length ? nWorks(p.works.length) : "не обрано"}</span>
-                    </button>
-                  ))}
+                {plans.map((p) => (
+                  <button
+                    key={p.objectId}
+                    className="cell"
+                    onClick={() => {
+                      setHeadingToObjectId(p.objectId);
+                      haptic("selection");
+                    }}
+                  >
+                    <span className="cell-title">
+                      {p.visited ? "✅" : "📍"} {p.objectName}
+                    </span>
+                    <span className="badge">{p.visited ? "вже були" : p.works.length ? nWorks(p.works.length) : "не обрано"}</span>
+                  </button>
+                ))}
               </div>
             </>
           )}
+          <div className="hint" style={{ padding: "4px 16px 8px", textAlign: "center" }}>
+            <button
+              className="back-btn"
+              onClick={() => {
+                setObjectsReturnStep("DRIVE");
+                setStep("PICK_OBJECTS");
+              }}
+            >
+              ✏️ Змінити маршрут
+            </button>
+          </div>
 
           <div className="section-title row">
             <span>По дорозі</span>
