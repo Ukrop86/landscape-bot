@@ -372,6 +372,9 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // rather than guessing at the first unvisited object in the list.
   const [headingToObjectId, setHeadingToObjectId] = useState<string>("");
   const [arrivedPickedExpanded, setArrivedPickedExpanded] = useState(true);
+  // Which person's "assign works to just them" panel is open, if any -- the
+  // same assignment the work list offers, reached from the person instead.
+  const [assigningPersonId, setAssigningPersonId] = useState<string | null>(null);
   const [atObjectReturnStep, setAtObjectReturnStep] = useState<Step>("DRIVE");
   const [atObjectDetailsExpanded, setAtObjectDetailsExpanded] = useState(false);
   const [volumesReturnStep, setVolumesReturnStep] = useState<Step>("AT_OBJECT");
@@ -1599,10 +1602,23 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // Clocks in everyone currently dropped at the object who isn't already
   // clocked in -- can be pressed again later to pick up newcomers without
   // disturbing sessions already in progress.
-  function startShift() {
+  async function startShift() {
     if (!atObjectId) return;
     const plan = currentAtPlan();
     if (!plan || !plan.here.length) return;
+    // Works already named to someone are paid to them alone. Starting the
+    // rest of the crew does not take those works away -- but the crew would
+    // otherwise walk onto a job whose money is not theirs, so say so once.
+    const dedicated = plan.works.filter((w) => (w.employeeIds ?? []).length > 0);
+    if (dedicated.length) {
+      const lines = dedicated
+        .map((w) => `• ${w.workName} — ${(w.employeeIds ?? []).map((id) => shortName(employeeName(id))).join(", ")}`)
+        .join("\n");
+      const ok = await confirmDialog(
+        `На обʼєкті вже є закріплені роботи:\n${lines}\n\nЗа них платять лише цим людям — бригада їх не отримає. Почати роботи решті?`,
+      );
+      if (!ok) return;
+    }
     const nowIso = new Date().toISOString();
     setPlans((prev) =>
       prev.map((p) => {
@@ -3574,6 +3590,29 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                   <div className="empty-state">Роботи ще не розпочато</div>
                 )}
 
+                {/* Money: a work named to specific people is paid to them
+                    alone, and its value leaves the object's shared pool. The
+                    foreman has to see that BEFORE handing the same work to
+                    the whole crew -- otherwise the crew starts a job that
+                    pays them nothing. */}
+                {plan.works.some((w) => (w.employeeIds ?? []).length > 0) && (
+                  <div className="dedicated-note">
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>🛠 Закріплені роботи</div>
+                    <ul className="bullets">
+                      {plan.works
+                        .filter((w) => (w.employeeIds ?? []).length > 0)
+                        .map((w) => (
+                          <li key={w.workId}>
+                            {w.workName} — {(w.employeeIds ?? []).map((id) => shortName(employeeName(id))).join(", ")}
+                          </li>
+                        ))}
+                    </ul>
+                    <div className="hint" style={{ marginTop: 6 }}>
+                      Ці роботи оплачуються лише зазначеним людям. Бригаді їх призначати не треба.
+                    </div>
+                  </div>
+                )}
+
                 {(worksTotal > 0 || plan.here.length > 0) && (
                   <button className="back-btn" onClick={() => setAtObjectDetailsExpanded((v) => !v)}>
                     {atObjectDetailsExpanded ? "▾ Сховати деталі" : "▸ Показати деталі (роботи, люди)"}
@@ -3647,9 +3686,14 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                     })}
                   </div>
                 )}
-                {atObjectDetailsExpanded && plan.here.length > 0 && (
+                {/* One list, not two. The timers block and the "how people
+                    leave" block named the same people twice, in different
+                    orders, with half the actions in each -- and neither said
+                    how someone got here, which is what decides whether the
+                    bus is even an option for them. */}
+                {plan.here.length > 0 && !showDropPicker && !showMovePicker && !showManualHours && !errandMode && (
                   <>
-                    <div className="section-title">Люди тут — кожен зі своїм таймером</div>
+                    <div className="section-title">Люди на обʼєкті — кожен зі своїм таймером</div>
                     <div className="list">
                       {plan.here.map((id) => {
                         const session = plan.sessions.find((s) => s.employeeId === id && !s.endedAt);
@@ -3658,35 +3702,90 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                           .filter((s) => s.employeeId === id && s.endedAt)
                           .reduce((a, s) => a + (new Date(s.endedAt as string).getTime() - new Date(s.startedAt).getTime()), 0);
                         const elapsed = closedMs + (running ? now - new Date(session!.startedAt).getTime() : 0);
+                        const cameOnOwn = selfTransportIds.includes(id);
+                        const ownWorks = plan.works.filter((w) => (w.employeeIds ?? []).includes(id));
+                        const picking = assigningPersonId === id;
                         return (
-                          <div key={id} className="cell" style={{ cursor: "default" }}>
-                            <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                              <span className={`avatar-circle ${roleAccent(roleFor(id))}`}>{initials(employeeName(id))}</span>
-                              {employeeName(id)}
-                            </span>
-                            <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                              {elapsed > 0 && <span className="hint">{fmtHMS(elapsed)}</span>}
-                              {running ? (
-                                <button className="chip danger-btn" onClick={() => stopPersonTimer(atObjectId, id)}>
-                                  ⏹ Стоп
-                                </button>
-                              ) : (
-                                <button className="chip" onClick={() => startPersonTimer(atObjectId, id)}>
-                                  ▶️ Старт
+                          <div key={id} className="cell" style={{ cursor: "default", display: "block" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                              <span className="cell-title">
+                                {cameOnOwn ? "🚶" : "🚐"} {shortName(employeeName(id))}
+                              </span>
+                              <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                {elapsed > 0 && <span className="hint">{fmtHMS(elapsed)}</span>}
+                                {running ? (
+                                  <button className="chip danger-btn" onClick={() => stopPersonTimer(atObjectId, id)}>
+                                    ⏹ Стоп
+                                  </button>
+                                ) : (
+                                  <button className="chip" onClick={() => startPersonTimer(atObjectId, id)}>
+                                    ▶️ Старт
+                                  </button>
+                                )}
+                              </span>
+                            </div>
+                            {ownWorks.length > 0 && (
+                              <div className="hint" style={{ marginTop: 4 }}>
+                                🛠 окремо: {ownWorks.map((w) => w.workName).join(", ")}
+                              </div>
+                            )}
+                            <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              <button
+                                className={`chip ${ownWorks.length ? "selected" : ""}`}
+                                onClick={() => setAssigningPersonId(picking ? null : id)}
+                                disabled={!plan.works.length}
+                              >
+                                🛠 Призначити окремі роботи
+                              </button>
+                              {carPresent && (
+                                <button className="chip" onClick={() => pickUpOne(plan.objectId, id, false)}>
+                                  🚐 У бус
                                 </button>
                               )}
-                            </span>
+                              <button className="chip" onClick={() => leaveObjectOnOwn(plan.objectId, [id])}>
+                                🚶 Зняти з обʼєкта
+                              </button>
+                            </div>
+                            {picking && (
+                              <div style={{ marginTop: 8 }}>
+                                <div className="hint">
+                                  Обрані роботи оплачуються лише цій людині. Решта робіт обʼєкта далі ділиться бригадою.
+                                </div>
+                                <div className="list" style={{ margin: "6px 0 0" }}>
+                                  {plan.works.map((w) => {
+                                    const mine = (w.employeeIds ?? []).includes(id);
+                                    const others = (w.employeeIds ?? []).filter((x) => x !== id);
+                                    return (
+                                      <button
+                                        key={w.workId}
+                                        className={`cell ${mine ? "selected" : ""}`}
+                                        onClick={() => toggleWorkAssignee(atObjectId, w.workId, id)}
+                                      >
+                                        <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                          <span className={`checkbox ${mine ? "checked" : ""}`}>{mine ? "✓" : ""}</span>
+                                          {w.workName}
+                                        </span>
+                                        {others.length > 0 && <span className="badge warn">також {others.map((x) => shortName(employeeName(x))).join(", ")}</span>}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
                     </div>
-                  </>
-                )}
-
-                {plan.here.length > 0 && !showDropPicker && !showMovePicker && !showManualHours && !errandMode && (
-                  <>
-                    <div className="section-title">Як люди їдуть з обʼєкта</div>
-                    {renderDepartureChoices(plan, { allowBus: carPresent, pauseForBus: false })}
+                    <div className="chip-row">
+                      {carPresent && (
+                        <button className="chip selected" onClick={() => pickUpHere(plan.objectId, plan.here, false)}>
+                          🚐 Посадити всіх у бус ({plan.here.length})
+                        </button>
+                      )}
+                      <button className="chip" onClick={() => leaveObjectOnOwn(plan.objectId, plan.here)}>
+                        🚶 Зняти всіх з обʼєкта ({plan.here.length})
+                      </button>
+                    </div>
                   </>
                 )}
 

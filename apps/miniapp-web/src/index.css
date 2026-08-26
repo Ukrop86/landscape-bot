@@ -989,3 +989,14 @@ body {
   font-size: 14px;
   line-height: 1;
 }
+
+/* "These works are already spoken for" notice on the object screen. Amber
+   rather than red: nothing is wrong, but it changes who gets paid, so it
+   must be read before the crew is started on the same work. */
+.dedicated-note {
+  margin: 8px 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 159, 10, 0.12);
+  border: 1px solid rgba(255, 159, 10, 0.3);
+}
