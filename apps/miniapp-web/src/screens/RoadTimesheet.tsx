@@ -2438,8 +2438,24 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
       {step === "ODO_START" && (
         <>
-          <div className="step-badge">🚙 АВТО · ОДОМЕТР</div>
-          <div className="section-title">Одометр на старті</div>
+          <div className="step-badge">🚙 ОДОМЕТР НА СТАРТІ</div>
+          {/* Which car this reading belongs to. The picker is one back-tap
+              away, but the number being typed here is meaningless without
+              knowing whose odometer it is -- and a wrong car is only caught
+              at this screen, before the reservation is taken. */}
+          <div className="list">
+            <div className="cell">
+              <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span className="setup-icon accent-blue">🚙</span>
+                <span className="cell-title">
+                  {cars.find((c) => c.id === carId)?.name ?? carId}{" "}
+                  {cars.find((c) => c.id === carId)?.plate ? (
+                    <span className="hint">{cars.find((c) => c.id === carId)?.plate}</span>
+                  ) : null}
+                </span>
+              </span>
+            </div>
+          </div>
           {lastOdometer[carId] !== undefined && (
             <div
               className="hint"
