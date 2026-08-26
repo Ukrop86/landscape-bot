@@ -45,9 +45,22 @@ body {
   margin: 0 0 2px;
 }
 
-.header .hint {
+/* Secondary text: explanations, counts, recaps -- everything that supports
+   the line above it without competing with it. The rule used to live under
+   .header only, so the ~130 other .hint elements across the app rendered as
+   plain body text: same size, same weight, same colour as the content they
+   were meant to sit behind. */
+.hint {
   color: var(--tg-hint);
   font-size: 14px;
+  line-height: 1.4;
+}
+
+/* A section title is already small, uppercase and grey; a hint riding along
+   inside it (the "N/4 готово" counter) must not come out bigger than the
+   title it belongs to. */
+.section-title .hint {
+  font-size: inherit;
 }
 
 .section-title {

@@ -2268,21 +2268,21 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 <span className="setup-icon accent-blue">🚙</span>
                 <span className="cell-title">Авто{carId ? `: ${cars.find((c) => c.id === carId)?.name ?? ""}` : ""}</span>
               </span>
-              {carId && odoStart ? <span className="badge ok">{odoStart} км</span> : <span className="badge warn">не обрано</span>}
+              {carId && odoStart ? <span className="badge ok">{odoStart} км</span> : <span className="badge">не обрано</span>}
             </button>
             <button className="cell" onClick={() => { setEditReturnStep("HUB"); setStep("PICK_PEOPLE"); }}>
               <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <span className="setup-icon accent-purple">👥</span>
                 <span className="cell-title">Люди</span>
               </span>
-              {employeeIds.length ? <span className="badge ok">{employeeIds.length} обрано</span> : <span className="badge warn">не обрано</span>}
+              {employeeIds.length ? <span className="badge ok">{employeeIds.length} обрано</span> : <span className="badge">не обрано</span>}
             </button>
             <button className="cell" onClick={() => setStep("PICK_OBJECTS")}>
               <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <span className="setup-icon accent-orange">📍</span>
                 <span className="cell-title">Обʼєкти</span>
               </span>
-              {plans.length ? <span className="badge ok">{plans.length} обрано</span> : <span className="badge warn">не обрано</span>}
+              {plans.length ? <span className="badge ok">{plans.length} обрано</span> : <span className="badge">не обрано</span>}
             </button>
             <button className="cell" onClick={() => plans.length && setStep("PLAN")} disabled={!plans.length}>
               <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -2290,11 +2290,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 <span className="cell-title">Роботи</span>
               </span>
               {plans.length ? (
-                <span className={`badge ${allObjectsPlanned ? "ok" : "warn"}`}>
+                <span className={`badge ${allObjectsPlanned ? "ok" : ""}`}>
                   {plans.filter((p) => p.works.length).length}/{plans.length} з роботами
                 </span>
               ) : (
-                <span className="badge warn">спочатку обʼєкти</span>
+                <span className="badge">спочатку обʼєкти</span>
               )}
             </button>
           </div>
@@ -2699,7 +2699,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       <span className="setup-icon accent-teal">📍</span>
                       <span className="cell-title">{plan.objectName}</span>
                     </span>
-                    <span className={`badge ${ready ? "ok" : "warn"}`}>{plan.works.length ? `${plan.works.length} робіт` : "не обрано"}</span>
+                    <span className={`badge ${ready ? "ok" : ""}`}>{plan.works.length ? `${plan.works.length} робіт` : "не обрано"}</span>
                   </button>
                   <button className="cell-action" onClick={() => removeObjectFromRoute(plan.objectId)} title="Прибрати з маршруту">
                     🗑
