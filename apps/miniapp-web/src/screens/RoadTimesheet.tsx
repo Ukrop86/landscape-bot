@@ -2717,7 +2717,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 <div key={g.id}>
                   <button className="cell" onClick={() => setExpandedCityId(expandedCityId === g.id ? null : g.id)}>
                     <span className="cell-title">
-                      {expanded ? "▾" : "▸"} 🏙 {g.title}
+                      {expanded ? "▾" : "▸"} {g.title}
                     </span>
                     <span className="badge">
                       {selectedCount}/{g.members.length}
@@ -2732,14 +2732,10 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         const checked = plans.some((p) => p.objectId === obj.id);
                         return (
                           <button key={obj.id} className={`cell ${checked ? "selected" : ""}`} onClick={() => toggleRouteObject(obj)}>
-                            <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
                               <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
-                              <span className="setup-icon accent-orange" style={{ width: 28, height: 28, fontSize: 13, borderRadius: 9 }}>
-                                📍
-                              </span>
                               {obj.name}
                             </span>
-                            <span className="cell-sub">{obj.address}</span>
                           </button>
                         );
                       })}
