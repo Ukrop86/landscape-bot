@@ -8,6 +8,7 @@ import { saveDraft, loadDraft, clearDraft } from "../lib/draft";
 import { BackRow } from "../components/BackRow";
 import { MainButton } from "../components/MainButton";
 import { NumericKeypad } from "../components/NumericKeypad";
+import { PhotoButton } from "../components/PhotoButton";
 
 // Hub-based flow: after opening the road timesheet, the foreman lands on a HUB
 // screen with editable cards -- Авто, Люди, Обʼєкти, Роботи. Each card opens
@@ -2198,7 +2199,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
         </div>
       )}
 
-      {(carId || employeeIds.length > 0 || plans.length > 0) && (
+      {/* Only on the hub. It used to render on every step, which put a
+          destructive action a mis-tap away while driving or while a shift was
+          running at an object -- and the hub is one back-tap away from all of
+          them. */}
+      {step === "HUB" && (carId || employeeIds.length > 0 || plans.length > 0) && (
         <div style={{ padding: "0 16px 8px", textAlign: "right" }}>
           <button className="back-btn danger-btn" onClick={resetDay}>🗑 Скинути день</button>
         </div>
@@ -2457,15 +2462,13 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             </div>
           </div>
           {lastOdometer[carId] !== undefined && (
-            <div
-              className="hint"
-              style={{ padding: "0 16px", textDecoration: "underline", cursor: "pointer" }}
-              onClick={() => setOdoStart(String(lastOdometer[carId]))}
-            >
-              Попереднє значення: {lastOdometer[carId]} км (натисніть, щоб підставити)
+            <div className="chip-row">
+              <button className="chip" onClick={() => setOdoStart(String(lastOdometer[carId]))}>
+                ↩︎ Підставити {lastOdometer[carId]} км
+              </button>
             </div>
           )}
-          <div className="big-number">{odoStart || "0"} км</div>
+          <div className={`big-number ${odoStart ? "" : "empty"}`}>{odoStart || "0"} км</div>
           {odoStart && lastOdometer[carId] !== undefined && Number(odoStart) >= lastOdometer[carId] && (
             <div className="hint" style={{ textAlign: "center" }}>
               +{Math.round((Number(odoStart) - lastOdometer[carId]) * 10) / 10} км з попереднього виїзду
@@ -2476,19 +2479,18 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               ⚠️ Не може бути менше за попередній приїзд ({lastOdometer[carId]} км)
             </div>
           )}
-          <NumericKeypad value={odoStart} onChange={setOdoStart} />
+          <NumericKeypad value={odoStart} onChange={setOdoStart} decimal={false} />
           <div className="field">
             {odoStartPhoto ? (
               <div className="badge ok">📷 Фото додано</div>
             ) : (
               <>
-                <label className="hint">📷 Фото спідометра (не обовʼязково)</label>
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  onChange={(e) => e.target.files?.[0] && uploadPhoto(e.target.files[0], "start")}
+                <PhotoButton
+                  text="📷 Зняти спідометр"
+                  disabled={uploadingPhoto}
+                  onPick={(file) => uploadPhoto(file, "start")}
                 />
+                <div className="hint" style={{ marginTop: 6 }}>Не обовʼязково</div>
               </>
             )}
           </div>
@@ -2841,8 +2843,13 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             placeholder="Коментар до обʼєкта…"
           />
           <div className="field">
-            <label className="hint">📷 Фото обʼєкта (можна кілька)</label>
-            <input type="file" accept="image/*" onChange={(e) => e.target.files?.[0] && uploadObjectPhoto(planObjectId, e.target.files[0])} />
+            <label className="hint">Фото обʼєкта (можна кілька)</label>
+            <PhotoButton
+              text="📷 Додати фото"
+              capture={false}
+              disabled={uploadingPhoto}
+              onPick={(file) => uploadObjectPhoto(planObjectId, file)}
+            />
             {planFor(planObjectId).photoUrls.length > 0 && (
               <div className="chip-row" style={{ marginTop: 8 }}>
                 {planFor(planObjectId).photoUrls.map((url, i) => (
@@ -2988,7 +2995,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               <>
                 <div className="step-badge">ОБСЯГ РОБОТИ</div>
                 <div className="section-title">🛠 {work.workName}</div>
-                <div className="big-number">
+                <div className={`big-number ${volumeBuffer ? "" : "empty"}`}>
                   {volumeBuffer || "0"} {work.unit}
                 </div>
                 <div style={{ textAlign: "center", padding: "0 16px 8px" }}>
@@ -3822,7 +3829,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                   (manualHoursEmployeeId ? (
                     <>
                       <div className="section-title">🕒 {employeeName(manualHoursEmployeeId)} — години на «{plan.objectName}»</div>
-                      <div className="big-number">{manualHoursBuffer || "0"} год</div>
+                      <div className={`big-number ${manualHoursBuffer ? "" : "empty"}`}>{manualHoursBuffer || "0"} год</div>
                       <NumericKeypad value={manualHoursBuffer} onChange={setManualHoursBuffer} />
                       <div style={{ display: "flex", gap: 8, padding: "8px 16px" }}>
                         <button className="chip" onClick={() => setManualHoursEmployeeId(null)}>
@@ -3895,8 +3902,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                     {errandDriverId && (
                       <>
                         <div className="section-title">Спідометр при виїзді</div>
-                        <div className="big-number">{errandOdoBuffer || "0"}</div>
-                        <NumericKeypad value={errandOdoBuffer} onChange={setErrandOdoBuffer} />
+                        <div className={`big-number ${errandOdoBuffer ? "" : "empty"}`}>{errandOdoBuffer || "0"}</div>
+                        <NumericKeypad value={errandOdoBuffer} onChange={setErrandOdoBuffer} decimal={false} />
                       </>
                     )}
                     <div style={{ display: "flex", gap: 8, padding: "8px 16px" }}>
@@ -3932,8 +3939,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                     <div className="hint" style={{ padding: "0 16px 8px" }}>
                       Водій {employeeName(openErrand.driverId)} · виїхав на {openErrand.odoOut}. Введіть спідометр при поверненні.
                     </div>
-                    <div className="big-number">{errandOdoBuffer || "0"}</div>
-                    <NumericKeypad value={errandOdoBuffer} onChange={setErrandOdoBuffer} />
+                    <div className={`big-number ${errandOdoBuffer ? "" : "empty"}`}>{errandOdoBuffer || "0"}</div>
+                    <NumericKeypad value={errandOdoBuffer} onChange={setErrandOdoBuffer} decimal={false} />
                     {errandOdoBuffer && Number(errandOdoBuffer) < openErrand.odoOut && (
                       <div className="hint" style={{ padding: "0 16px 8px", color: "#d70015" }}>
                         ⚠️ Спідометр при поверненні не може бути меншим за {openErrand.odoOut}.
@@ -4152,7 +4159,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
           <div className="section-title">Одометр на фініші</div>
           <div className="hint" style={{ padding: "0 16px" }}>Старт: {odoStart} км</div>
-          <div className="big-number">{odoEnd || "0"} км</div>
+          <div className={`big-number ${odoEnd ? "" : "empty"}`}>{odoEnd || "0"} км</div>
           {odoEnd && Number(odoEnd) >= Number(odoStart) && (
             <div className="hint" style={{ textAlign: "center" }}>
               Пройдено {Math.round((Number(odoEnd) - Number(odoStart)) * 10) / 10} км · загальний час у дорозі{" "}
@@ -4164,14 +4171,14 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               ⚠️ Не може бути менше за старт ({odoStart} км)
             </div>
           )}
-          <NumericKeypad value={odoEnd} onChange={setOdoEnd} />
+          <NumericKeypad value={odoEnd} onChange={setOdoEnd} decimal={false} />
           <div className="field">
             {odoEndPhoto ? (
               <div className="badge ok">📷 Фото додано</div>
             ) : (
               <>
-                <label className="hint">📷 Фото спідометра (не обовʼязково)</label>
-                <input type="file" accept="image/*" capture="environment" onChange={(e) => e.target.files?.[0] && uploadPhoto(e.target.files[0], "end")} />
+                <PhotoButton text="📷 Зняти спідометр" disabled={uploadingPhoto} onPick={(file) => uploadPhoto(file, "end")} />
+                <div className="hint" style={{ marginTop: 6 }}>Не обовʼязково</div>
               </>
             )}
           </div>

@@ -4,10 +4,14 @@ export function NumericKeypad({
   value,
   onChange,
   maxLength = 7,
+  decimal = true,
 }: {
   value: string;
   onChange: (next: string) => void;
   maxLength?: number;
+  /** Odometers are whole kilometres; work volumes are not. Turning the dot
+      off keeps it from being hit instead of the "0" right next to it. */
+  decimal?: boolean;
 }) {
   function press(key: string) {
     if (key === "back") {
@@ -19,7 +23,7 @@ export function NumericKeypad({
       return;
     }
     if (key === ".") {
-      if (value.includes(".")) return;
+      if (!decimal || value.includes(".")) return;
       onChange((value || "0") + key);
       return;
     }
@@ -36,7 +40,7 @@ export function NumericKeypad({
     ["1", "2", "3"],
     ["4", "5", "6"],
     ["7", "8", "9"],
-    [".", "0", "clear", "back"],
+    decimal ? [".", "0", "clear", "back"] : ["0", "clear", "back"],
   ];
 
   return (

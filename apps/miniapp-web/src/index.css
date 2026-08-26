@@ -837,3 +837,32 @@ body {
   position: absolute;
   left: 2px;
 }
+
+/* Camera/file picker dressed as a normal button -- see components/PhotoButton. */
+.photo-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--tg-border);
+  background: var(--tg-secondary-bg);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.photo-btn input {
+  display: none;
+}
+
+.photo-btn.disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Placeholder state of .big-number: nothing has been typed yet, so the zero
+   must not read as an entered value. */
+.big-number.empty {
+  color: var(--tg-hint);
+  opacity: 0.5;
+}
