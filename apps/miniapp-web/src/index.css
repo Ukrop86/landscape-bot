@@ -800,3 +800,27 @@ body {
 .progress-fill.done {
   background: rgb(52, 199, 89);
 }
+
+/* Plain bulleted list for read-only recaps (the "repeat last trip" card, and
+   anywhere else a handful of names or works has to stay scannable). Comma-
+   separated runs turn into a wall of text once there are more than three
+   items -- one item per line with a dot in front reads at a glance. */
+.bullets {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--tg-hint);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.bullets li {
+  padding-left: 14px;
+  position: relative;
+}
+
+.bullets li::before {
+  content: "•";
+  position: absolute;
+  left: 2px;
+}

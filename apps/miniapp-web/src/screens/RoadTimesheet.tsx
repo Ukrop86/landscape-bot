@@ -2219,10 +2219,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 <span className="setup-icon accent-blue" style={{ width: 34, height: 34, fontSize: 16 }}>
                   🔁
                 </span>
-                <div className="cell-title">Повторити маршрут з {lastTrip.date}?</div>
+                <div className="cell-title">Повторити останній виїзд?</div>
               </div>
               <div className="hint" style={{ marginTop: 6 }}>
-                {cars.find((c) => c.id === lastTrip.carId)?.name ?? lastTrip.carId} · {lastTrip.employeeIds.length} людей · {lastTrip.objects.length} обʼєктів
+                {lastTrip.date} · {cars.find((c) => c.id === lastTrip.carId)?.name ?? lastTrip.carId} · {lastTrip.employeeIds.length} людей ·{" "}
+                {lastTrip.objects.length} обʼєктів
               </div>
               <div style={{ marginTop: 6 }}>
                 <button className="chip" onClick={() => setLastTripExpanded((v) => !v)}>
@@ -2232,11 +2233,20 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               {lastTripExpanded && (
                 <div style={{ marginTop: 10 }}>
                   <div className="hint" style={{ fontWeight: 600 }}>👥 Люди</div>
-                  <div className="hint" style={{ marginBottom: 8 }}>{lastTrip.employeeIds.map(employeeName).join(", ") || "—"}</div>
-                  <div className="hint" style={{ fontWeight: 600 }}>📍 Обʼєкти та роботи</div>
+                  <ul className="bullets">
+                    {lastTrip.employeeIds.length ? (
+                      lastTrip.employeeIds.map((id) => <li key={id}>{employeeName(id)}</li>)
+                    ) : (
+                      <li>—</li>
+                    )}
+                  </ul>
+                  <div className="hint" style={{ fontWeight: 600, marginTop: 14 }}>📍 Обʼєкти та роботи</div>
                   {lastTrip.objects.map((o) => (
-                    <div key={o.objectId} className="hint" style={{ marginBottom: 4 }}>
-                      <b>{o.objectName}</b>: {o.works.map((w) => w.workName).join(", ") || "без робіт"}
+                    <div key={o.objectId} style={{ marginTop: 10 }}>
+                      <div className="hint" style={{ fontWeight: 600 }}>{o.objectName}</div>
+                      <ul className="bullets">
+                        {o.works.length ? o.works.map((w, i) => <li key={i}>{w.workName}</li>) : <li>без робіт</li>}
+                      </ul>
                     </div>
                   ))}
                 </div>
@@ -2288,10 +2298,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               )}
             </button>
           </div>
-          <div className="hint" style={{ padding: "0 16px 8px" }}>
-            Можна повертатись сюди у будь-який момент і змінювати авто, людей чи обʼєкти.
-          </div>
-
           {/* Escape hatch from the live, step-by-step day above: a day that's
               already been worked can't be re-lived with timers, so it gets a
               flat form where hours are typed in instead of measured. */}
