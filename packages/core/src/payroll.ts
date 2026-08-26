@@ -66,8 +66,9 @@ export type ObjectSalaryPack = {
  *
  * The worker remainder is split EQUALLY, not by hours. Works that name
  * specific people form their own pool each, so a job one person did alone
- * pays only that person; everything unassigned stays one pool for the whole
- * crew at the object. The discipline/productivity coefficients are recorded
+ * pays only that person -- and that person is then OUT of the shared pool,
+ * which belongs to the crew that did the rest. Everything unassigned stays
+ * one pool for whoever is left. The discipline/productivity coefficients are recorded
  * per person but move no money.
  */
 export function buildSalaryPacksWithRoles(params: {
@@ -132,8 +133,9 @@ export function buildSalaryPacksWithRoles(params: {
     //
     // Works assigned to specific people get their own pool each, split only
     // between those of them who were actually at the object; everything else
-    // stays in one shared pool for the whole crew. "One person drove out,
-    // watered the lawn and left" is the case this exists for.
+    // stays in one shared pool for the crew that did it. "One person drove
+    // out, watered the lawn and left" is the case this exists for -- and that
+    // person is paid for the watering, not for the crew's day as well.
     //
     // An assignment naming nobody who was there is treated as unassigned
     // rather than dropped -- otherwise that work's money would silently
@@ -150,7 +152,21 @@ export function buildSalaryPacksWithRoles(params: {
     // buckets always add back up to objectTotal even if a caller's work
     // values don't quite sum to the total it passed.
     const sharedValue = Math.max(0, o.objectTotal - dedicated.reduce((a, d) => a + d.value, 0));
-    const sharedOnePay = workerRows.length ? (sharedValue * workerPercent) / workerRows.length : 0;
+
+    // Someone named on a work is paid for that work and nothing else: the
+    // shared share is for the crew that did the rest, and a person put on one
+    // job did not do those. Naming a work is therefore a decision about that
+    // person's whole day at this object, not just about one line of it.
+    const dedicatedIds = new Set<string>();
+    for (const d of dedicated) for (const w of d.workers) dedicatedIds.add(w.employeeId);
+
+    // ...unless that would leave nobody holding the unassigned works. Money
+    // must never vanish from an object, so when every worker present has a
+    // named work, the remainder falls back to all of them.
+    const sharedWorkers = workerRows.filter((r) => !dedicatedIds.has(r.employeeId));
+    const sharedPool = sharedWorkers.length ? sharedWorkers : workerRows;
+    const sharedIds = new Set(sharedPool.map((r) => r.employeeId));
+    const sharedOnePay = sharedPool.length ? (sharedValue * workerPercent) / sharedPool.length : 0;
 
     const dedicatedPayByEmployee = new Map<string, number>();
     for (const d of dedicated) {
@@ -162,7 +178,7 @@ export function buildSalaryPacksWithRoles(params: {
       let pay = 0;
       if (hasBrigadier && r.employeeId === brigadierEmployeeId) pay = brigadierOnePay;
       else if (hasSenior && seniorSet.has(r.employeeId)) pay = seniorOnePay;
-      else pay = sharedOnePay + (dedicatedPayByEmployee.get(r.employeeId) ?? 0);
+      else pay = (sharedIds.has(r.employeeId) ? sharedOnePay : 0) + (dedicatedPayByEmployee.get(r.employeeId) ?? 0);
 
       return {
         employeeId: r.employeeId,

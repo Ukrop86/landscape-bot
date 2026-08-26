@@ -1615,7 +1615,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
         .map((w) => `• ${w.workName} — ${(w.employeeIds ?? []).map((id) => shortName(employeeName(id))).join(", ")}`)
         .join("\n");
       const ok = await confirmDialog(
-        `На обʼєкті вже є закріплені роботи:\n${lines}\n\nЗа них платять лише цим людям — бригада їх не отримає. Почати роботи решті?`,
+        `На обʼєкті вже є закріплені роботи:\n${lines}\n\nЗа них платять лише цим людям, і решту робіт обʼєкта вони вже не ділять. Почати роботи решті?`,
       );
       if (!ok) return;
     }
@@ -3608,7 +3608,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         ))}
                     </ul>
                     <div className="hint" style={{ marginTop: 6 }}>
-                      Ці роботи оплачуються лише зазначеним людям. Бригаді їх призначати не треба.
+                      Ці роботи оплачуються лише зазначеним людям, і в поділі решти робіт обʼєкта вони вже не
+                      беруть участі. Бригаді призначати їх не треба.
                     </div>
                   </div>
                 )}
@@ -3749,7 +3750,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                             {picking && (
                               <div style={{ marginTop: 8 }}>
                                 <div className="hint">
-                                  Обрані роботи оплачуються лише цій людині. Решта робіт обʼєкта далі ділиться бригадою.
+                                  Обрані роботи оплачуються лише цій людині — і тоді вона більше не бере участі в поділі
+                                  решти робіт обʼєкта. Решту ділить між собою бригада.
                                 </div>
                                 <div className="list" style={{ margin: "6px 0 0" }}>
                                   {plan.works.map((w) => {
