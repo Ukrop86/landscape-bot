@@ -382,6 +382,10 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   const [submittedEditBanner, setSubmittedEditBanner] = useState(false);
   const [dayStatus, setDayStatus] = useState<DayStatus | null>(null);
   const [lastTrip, setLastTrip] = useState<LastTripSuggestion | null>(null);
+  // Kept apart from lastTrip on purpose: the suggestion card can be dismissed
+  // (or consumed by applying it), but "this is the car you drove last time"
+  // stays true either way and keeps ordering the picker.
+  const [lastTripCarId, setLastTripCarId] = useState<string>("");
   const [lastTripExpanded, setLastTripExpanded] = useState(false);
 
   const [saving, setSaving] = useState(false);
@@ -422,7 +426,10 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     api
       .get<LastTripResponse>(`/api/road-timesheet/last-trip?before=${date}`)
       .then((res) => {
-        if (res.found) setLastTrip({ date: res.date, carId: res.carId ?? "", employeeIds: res.employeeIds, objects: res.objects });
+        if (res.found) {
+          setLastTrip({ date: res.date, carId: res.carId ?? "", employeeIds: res.employeeIds, objects: res.objects });
+          setLastTripCarId(res.carId ?? "");
+        }
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2147,6 +2154,23 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   const readinessScore = [!!carId && !!odoStart, employeeIds.length > 0, plans.length > 0, allObjectsPlanned].filter(Boolean).length;
   const showCopySuggestion = !!lastTrip && !carId && !employeeIds.length && !plans.length;
 
+  // The dictionary order means nothing to a foreman: on nearly every day they
+  // take the same car as last time, and a car another brigade already holds is
+  // the one row they can never pick. So the previous car leads, the reserved
+  // ones sink to the bottom, and everything else keeps the dictionary order.
+  const carsInPickOrder = cars
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => {
+      const takenA = takenCars.has(a.c.id) ? 1 : 0;
+      const takenB = takenCars.has(b.c.id) ? 1 : 0;
+      if (takenA !== takenB) return takenA - takenB;
+      const lastA = a.c.id === lastTripCarId ? 0 : 1;
+      const lastB = b.c.id === lastTripCarId ? 0 : 1;
+      if (lastA !== lastB) return lastA - lastB;
+      return a.i - b.i;
+    })
+    .map((x) => x.c);
+
   return (
     <div>
       <BackRow onBack={goBack} />
@@ -2374,16 +2398,9 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       {step === "PICK_CAR" && (
         <>
           <div className="step-badge">🚙 АВТО</div>
-          <div className="section-title">Вибір авто</div>
-          {carId && (
-            <div className="hint" style={{ padding: "0 16px 8px" }}>
-              Обрано: {cars.find((c) => c.id === carId)?.name ?? carId}
-            </div>
-          )}
           <div className="list">
-            {cars.map((c) => {
+            {carsInPickOrder.map((c) => {
               const takenBy = takenCars.get(c.id);
-              const last = lastOdometer[c.id];
               return (
                 <button
                   key={c.id}
@@ -2406,7 +2423,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       {c.name} {c.plate ? <span className="hint">{c.plate}</span> : null}
                     </span>
                   </span>
-                  {takenBy ? <span className="badge warn">🔒 {takenBy}</span> : <span className="cell-sub">{last ? `${last} км` : ""}</span>}
+                  {takenBy ? (
+                    <span className="badge warn">🔒 {takenBy}</span>
+                  ) : c.id === lastTripCarId ? (
+                    <span className="badge">минулого разу</span>
+                  ) : null}
                 </button>
               );
             })}
