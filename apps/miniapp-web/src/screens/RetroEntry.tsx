@@ -4,6 +4,7 @@ import { todayISO } from "../lib/date";
 import { confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, initials, roleAccent, groupByBrigade, type EmployeeRole } from "../lib/employee";
 import { groupWorks } from "../lib/works";
+import { plural, works as nWorks } from "../lib/plural";
 import { BackRow } from "../components/BackRow";
 import { MainButton } from "../components/MainButton";
 
@@ -349,7 +350,7 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
 
     if (emptyVolumeCount) {
       const ok = await confirmDialog(
-        `Не заповнено обсяг у ${emptyVolumeCount} робіт${emptyVolumeCount === 1 ? "и" : "ах"} — вони підуть як «не заповнено» ` +
+        `Не заповнено обсяг у ${emptyVolumeCount} ${plural(emptyVolumeCount, "роботі", "роботах", "роботах")} — вони підуть як «не заповнено» ` +
           `і за них не нарахується оплата.\n\nВідправити все одно?`,
       );
       if (!ok) return;
@@ -819,7 +820,7 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
           )}
           {emptyVolumeCount > 0 && (
             <div className="hint" style={{ padding: "0 16px 8px" }}>
-              ⚠️ Без обсягу: {emptyVolumeCount} робіт — за них не нарахується оплата. Поверніться назад, щоб заповнити.
+              ⚠️ Без обсягу: {nWorks(emptyVolumeCount)} — за них не нарахується оплата. Поверніться назад, щоб заповнити.
             </div>
           )}
 

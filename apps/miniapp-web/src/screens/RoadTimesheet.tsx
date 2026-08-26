@@ -4,6 +4,7 @@ import { todayISO } from "../lib/date";
 import { confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial } from "../lib/employee";
 import { groupWorks } from "../lib/works";
+import { works as nWorks, people as nPeople, objects as nObjects } from "../lib/plural";
 import { saveDraft, loadDraft, clearDraft } from "../lib/draft";
 import { BackRow } from "../components/BackRow";
 import { MainButton } from "../components/MainButton";
@@ -1282,7 +1283,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     const allSelected = categoryWorks.length > 0 && categoryWorks.every((w) => plan.works.some((pw) => pw.workId === w.id));
     if (!allSelected) {
       const adding = categoryWorks.filter((w) => !plan.works.some((pw) => pw.workId === w.id)).length;
-      if (adding >= BULK_CONFIRM_FROM && !(await confirmDialog(`Додати всі ${adding} робіт на обʼєкт?`))) return;
+      if (adding >= BULK_CONFIRM_FROM && !(await confirmDialog(`Додати всі ${nWorks(adding)} на обʼєкт?`))) return;
     }
     setPlans((prev) =>
       prev.map((p) => {
@@ -1566,7 +1567,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       }),
     );
     haptic("light");
-    logChange(`Почато роботи на ${plan.objectName} (${plan.here.length} людей)`);
+    logChange(`Почато роботи на ${plan.objectName} (${nPeople(plan.here.length)})`);
   }
 
   // Stops every still-open session AND every still-running work timer at the
@@ -2256,8 +2257,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 <div className="cell-title">Повторити останній виїзд?</div>
               </div>
               <div className="hint" style={{ marginTop: 6 }}>
-                {lastTrip.date} · {cars.find((c) => c.id === lastTrip.carId)?.name ?? lastTrip.carId} · {lastTrip.employeeIds.length} людей ·{" "}
-                {lastTrip.objects.length} обʼєктів
+                {lastTrip.date} · {cars.find((c) => c.id === lastTrip.carId)?.name ?? lastTrip.carId} · {nPeople(lastTrip.employeeIds.length)} ·{" "}
+                {nObjects(lastTrip.objects.length)}
               </div>
               <div style={{ marginTop: 6 }}>
                 <button className="chip" onClick={() => setLastTripExpanded((v) => !v)}>
@@ -2300,9 +2301,15 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             <button className="cell" onClick={() => { setEditReturnStep("HUB"); setStep("PICK_CAR"); }}>
               <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <span className="setup-icon accent-blue">🚙</span>
-                <span className="cell-title">Авто{carId ? `: ${cars.find((c) => c.id === carId)?.name ?? ""}` : ""}</span>
+                <span className="cell-title">Авто</span>
               </span>
-              {carId && odoStart ? <span className="badge ok">{odoStart} км</span> : <span className="badge">не обрано</span>}
+              {carId && odoStart ? (
+                <span className="badge ok">
+                  {cars.find((c) => c.id === carId)?.name ?? ""} · старт {odoStart} км
+                </span>
+              ) : (
+                <span className="badge">не обрано</span>
+              )}
             </button>
             <button className="cell" onClick={() => { setEditReturnStep("HUB"); setStep("PICK_PEOPLE"); }}>
               <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -2775,7 +2782,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                     }}
                   >
                     <span className="cell-title">{plan.objectName}</span>
-                    <span className={`badge ${ready ? "ok" : ""}`}>{plan.works.length ? `${plan.works.length} робіт` : "не обрано"}</span>
+                    <span className={`badge ${ready ? "ok" : ""}`}>{plan.works.length ? nWorks(plan.works.length) : "не обрано"}</span>
                   </button>
                   <button className="cell-action" onClick={() => confirmRemoveObjectFromRoute(plan.objectId)} title="Прибрати з маршруту">
                     🗑
@@ -3093,7 +3100,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         <span className="setup-icon accent-orange">📍</span>
                         <span className="cell-title">{expanded ? "▾" : "▸"} {p.objectName}</span>
                       </span>
-                      <span className="badge">{p.works.length ? `${p.works.length} робіт` : "не обрано"}</span>
+                      <span className="badge">{p.works.length ? nWorks(p.works.length) : "не обрано"}</span>
                     </button>
                     <button
                       className="cell-action"
@@ -3607,7 +3614,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                     {!shiftOpen && notStarted.length > 0 && (
                       <button className="cell" onClick={startShift} disabled={!plan.works.length}>
                         <span className="cell-title">▶️ Почати роботи</span>
-                        <span className="cell-sub">{notStarted.length} людей</span>
+                        <span className="cell-sub">{nPeople(notStarted.length)}</span>
                       </button>
                     )}
                     <button
@@ -3619,7 +3626,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       }}
                     >
                       <span className="cell-title">✏️ Додати/змінити роботи</span>
-                      <span className="cell-sub">{plan.works.length} робіт</span>
+                      <span className="cell-sub">{nWorks(plan.works.length)}</span>
                     </button>
                     <button
                       className="cell"
