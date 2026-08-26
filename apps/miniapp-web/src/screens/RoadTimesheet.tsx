@@ -371,6 +371,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // asking afterwards -- and so the screen can name a real destination
   // rather than guessing at the first unvisited object in the list.
   const [headingToObjectId, setHeadingToObjectId] = useState<string>("");
+  const [arrivedPickedExpanded, setArrivedPickedExpanded] = useState(true);
   const [atObjectReturnStep, setAtObjectReturnStep] = useState<Step>("DRIVE");
   const [atObjectDetailsExpanded, setAtObjectDetailsExpanded] = useState(false);
   const [volumesReturnStep, setVolumesReturnStep] = useState<Step>("AT_OBJECT");
@@ -3724,29 +3725,39 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       <span className="cell-title">✏️ Додати/змінити роботи</span>
                       <span className="cell-sub">{nWorks(plan.works.length)}</span>
                     </button>
-                    <button
-                      className="cell"
-                      onClick={() => {
-                        setMoveSelected([]);
-                        setMoveTargetId(null);
-                        setShowMovePicker(true);
-                      }}
-                      disabled={!plan.here.length}
-                    >
-                      <span className="cell-title">🔄 Перенести людей на інший обʼєкт</span>
-                    </button>
-                    <button
-                      className="cell"
-                      onClick={() => {
-                        setManualHoursEmployeeId(null);
-                        setManualHoursBuffer("");
-                        setShowManualHours(true);
-                      }}
-                    >
-                      <span className="cell-title">🕒 Ввести години вручну</span>
-                      <span className="cell-sub">якщо забули таймер</span>
-                    </button>
-                    {!openErrand && (
+                    {/* All three belong to a foreman standing at the object.
+                        Opened mid-drive, this screen exists only to register
+                        who got here on their own and start them working: the
+                        car is elsewhere, so it cannot leave on an errand, and
+                        nothing here is finished yet to need hours typed in or
+                        people moved on. */}
+                    {carPresent && (
+                      <button
+                        className="cell"
+                        onClick={() => {
+                          setMoveSelected([]);
+                          setMoveTargetId(null);
+                          setShowMovePicker(true);
+                        }}
+                        disabled={!plan.here.length}
+                      >
+                        <span className="cell-title">🔄 Перенести людей на інший обʼєкт</span>
+                      </button>
+                    )}
+                    {carPresent && (
+                      <button
+                        className="cell"
+                        onClick={() => {
+                          setManualHoursEmployeeId(null);
+                          setManualHoursBuffer("");
+                          setShowManualHours(true);
+                        }}
+                      >
+                        <span className="cell-title">🕒 Ввести години вручну</span>
+                        <span className="cell-sub">якщо забули таймер</span>
+                      </button>
+                    )}
+                    {carPresent && !openErrand && (
                       <button
                         className="cell"
                         onClick={() => {
@@ -3818,6 +3829,34 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                     )}
 
                     <div className="section-title">🚶 Хто приїхав сам (свій транспорт)</div>
+                    {addArrivedSelected.length > 0 && (
+                      <div className="picked-panel">
+                        <div className="picked-head">
+                          <button className="picked-toggle" onClick={() => setArrivedPickedExpanded((v) => !v)}>
+                            {arrivedPickedExpanded ? "▾" : "▸"} Обрано {addArrivedSelected.length}
+                          </button>
+                          <button className="back-btn danger-btn" onClick={() => setAddArrivedSelected([])}>
+                            🗑 Очистити
+                          </button>
+                        </div>
+                        {arrivedPickedExpanded && (
+                          <div className="picked-list">
+                            {addArrivedSelected.map((id) => (
+                              <div className="picked-item" key={id}>
+                                <span>{shortName(employeeName(id))}</span>
+                                <button
+                                  className="picked-remove"
+                                  aria-label={`Прибрати ${employeeName(id)}`}
+                                  onClick={() => setAddArrivedSelected((prev) => prev.filter((x) => x !== id))}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <input
                       className="search-box"
                       placeholder="Пошук людини…"
@@ -3872,8 +3911,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                                     >
                                       <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
                                         <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
-                                        <span className={`avatar-circle ${roleAccent(employeeRole(emp))}`}>{initials(emp.name)}</span>
-                                        {emp.name}
+                                        {shortName(emp.name)}
                                       </span>
                                       <span className="role-tag">{employeeRole(emp)}</span>
                                     </button>
