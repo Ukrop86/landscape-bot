@@ -3055,7 +3055,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                   <span className="cell-title">Авто</span>
                 </span>
                 <span className="cell-sub">
-                  {cars.find((c) => c.id === carId)?.name} · {odoStart} км
+                  {cars.find((c) => c.id === carId)?.name} · старт {odoStart} км
                 </span>
               </div>
               <button className="cell-action" onClick={() => { setEditReturnStep("READY"); setStep("PICK_CAR"); }} title="Редагувати">
@@ -3077,11 +3077,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             {readyPeopleExpanded && (
               <div style={{ padding: "4px 16px 12px" }}>
                 {employeeIds.length ? (
-                  employeeIds.map((id) => (
-                    <div key={id} className="hint">
-                      • {employeeName(id)}
-                    </div>
-                  ))
+                  <ul className="bullets">
+                    {employeeIds.map((id) => (
+                      <li key={id}>{employeeName(id)}</li>
+                    ))}
+                  </ul>
                 ) : (
                   <div className="hint">Нікого не обрано</div>
                 )}
@@ -3096,9 +3096,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 <div key={p.objectId}>
                   <div className="cell-row">
                     <button className="cell" onClick={() => setReadyExpandedObjectId(expanded ? null : p.objectId)}>
-                      <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                        <span className="setup-icon accent-orange">📍</span>
-                        <span className="cell-title">{expanded ? "▾" : "▸"} {p.objectName}</span>
+                      <span className="cell-title">
+                        {expanded ? "▾" : "▸"} {p.objectName}
                       </span>
                       <span className="badge">{p.works.length ? nWorks(p.works.length) : "не обрано"}</span>
                     </button>
@@ -3117,11 +3116,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                   {expanded && (
                     <div style={{ padding: "4px 16px 12px" }}>
                       {p.works.length ? (
-                        p.works.map((w) => (
-                          <div key={w.workId} className="hint">
-                            • {w.workName}
-                          </div>
-                        ))
+                        <ul className="bullets">
+                          {p.works.map((w) => (
+                            <li key={w.workId}>{w.workName}</li>
+                          ))}
+                        </ul>
                       ) : (
                         <div className="hint">Робіт не обрано</div>
                       )}
@@ -3130,9 +3129,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 </div>
               );
             })}
-          </div>
-          <div className="hint" style={{ padding: "0 16px 8px", textAlign: "center" }}>
-            Щось треба змінити? <button className="back-btn" onClick={() => setStep("HUB")}>← До меню поїздки</button>
           </div>
           <MainButton text="🚗 Виїхати" onClick={startDrive} />
         </>
