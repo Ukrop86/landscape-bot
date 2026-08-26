@@ -20,6 +20,23 @@ export function initials(name: string): string {
     .join("");
 }
 
+// People are told apart by surname, but a full "Левченко Роман Михайлович"
+// spends a third of a narrow row on the patronymic. Lists shorten it; the
+// day's summary and the report keep the full name.
+export function shortName(full: string): string {
+  const parts = full.trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 3) return full;
+  return `${parts[0]} ${parts[1]} ${parts[2][0]}.`;
+}
+
+// Even shorter, for the "held by another brigade" badge, where the point is
+// only which foreman to call -- a full name there wraps the row it sits on.
+export function surnameInitial(full: string): string {
+  const parts = full.trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return full;
+  return `${parts[0]} ${parts[1][0]}.`;
+}
+
 export function roleAccent(role: EmployeeRole): string {
   if (role === "бригадир") return "accent-orange";
   if (role === "старший") return "accent-purple";

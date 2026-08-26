@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPack } from "../lib/api";
 import { todayISO } from "../lib/date";
 import { confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
-import { employeeRole, initials, roleAccent, groupByBrigade } from "../lib/employee";
+import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial } from "../lib/employee";
 import { groupWorks } from "../lib/works";
 import { saveDraft, loadDraft, clearDraft } from "../lib/draft";
 import { BackRow } from "../components/BackRow";
@@ -2429,7 +2429,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                     </span>
                   </span>
                   {takenBy ? (
-                    <span className="badge warn">🔒 {takenBy}</span>
+                    <span className="badge warn">🔒 {surnameInitial(takenBy)}</span>
                   ) : c.id === lastTripCarId ? (
                     <span className="badge">минулого разу</span>
                   ) : null}
@@ -2511,6 +2511,14 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
         <>
           <div className="step-badge">👥 ЛЮДИ</div>
           <div className="section-title">Люди в поїздці</div>
+          {/* Money, not styling: the brigadier's 20% is paid per object and
+              only when they have hours there. A trip without one is a real
+              choice, but it used to be an invisible one. */}
+          {employeeIds.length > 0 && !employeeIds.some((id) => roleFor(id) === "бригадир") && (
+            <div className="hint" style={{ padding: "0 16px 8px" }}>
+              ⚠️ У поїздці немає бригадира — його 20% не нараховуватимуться, робітники поділять 90%.
+            </div>
+          )}
           {employeeIds.length > 0 && (
             <div className="picked-panel">
               <div className="picked-head">
@@ -2525,7 +2533,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 <div className="picked-list">
                   {employeeIds.map((id) => (
                     <div className="picked-item" key={id}>
-                      <span>{employeeName(id)}</span>
+                      <span>{shortName(employeeName(id))}</span>
                       <button
                         className="picked-remove"
                         aria-label={`Прибрати ${employeeName(id)}`}
@@ -2594,8 +2602,13 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         <span className="cell-title">
                           {expanded ? "▾" : "▸"} {g.title}
                         </span>
-                        <span className="badge">
-                          {selectedCount}/{g.members.length}
+                        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          {g.members.length > selectable.length && (
+                            <span className="hint">{g.members.length - selectable.length} зайнято</span>
+                          )}
+                          <span className="badge">
+                            {selectedCount}/{selectable.length}
+                          </span>
                         </span>
                       </button>
                       {expanded && (
@@ -2639,10 +2652,9 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                               >
                                 <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
                                   <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
-                                  <span className={`avatar-circle ${roleAccent(employeeRole(emp))}`}>{initials(emp.name)}</span>
-                                  {emp.name}
+                                  {shortName(emp.name)}
                                 </span>
-                                {busyBy ? <span className="badge warn">🔒 {busyBy}</span> : <span className="role-tag">{employeeRole(emp)}</span>}
+                                {busyBy ? <span className="badge warn">🔒 {surnameInitial(busyBy)}</span> : <span className="role-tag">{employeeRole(emp)}</span>}
                               </button>
                             );
                           })}
