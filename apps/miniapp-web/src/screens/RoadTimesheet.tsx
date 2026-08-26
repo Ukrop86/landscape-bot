@@ -1204,23 +1204,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     setPlans((prev) => prev.map((p) => (p.objectId !== objectId ? p : { ...p, notes })));
   }
 
-  function removeObjectPhoto(objectId: string, url: string) {
-    setPlans((prev) => prev.map((p) => (p.objectId !== objectId ? p : { ...p, photoUrls: p.photoUrls.filter((u) => u !== url) })));
-  }
-
-  async function uploadObjectPhoto(objectId: string, file: File) {
-    setUploadingPhoto(true);
-    setError(null);
-    try {
-      const res = await api.upload<{ url: string }>("/api/road-timesheet/photo", file);
-      setPlans((prev) => prev.map((p) => (p.objectId !== objectId ? p : { ...p, photoUrls: [...p.photoUrls, res.url] })));
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setUploadingPhoto(false);
-    }
-  }
-
   // ---------- works helpers ----------
   function toggleWork(objectId: string, work: Work) {
     setPlans((prev) =>
@@ -1289,9 +1272,18 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     );
   }
 
-  function toggleAllWorksInCategory(objectId: string, categoryWorks: Work[]) {
+  // Adding a whole category can mean 184 works in one tap. Unselecting is one
+  // tap back, so only the adding direction asks -- and only when the number is
+  // big enough that it wasn't obviously intended.
+  const BULK_CONFIRM_FROM = 10;
+
+  async function toggleAllWorksInCategory(objectId: string, categoryWorks: Work[]) {
     const plan = planFor(objectId);
     const allSelected = categoryWorks.length > 0 && categoryWorks.every((w) => plan.works.some((pw) => pw.workId === w.id));
+    if (!allSelected) {
+      const adding = categoryWorks.filter((w) => !plan.works.some((pw) => pw.workId === w.id)).length;
+      if (adding >= BULK_CONFIRM_FROM && !(await confirmDialog(`Додати всі ${adding} робіт на обʼєкт?`))) return;
+    }
     setPlans((prev) =>
       prev.map((p) => {
         if (p.objectId !== objectId) return p;
@@ -2829,7 +2821,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               )}
             </div>
           )}
-          <div className="hint" style={{ padding: "0 16px 8px" }}>Обери роботи. Обсяги вкажете пізніше, під час виконання на обʼєкті</div>
           <input className="search-box" placeholder="Пошук роботи…" value={planWorksSearch} onChange={(e) => setPlanWorksSearch(e.target.value)} />
           <div className="list">
             {groupWorks(works.filter((w) => w.name.toLowerCase().includes(planWorksSearch.toLowerCase()))).map((g) => {
@@ -2901,31 +2892,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             onChange={(e) => updateNotes(planObjectId, e.target.value)}
             placeholder="Коментар до обʼєкта…"
           />
-          <div className="field">
-            <label className="hint">Фото обʼєкта (можна кілька)</label>
-            <PhotoButton
-              text="📷 Додати фото"
-              capture={false}
-              disabled={uploadingPhoto}
-              onPick={(file) => uploadObjectPhoto(planObjectId, file)}
-            />
-            {planFor(planObjectId).photoUrls.length > 0 && (
-              <div className="chip-row" style={{ marginTop: 8 }}>
-                {planFor(planObjectId).photoUrls.map((url, i) => (
-                  <span key={url} className="chip">
-                    📷 Фото {i + 1}
-                    <button
-                      style={{ marginLeft: 6, border: "none", background: "none", cursor: "pointer" }}
-                      onClick={() => removeObjectPhoto(planObjectId, url)}
-                    >
-                      ✕
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-
           <MainButton
             text="Готово"
             onClick={() => {
