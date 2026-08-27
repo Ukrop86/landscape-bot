@@ -124,6 +124,7 @@ type SubmittedObject = {
   objectName: string;
   works: { workId: string; workName: string; volume?: string | number; employeeIds?: string[] }[];
   sessions: { employeeId: string; employeeName: string; droppedAt: string; pickedUpAt?: string }[];
+  coefs?: { employeeId: string; disciplineCoef?: number; productivityCoef?: number }[];
   notes?: string;
   photoUrls?: string[];
 };
@@ -441,7 +442,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   const [editingTripSeq, setEditingTripSeq] = useState<number | null>(null);
   const [inProgressResumeStep, setInProgressResumeStep] = useState<Step | null>(null);
   const [expandedTripSeq, setExpandedTripSeq] = useState<number | null>(null);
-  const [doneTripPeopleExpanded, setDoneTripPeopleExpanded] = useState(false);
 
   function fetchCarStatus() {
     api
@@ -858,10 +858,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       <div key={trip.tripSeq} className="list" style={{ marginTop: 8 }}>
         <button
           className="cell"
-          onClick={() => {
-            setExpandedTripSeq(expanded ? null : trip.tripSeq);
-            setDoneTripPeopleExpanded(false);
-          }}
+          onClick={() => setExpandedTripSeq(expanded ? null : trip.tripSeq)}
         >
           <span className="cell-title">
             {expanded ? "▾" : "▸"} 🚙 {cars.find((c) => c.id === trip.carId)?.name ?? "Поїздка"}
@@ -874,39 +871,81 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
           </span>
         </button>
         {expanded && (
-          <div style={{ padding: "0 16px 12px" }} className="hint">
-            <button className="back-btn" onClick={() => setDoneTripPeopleExpanded((v) => !v)}>
-              {doneTripPeopleExpanded ? "▾ Сховати людей" : `▸ Показати людей (${trip.employeeIds.length})`}
-            </button>
-            {doneTripPeopleExpanded && (
-              <div className="list" style={{ margin: "8px 0" }}>
-                {trip.employeeIds.length ? (
-                  trip.employeeIds.map((id) => (
-                    <div key={id} className="cell" style={{ cursor: "default" }}>
-                      <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span className={`avatar-circle ${roleAccent(roleFor(id))}`}>{initials(employeeName(id))}</span>
-                        {employeeName(id)}
-                      </span>
+          <div style={{ padding: "0 16px 12px" }}>
+            {/* People belong to the object they worked at, with the hours and
+                coefficients that decided their pay -- a flat roster of the
+                whole trip said who came along and nothing else. */}
+            {trip.objects.map((o) => {
+              const peopleHere = [...new Set(o.sessions.map((s) => s.employeeId))];
+              const coefByEmployee = new Map((o.coefs ?? []).map((c) => [c.employeeId, c]));
+              return (
+                <div key={o.objectId} style={{ marginTop: 12 }}>
+                  <div style={{ fontWeight: 600 }}>📍 {o.objectName}</div>
+
+                  <div className="hint" style={{ fontWeight: 600, marginTop: 6 }}>🛠 Роботи</div>
+                  {o.works.length ? (
+                    <div className="list" style={{ margin: "4px 0 0" }}>
+                      {o.works.map((w) => (
+                        <div key={w.workId} className="cell" style={{ cursor: "default" }}>
+                          <span className="cell-title">{w.workName}</span>
+                          {w.volume && w.volume !== "?" ? (
+                            <span className="badge ok">
+                              {w.volume} {works.find((x) => x.id === w.workId)?.unit ?? ""}
+                            </span>
+                          ) : (
+                            <span className="badge warn">без обсягу</span>
+                          )}
+                        </div>
+                      ))}
                     </div>
-                  ))
-                ) : (
-                  <div className="empty-state">Нікого не обрано</div>
-                )}
-              </div>
-            )}
-            {trip.objects.map((o) => (
-              <div key={o.objectId} style={{ marginTop: 6 }}>
-                <div style={{ fontWeight: 600 }}>📍 {o.objectName}</div>
-                {o.works.length
-                  ? o.works.map((w) => (
-                      <div key={w.workId}>
-                        {w.workName}
-                        {w.volume && w.volume !== "?" ? `: ${w.volume} ${works.find((x) => x.id === w.workId)?.unit ?? ""}` : ""}
-                      </div>
-                    ))
-                  : "без робіт"}
-              </div>
-            ))}
+                  ) : (
+                    <div className="hint">без робіт</div>
+                  )}
+
+                  <div className="hint" style={{ fontWeight: 600, marginTop: 10 }}>👥 Люди</div>
+                  {peopleHere.length ? (
+                    <div className="list" style={{ margin: "4px 0 0" }}>
+                      {peopleHere.map((id) => {
+                        const ms = o.sessions
+                          .filter((s) => s.employeeId === id)
+                          .reduce(
+                            (a, s) =>
+                              a +
+                              Math.max(0, (s.pickedUpAt ? new Date(s.pickedUpAt).getTime() : Date.now()) - new Date(s.droppedAt).getTime()),
+                            0,
+                          );
+                        const hrs = Math.round((ms / 3_600_000) * 100) / 100;
+                        const c = coefByEmployee.get(id);
+                        const disc = c?.disciplineCoef ?? 1;
+                        const prod = c?.productivityCoef ?? 1;
+                        return (
+                          <div key={id} className="cell" style={{ cursor: "default" }}>
+                            <span className="cell-title">
+                              {shortName(employeeName(id))}
+                              {roleFor(id) !== "робітник" && (
+                                <span className="role-tag" style={{ marginLeft: 6 }}>
+                                  {roleFor(id)}
+                                </span>
+                              )}
+                            </span>
+                            <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                              <span className="badge">{hrs} год</span>
+                              {(disc !== 1 || prod !== 1) && (
+                                <span className="badge warn">
+                                  к: {disc} / {prod}
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="hint">нікого</div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
         <div style={{ padding: "8px 16px 12px" }}>
