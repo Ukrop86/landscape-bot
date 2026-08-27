@@ -3097,66 +3097,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                   </div>
                 )}
 
-                {volumesReturnStep === "RETURN_PICKUP" &&
-                  (() => {
-                    const workerIds = [...new Set(plan.sessions.map((s) => s.employeeId))].filter((id) => roleFor(id) === "робітник");
-                    if (!workerIds.length) return null;
-                    // 12 buttons per person, on a screen whose job is volumes.
-                    // Almost every day leaves every coefficient at 1.0, so the
-                    // block is collapsed behind a line that says whether
-                    // anything was changed at all.
-                    const changed = workerIds.filter((id) => coefFor(id).disciplineCoef !== 1 || coefFor(id).productivityCoef !== 1);
-                    return (
-                      <>
-                        <div className="section-title row">
-                          <span>Коефіцієнти</span>
-                          <button className="chip chip-sm" onClick={() => setCoefsExpanded((v) => !v)}>
-                            {coefsExpanded ? "▾ Згорнути" : changed.length ? `▸ Змінено: ${changed.length}` : "▸ Усі 1.0"}
-                          </button>
-                        </div>
-                        {coefsExpanded && (
-                          <>
-                            <div className="hint" style={{ padding: "0 16px 8px" }}>
-                              ⚠️ Коефіцієнт єдиний на весь день — зміна тут вплине на розподіл по всіх обʼєктах, де людина працювала. За
-                              замовчуванням 1.0.
-                            </div>
-                            <div className="list">
-                              {workerIds.map((id) => (
-                                <div key={id} className="cell" style={{ cursor: "default", display: "block" }}>
-                                  <div className="cell-title">{shortName(employeeName(id))}</div>
-                                  <div className="coef-row">
-                                    <span className="coef-label">Дисципліна</span>
-                                    {COEF_PRESETS.map((v) => (
-                                      <button
-                                        key={v}
-                                        className={`coef-btn ${coefFor(id).disciplineCoef === v ? "selected" : ""}`}
-                                        onClick={() => setCoef(id, "disciplineCoef", v)}
-                                      >
-                                        {v}
-                                      </button>
-                                    ))}
-                                  </div>
-                                  <div className="coef-row">
-                                    <span className="coef-label">Продуктивність</span>
-                                    {COEF_PRESETS.map((v) => (
-                                      <button
-                                        key={v}
-                                        className={`coef-btn ${coefFor(id).productivityCoef === v ? "selected" : ""}`}
-                                        onClick={() => setCoef(id, "productivityCoef", v)}
-                                      >
-                                        {v}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </>
-                        )}
-                      </>
-                    );
-                  })()}
-
                 <MainButton text="Зберегти (можна пізніше)" onClick={() => setStep(volumesReturnStep)} />
               </>
             );
@@ -4645,11 +4585,94 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                           🟡 Ввести обсяги ({unfilled})
                         </button>
                       )}
+                      {/* The forgotten-timer rescue, now that the work is over
+                          and it is clear whose hours never got recorded. */}
+                      {p.sessions.length > 0 && (
+                        <button
+                          className="chip"
+                          onClick={() => {
+                            setAtObjectId(p.objectId);
+                            setAtObjectReturnStep("RETURN");
+                            setManualHoursEmployeeId(null);
+                            setManualHoursBuffer("");
+                            setShowManualHours(true);
+                            setStep("AT_OBJECT");
+                          }}
+                        >
+                          🕒 Години вручну
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
               })}
           </div>
+
+          {/* Coefficients are a property of the PERSON FOR THE DAY, not of a
+              person at an object -- they used to sit on each object's volume
+              screen, so somebody who worked at two objects appeared twice,
+              editing the same single value from two places. And the list was
+              filtered to "робітник", which quietly dropped the brigadier and
+              the senior gardener even though the day records a coefficient
+              for them too. One block, everyone who worked anywhere today,
+              however they got there and however they left. */}
+          {(() => {
+            const dayWorkerIds = [...new Set(plans.flatMap((p) => p.sessions.map((s) => s.employeeId)))];
+            if (!dayWorkerIds.length) return null;
+            const changed = dayWorkerIds.filter((id) => coefFor(id).disciplineCoef !== 1 || coefFor(id).productivityCoef !== 1);
+            return (
+              <>
+                <div className="section-title row">
+                  <span>Коефіцієнти за день</span>
+                  <button className="chip chip-sm" onClick={() => setCoefsExpanded((v) => !v)}>
+                    {coefsExpanded ? "▾ Згорнути" : changed.length ? `▸ Змінено: ${changed.length}` : "▸ Усі 1.0"}
+                  </button>
+                </div>
+                {coefsExpanded && (
+                  <>
+                    <div className="hint" style={{ padding: "0 16px 8px" }}>
+                      Один на весь день, на всі обʼєкти, де людина працювала. За замовчуванням 1.0.
+                    </div>
+                    <div className="list">
+                      {dayWorkerIds.map((id) => (
+                        <div key={id} className="cell" style={{ cursor: "default", display: "block" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span className="cell-title">{shortName(employeeName(id))}</span>
+                            {roleFor(id) !== "робітник" && <span className="role-tag">{roleFor(id)}</span>}
+                            {selfTransportIds.includes(id) && <span className="badge">🚶 свій транспорт</span>}
+                          </div>
+                          <div className="coef-row">
+                            <span className="coef-label">Дисципліна</span>
+                            {COEF_PRESETS.map((v) => (
+                              <button
+                                key={v}
+                                className={`coef-btn ${coefFor(id).disciplineCoef === v ? "selected" : ""}`}
+                                onClick={() => setCoef(id, "disciplineCoef", v)}
+                              >
+                                {v}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="coef-row">
+                            <span className="coef-label">Продуктивність</span>
+                            {COEF_PRESETS.map((v) => (
+                              <button
+                                key={v}
+                                className={`coef-btn ${coefFor(id).productivityCoef === v ? "selected" : ""}`}
+                                onClick={() => setCoef(id, "productivityCoef", v)}
+                              >
+                                {v}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </>
+            );
+          })()}
 
           <div className="section-title">Одометр на фініші</div>
           <div className="hint" style={{ padding: "0 16px" }}>Старт: {odoStart} км</div>
