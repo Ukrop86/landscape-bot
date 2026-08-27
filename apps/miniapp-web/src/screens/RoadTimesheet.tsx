@@ -1891,22 +1891,48 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     setShowDropPicker(false);
   }
 
+  /**
+   * Corrects a wrong object, it does not record a transfer.
+   *
+   * This used to close the session at the source and open a new one at the
+   * target, which is what "worked here, then moved on" looks like: the hours
+   * stayed behind and the person showed up in BOTH objects' payroll. But the
+   * foreman reaches for this when they realise they dropped somebody at the
+   * wrong object -- that person was never here, so nothing of theirs may
+   * remain. Their sessions travel unchanged (a running one keeps running,
+   * closed ones keep their times), and any work here that named them loses
+   * the name; a work left with no names is shared by the crew again, which
+   * is the right fallback for a person who was not on this object at all.
+   */
   function confirmMove() {
     if (!atObjectId || !moveTargetId || !moveSelected.length) return;
     const fromName = currentAtPlan()?.objectName ?? "";
     const toName = plans.find((p) => p.objectId === moveTargetId)?.objectName ?? "";
     const count = moveSelected.length;
-    const now = new Date().toISOString();
+    const moving = new Set(moveSelected);
+    const carried = (plans.find((p) => p.objectId === atObjectId)?.sessions ?? []).filter((s) => moving.has(s.employeeId));
     moveEmployeesTo(moveSelected, { kind: "object", objectId: moveTargetId });
     setPlans((prev) =>
-      prev.map((p) =>
-        p.objectId !== atObjectId
-          ? p
-          : { ...p, sessions: p.sessions.map((s) => (moveSelected.includes(s.employeeId) && !s.endedAt ? { ...s, endedAt: now } : s)) },
-      ),
+      prev.map((p) => {
+        if (p.objectId === atObjectId) {
+          return {
+            ...p,
+            sessions: p.sessions.filter((s) => !moving.has(s.employeeId)),
+            works: p.works.map((w) =>
+              (w.employeeIds ?? []).some((id) => moving.has(id))
+                ? { ...w, employeeIds: (w.employeeIds ?? []).filter((id) => !moving.has(id)) }
+                : w,
+            ),
+          };
+        }
+        if (p.objectId === moveTargetId) {
+          return { ...p, sessions: [...p.sessions, ...carried] };
+        }
+        return p;
+      }),
     );
     haptic("light");
-    logChange(`Перенесено ${count} з ${fromName} на ${toName}`);
+    logChange(`Виправлено обʼєкт для ${count}: ${fromName} → ${toName}`);
     setMoveSelected([]);
     setMoveTargetId(null);
     setShowMovePicker(false);
@@ -3936,7 +3962,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         }}
                         disabled={!plan.here.length}
                       >
-                        <span className="cell-title">🔄 Перенести людей на інший обʼєкт</span>
+                        <span className="cell-title">🔄 Не той обʼєкт — перенести людей</span>
+                        <span className="cell-sub">виправлення помилки</span>
                       </button>
                     )}
                     {/* No manual-hours entry here on purpose: hours get
@@ -4162,6 +4189,10 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
                 {showMovePicker && (
                   <>
+                    <div className="hint" style={{ padding: "0 16px 8px" }}>
+                      Перенесення = «я помилився обʼєктом». Години й закріплені роботи переїдуть разом з людиною — тут від неї не
+                      лишиться нічого.
+                    </div>
                     <div className="section-title row">
                       <span>Кого перенести</span>
                       <button
