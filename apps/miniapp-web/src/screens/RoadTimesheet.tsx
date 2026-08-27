@@ -1799,6 +1799,9 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
   // The one errand currently in progress (car out), if any.
   const openErrand = errands.find((e) => e.odoBack === null) ?? null;
+  // Errand kilometres, computed the same way the server excludes them from
+  // the trip class: only closed errands, only forward movement.
+  const errandKm = errands.reduce((a, e) => a + (e.odoBack !== null ? Math.max(0, e.odoBack - e.odoOut) : 0), 0);
 
   function startErrand(objectId: string, driverId: string, odoOut: number) {
     const objectName = planFor(objectId).objectName;
@@ -4533,7 +4536,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
         <>
           <div className="step-badge">ПОВЕРНЕННЯ</div>
           <div className="section-title">Обʼєкти</div>
-          <div className="hint" style={{ padding: "0 16px 8px" }}>Завершіть роботу й оберіть, як кожен їде з обʼєкта</div>
+          <div className="hint" style={{ padding: "0 16px 8px" }}>Перевірте обсяги й уведіть кінцевий одометр</div>
           <div className="list">
             {plans
               .filter((p) => p.visited || p.here.length > 0 || p.sessions.length > 0)
@@ -4545,7 +4548,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                     <div className="cell-row">
                       <button className="cell" onClick={() => setExpandedReturnObjectId(expanded ? null : p.objectId)}>
                         <span className="cell-title">
-                          {expanded ? "▾" : "▸"} 📍 {p.objectName}
+                          {expanded ? "▾" : "▸"} {p.objectName}
                         </span>
                         <span style={{ display: "flex", gap: 6 }}>
                           <span className={`badge ${p.here.length ? "warn" : "ok"}`}>{p.here.length ? `${p.here.length} тут` : "забрано"}</span>
@@ -4607,6 +4610,26 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 );
               })}
           </div>
+
+          {(() => {
+            // No session anywhere today means no hours, and hours are what
+            // decide who is in an object's split at all -- so this person
+            // would be paid nothing, silently. The rescue (🕒 Години вручну)
+            // sits on each object right above; this says who needs it.
+            const noHours = employeeIds.filter((id) => plans.every((p) => hoursAtObject(p, id) <= 0));
+            if (!noHours.length) return null;
+            return (
+              <div className="hint" style={{ padding: "0 16px 10px", color: "#d70015" }}>
+                ⚠️ Без годин — за цей день нічого не нарахується:
+                <ul className="bullets">
+                  {noHours.map((id) => (
+                    <li key={id}>{shortName(employeeName(id))}</li>
+                  ))}
+                </ul>
+                Відкрийте «🕒 Години вручну» на тому обʼєкті, де людина працювала.
+              </div>
+            );
+          })()}
 
           {/* Coefficients are a property of the PERSON FOR THE DAY, not of a
               person at an object -- they used to sit on each object's volume
@@ -4678,10 +4701,17 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
           <div className="hint" style={{ padding: "0 16px" }}>Старт: {odoStart} км</div>
           <div className={`big-number ${odoEnd ? "" : "empty"}`}>{odoEnd || "0"} км</div>
           {odoEnd && Number(odoEnd) >= Number(odoStart) && (
-            <div className="hint" style={{ textAlign: "center" }}>
-              Пройдено {Math.round((Number(odoEnd) - Number(odoStart)) * 10) / 10} км · загальний час у дорозі{" "}
-              {fmtHMS(drivingAccumulatedMs + (drivingSegmentStartedAt ? now - new Date(drivingSegmentStartedAt).getTime() : 0))}
-            </div>
+            <>
+              <div className="hint" style={{ textAlign: "center" }}>
+                Пройдено {Math.round((Number(odoEnd) - Number(odoStart)) * 10) / 10} км · загальний час у дорозі{" "}
+                {fmtHMS(drivingAccumulatedMs + (drivingSegmentStartedAt ? now - new Date(drivingSegmentStartedAt).getTime() : 0))}
+              </div>
+              {errandKm > 0 && (
+                <div className="hint" style={{ textAlign: "center" }}>
+                  з них по справам {errandKm} км — не враховано в доплату за виїзд
+                </div>
+              )}
+            </>
           )}
           {odoEnd && Number(odoEnd) < Number(odoStart) && (
             <div className="hint" style={{ textAlign: "center", color: "var(--tg-destructive-text, #e53935)" }}>
