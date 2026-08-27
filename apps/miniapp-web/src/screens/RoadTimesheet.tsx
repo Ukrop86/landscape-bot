@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPack } from "../lib/api";
 import { todayISO } from "../lib/date";
 import { confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
-import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial } from "../lib/employee";
+import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial, roleTagClass } from "../lib/employee";
 import { groupWorks } from "../lib/works";
 import { works as nWorks, people as nPeople, objects as nObjects } from "../lib/plural";
 import { saveDraft, loadDraft, clearDraft } from "../lib/draft";
@@ -923,7 +923,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                             <span className="cell-title">
                               {shortName(employeeName(id))}
                               {roleFor(id) !== "робітник" && (
-                                <span className="role-tag" style={{ marginLeft: 6 }}>
+                                <span className={roleTagClass(roleFor(id))} style={{ marginLeft: 6 }}>
                                   {roleFor(id)}
                                 </span>
                               )}
@@ -1465,7 +1465,10 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     setOnboard(employeeIds);
     setTripStartedAt(new Date().toISOString());
     setDrivingAccumulatedMs(0);
-    setDrivingSegmentStartedAt(new Date().toISOString());
+    // The clock does NOT start here. Leaving base is a tap; the wheels turn
+    // once the foreman says where they are going, and that is where the road
+    // time begins.
+    setDrivingSegmentStartedAt(null);
     setStep("DRIVE");
     haptic("success");
     logChange("Виїхали");
@@ -1554,6 +1557,9 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // dropped off later. The drop-picker opens straight on the self-transport
   // half; the "who to leave here from the car" half is hidden while the car
   // isn't physically here (see carPresent on the AT_OBJECT screen).
+  // Note: deliberately does NOT touch the driving clock. The car is still on
+  // the road while this is open -- it is only being told that somebody made
+  // their own way to the object ahead.
   function openEarlySelfTransport(objectId: string) {
     const target = plans.find((p) => p.objectId === objectId);
     if (!target) return;
@@ -1561,6 +1567,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     setAtObjectReturnStep("DRIVE");
     setDropSelected([]);
     setAddArrivedSelected([]);
+    setAtObjectDetailsExpanded(false);
+    setArrivedPickerOpen(true);
     setShowDropPicker(true);
     setStep("AT_OBJECT");
     haptic("selection");
@@ -1739,37 +1747,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     haptic("success");
     logChange(`Завершено роботи на ${plan.objectName}`);
     openVolumesForObject(atObjectId, "AT_OBJECT");
-  }
-
-  // Per-work timer, independent of every other work at the same object --
-  // lets the foreman stop e.g. "покіс" while "полив" keeps running.
-  function startWorkTimer(objectId: string, workId: string) {
-    setPlans((prev) =>
-      prev.map((p) =>
-        p.objectId !== objectId
-          ? p
-          : { ...p, works: p.works.map((w) => (w.workId !== workId || w.workStartedAt ? w : { ...w, workStartedAt: new Date().toISOString() })) },
-      ),
-    );
-    haptic("light");
-  }
-
-  function stopWorkTimer(objectId: string, workId: string) {
-    setPlans((prev) =>
-      prev.map((p) =>
-        p.objectId !== objectId
-          ? p
-          : {
-              ...p,
-              works: p.works.map((w) => {
-                if (w.workId !== workId || !w.workStartedAt) return w;
-                const elapsed = Date.now() - new Date(w.workStartedAt).getTime();
-                return { ...w, workStartedAt: null, workAccumulatedMs: (w.workAccumulatedMs ?? 0) + elapsed };
-              }),
-            },
-      ),
-    );
-    haptic("light");
   }
 
   // Per-person timer, independent of "Забрати" (which also physically moves
@@ -2853,7 +2830,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                                   <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
                                   {shortName(emp.name)}
                                 </span>
-                                {busyBy ? <span className="badge warn">🔒 {surnameInitial(busyBy)}</span> : <span className="role-tag">{employeeRole(emp)}</span>}
+                                {busyBy ? <span className="badge warn">🔒 {surnameInitial(busyBy)}</span> : <span className={roleTagClass(employeeRole(emp))}>{employeeRole(emp)}</span>}
                               </button>
                             );
                           })}
@@ -3272,7 +3249,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       .map((id) => (
                         <li key={id}>
                           {employeeName(id)}
-                          {roleFor(id) !== "робітник" && <span className="role-tag" style={{ marginLeft: 6 }}>{roleFor(id)}</span>}
+                          {roleFor(id) !== "робітник" && <span className={roleTagClass(roleFor(id))} style={{ marginLeft: 6 }}>{roleFor(id)}</span>}
                         </li>
                       ))}
                   </ul>
@@ -3333,7 +3310,39 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
         </>
       )}
 
-      {step === "DRIVE" && (
+      {step === "DRIVE" && nextUnvisited && !headingTo && (
+        <>
+          <div style={{ textAlign: "center" }}>
+            <div className="step-badge">🚗 КУДИ ЇДЕМО?</div>
+          </div>
+          <div className="hint" style={{ padding: "8px 16px", textAlign: "center" }}>
+            Оберіть обʼєкт — з цієї миті піде час у дорозі.
+          </div>
+          <div className="list">
+            {plans.map((p) => (
+              <button
+                key={p.objectId}
+                className="cell"
+                onClick={() => {
+                  setHeadingToObjectId(p.objectId);
+                  resumeDrivingSegment();
+                  haptic("selection");
+                }}
+              >
+                <span className="cell-title">
+                  {p.visited ? "✅" : "📍"} {p.objectName}
+                </span>
+                <span className="badge">{p.visited ? "вже були" : p.works.length ? nWorks(p.works.length) : "не обрано"}</span>
+              </button>
+            ))}
+          </div>
+          <div style={{ padding: "8px 16px", textAlign: "center" }}>
+            <button className="back-btn" onClick={() => setStep("HUB")}>✏️ Редагувати поїздку</button>
+          </div>
+        </>
+      )}
+
+      {step === "DRIVE" && (!nextUnvisited || headingTo) && (
         <>
           <div style={{ padding: "8px 16px", textAlign: "right" }}>
             <button className="back-btn" onClick={() => setStep("HUB")}>✏️ Редагувати поїздку</button>
@@ -3353,37 +3362,19 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
           {nextUnvisited && headingTo && (
             <div className="hint" style={{ textAlign: "center" }}>
               Прямуємо до 📍 {headingTo.objectName}{" "}
-              <button className="back-btn" onClick={() => setHeadingToObjectId("")}>
+              <button
+                className="back-btn"
+                onClick={() => {
+                  // Back to choosing: the clock pauses again until the new
+                  // destination is picked, exactly as when leaving base.
+                  pauseDrivingSegment();
+                  setHeadingToObjectId("");
+                }}
+              >
                 ✏️ їдемо в інше місце
               </button>
             </div>
           )}
-          {nextUnvisited && !headingTo && (
-            <>
-              <div className="section-title">Куди їдемо?</div>
-              {/* The whole route, not just what is left: coming back to an
-                  object already visited is a normal day, and hiding the
-                  visited ones also hid what the day had covered so far. */}
-              <div className="list">
-                {plans.map((p) => (
-                  <button
-                    key={p.objectId}
-                    className="cell"
-                    onClick={() => {
-                      setHeadingToObjectId(p.objectId);
-                      haptic("selection");
-                    }}
-                  >
-                    <span className="cell-title">
-                      {p.visited ? "✅" : "📍"} {p.objectName}
-                    </span>
-                    <span className="badge">{p.visited ? "вже були" : p.works.length ? nWorks(p.works.length) : "не обрано"}</span>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-
           <div className="section-title row">
             <span>По дорозі</span>
             <button className="chip" onClick={() => setShowRoadsideActions((v) => !v)}>
@@ -3500,22 +3491,14 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             })}
           </div>
 
-          {nextUnvisited ? (
+          {nextUnvisited && headingTo ? (
             <>
-              {headingTo && (
-                <div className="hint" style={{ padding: "0 16px 8px", textAlign: "center" }}>
-                  <button className="back-btn" onClick={() => setStep("ARRIVE_PICK")}>
-                    Прибули на інший обʼєкт?
-                  </button>
-                </div>
-              )}
-              <MainButton
-                text={headingTo ? `📍 Прибув: ${headingTo.objectName}` : "Оберіть, куди їдете"}
-                onClick={() => {
-                  if (headingTo) arriveAt(headingTo.objectId);
-                }}
-                disabled={!headingTo}
-              />
+              <div className="hint" style={{ padding: "0 16px 8px", textAlign: "center" }}>
+                <button className="back-btn" onClick={() => setStep("ARRIVE_PICK")}>
+                  Прибули на інший обʼєкт?
+                </button>
+              </div>
+              <MainButton text={`📍 Прибув: ${headingTo.objectName}`} onClick={() => arriveAt(headingTo.objectId)} />
             </>
           ) : (
             <MainButton
@@ -3664,6 +3647,10 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             // route to register early self-transport arrivals), or it is
             // parked at another object and this panel was switched to.
             const carPresent = carAtObjectId === plan.objectId;
+            // Work timers are driven by the shift as a whole now, so a person
+            // can only be clocked in while the object's works are running --
+            // otherwise their hours would count against nothing.
+            const worksRunning = plan.works.some((w) => !!w.workStartedAt);
             const carElsewhere = !!carAtObjectId && carAtObjectId !== plan.objectId;
             const carElsewhereName = carElsewhere ? plans.find((p2) => p2.objectId === carAtObjectId)?.objectName ?? "" : "";
             return (
@@ -3755,7 +3742,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 {atObjectDetailsExpanded && worksTotal > 0 && (
                   <div className="list" style={{ marginBottom: 8 }}>
                     <div className="cell" style={{ cursor: "default" }}>
-                      <span className="cell-title">🛠 Роботи на обʼєкті — кожна зі своїм таймером</span>
+                      <span className="cell-title">🛠 Роботи на обʼєкті</span>
                       <span className="badge ok">{worksTotal}</span>
                     </div>
                     {plan.works.map((w) => {
@@ -3773,15 +3760,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                             <span className="cell-title">{w.workName}</span>
                             <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
                               {elapsed > 0 && <span className="hint">{fmtHMS(elapsed)}</span>}
-                              {running ? (
-                                <button className="chip danger-btn" onClick={() => stopWorkTimer(atObjectId, w.workId)}>
-                                  ⏹ Стоп
-                                </button>
-                              ) : (
-                                <button className="chip" onClick={() => startWorkTimer(atObjectId, w.workId)}>
-                                  ▶️ Старт
-                                </button>
-                              )}
+                              {running && <span className="badge ok">йде</span>}
                             </span>
                           </div>
                           <div style={{ marginTop: 6 }}>
@@ -3808,7 +3787,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                                         <span className={`checkbox ${mine ? "checked" : ""}`}>{mine ? "✓" : ""}</span>
                                         {shortName(employeeName(id))}
                                       </span>
-                                      <span className="role-tag">{roleFor(id)}</span>
+                                      <span className={roleTagClass(roleFor(id))}>{roleFor(id)}</span>
                                     </button>
                                   );
                                 })}
@@ -3832,7 +3811,12 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                     bus is even an option for them. */}
                 {plan.here.length > 0 && !showDropPicker && !showMovePicker && !showManualHours && !errandMode && (
                   <>
-                    <div className="section-title">Люди на обʼєкті — кожен зі своїм таймером</div>
+                    <div className="section-title">Люди на обʼєкті</div>
+                    {!worksRunning && plan.here.length > 0 && (
+                      <div className="hint" style={{ padding: "0 16px 6px" }}>
+                        Таймери людей вмикаються після «▶️ Почати роботи».
+                      </div>
+                    )}
                     <div className="list">
                       {plan.here.map((id) => {
                         const session = plan.sessions.find((s) => s.employeeId === id && !s.endedAt);
@@ -3853,11 +3837,16 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                               <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
                                 {elapsed > 0 && <span className="hint">{fmtHMS(elapsed)}</span>}
                                 {running ? (
-                                  <button className="chip danger-btn" onClick={() => stopPersonTimer(atObjectId, id)}>
+                                  <button className="chip chip-sm danger-btn" onClick={() => stopPersonTimer(atObjectId, id)}>
                                     ⏹ Стоп
                                   </button>
                                 ) : (
-                                  <button className="chip" onClick={() => startPersonTimer(atObjectId, id)}>
+                                  <button
+                                    className="chip chip-sm"
+                                    onClick={() => startPersonTimer(atObjectId, id)}
+                                    disabled={!worksRunning}
+                                    title={worksRunning ? "" : "Спочатку почніть роботи на обʼєкті"}
+                                  >
                                     ▶️ Старт
                                   </button>
                                 )}
@@ -3936,6 +3925,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       onClick={() => {
                         setDropSelected([]);
                         setAddArrivedSelected([]);
+                        setAtObjectDetailsExpanded(false);
+                        setArrivedPickerOpen(false);
                         setShowDropPicker(true);
                       }}
                     >
@@ -4066,7 +4057,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                                   <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
                                   {shortName(employeeName(id))}
                                 </span>
-                                <span className="role-tag">{roleFor(id)}</span>
+                                <span className={roleTagClass(roleFor(id))}>{roleFor(id)}</span>
                               </button>
                             );
                           })}
@@ -4169,7 +4160,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                                         <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
                                         {shortName(emp.name)}
                                       </span>
-                                      <span className="role-tag">{employeeRole(emp)}</span>
+                                      <span className={roleTagClass(employeeRole(emp))}>{employeeRole(emp)}</span>
                                     </button>
                                   );
                                 })}
@@ -4231,7 +4222,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                               <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
                               {shortName(employeeName(id))}
                             </span>
-                            <span className="role-tag">{roleFor(id)}</span>
+                            <span className={roleTagClass(roleFor(id))}>{roleFor(id)}</span>
                           </button>
                         );
                       })}
@@ -4347,7 +4338,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                               <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
                               {shortName(employeeName(id))}
                             </span>
-                            <span className="role-tag">{roleFor(id)}</span>
+                            <span className={roleTagClass(roleFor(id))}>{roleFor(id)}</span>
                           </button>
                         );
                       })}
@@ -4448,7 +4439,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       setStep(plans.some((p) => p.here.length > 0) ? "RETURN_PICKUP" : "RETURN");
                       return;
                     }
-                    if (atObjectReturnStep === "DRIVE") resumeDrivingSegment();
                     setStep(atObjectReturnStep);
                   }}
                 />
@@ -4741,7 +4731,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         <div key={id} className="cell" style={{ cursor: "default", display: "block" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                             <span className="cell-title">{shortName(employeeName(id))}</span>
-                            {roleFor(id) !== "робітник" && <span className="role-tag">{roleFor(id)}</span>}
+                            {roleFor(id) !== "робітник" && <span className={roleTagClass(roleFor(id))}>{roleFor(id)}</span>}
                             {selfTransportIds.includes(id) && <span className="badge">🚶 свій транспорт</span>}
                           </div>
                           <div className="coef-row">
@@ -4979,7 +4969,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                                 >
                                   <span className="cell-title">
                                     {coefOpen ? "▾" : "▸"} {shortName(employeeName(id))}
-                                    {roleFor(id) !== "робітник" && <span className="role-tag" style={{ marginLeft: 6 }}>{roleFor(id)}</span>}
+                                    {roleFor(id) !== "робітник" && <span className={roleTagClass(roleFor(id))} style={{ marginLeft: 6 }}>{roleFor(id)}</span>}
                                   </span>
                                   <span className="cell-sub">
                                     {hoursAtObject(p, id)} год{c.disciplineCoef !== 1 || c.productivityCoef !== 1 ? ` · ${c.disciplineCoef}/${c.productivityCoef}` : ""}

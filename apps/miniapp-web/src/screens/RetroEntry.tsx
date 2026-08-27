@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPack } from "../lib/api";
 import { todayISO } from "../lib/date";
 import { confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
-import { employeeRole, initials, roleAccent, groupByBrigade, shortName, type EmployeeRole } from "../lib/employee";
+import { employeeRole, initials, roleAccent, groupByBrigade, shortName, type EmployeeRole, roleTagClass } from "../lib/employee";
 import { groupWorks } from "../lib/works";
 import { plural, works as nWorks } from "../lib/plural";
 import { BackRow } from "../components/BackRow";
@@ -566,7 +566,7 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
                                         <span className={`avatar-circle ${roleAccent(employeeRole(emp))}`}>{initials(emp.name)}</span>
                                         {emp.name}
                                       </span>
-                                      <span className="role-tag">{employeeRole(emp)}</span>
+                                      <span className={roleTagClass(employeeRole(emp))}>{employeeRole(emp)}</span>
                                     </button>
                                   );
                                 })}

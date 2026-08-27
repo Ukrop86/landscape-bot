@@ -37,6 +37,15 @@ export function surnameInitial(full: string): string {
   return `${parts[0]} ${parts[1][0]}.`;
 }
 
+// The role tag beside a name: "робітник" is the default and stays quiet,
+// while the two roles that change how an object's money splits get their own
+// colour, so a brigadier is findable in a list of ten.
+export function roleTagClass(role: EmployeeRole): string {
+  if (role === "бригадир") return "role-tag lead";
+  if (role === "старший") return "role-tag senior";
+  return "role-tag";
+}
+
 export function roleAccent(role: EmployeeRole): string {
   if (role === "бригадир") return "accent-orange";
   if (role === "старший") return "accent-purple";

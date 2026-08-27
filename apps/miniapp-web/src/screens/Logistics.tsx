@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type Employee, type LogisticDirection } from "../lib/api";
 import { todayISO } from "../lib/date";
 import { haptic, useTelegramBackButton } from "../lib/telegram";
-import { employeeRole, initials, roleAccent, groupByBrigade, shortName } from "../lib/employee";
+import { employeeRole, initials, roleAccent, groupByBrigade, shortName, roleTagClass } from "../lib/employee";
 import { BackRow } from "../components/BackRow";
 import { MainButton } from "../components/MainButton";
 
@@ -304,7 +304,7 @@ export function Logistics({ onBack, onSaved }: { onBack: () => void; onSaved: ()
                               <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
                               {shortName(emp.name)}
                             </span>
-                            {locked ? <span className="badge warn">🔒 зайнятий</span> : <span className="role-tag">{employeeRole(emp)}</span>}
+                            {locked ? <span className="badge warn">🔒 зайнятий</span> : <span className={roleTagClass(employeeRole(emp))}>{employeeRole(emp)}</span>}
                           </button>
                         );
                       })}

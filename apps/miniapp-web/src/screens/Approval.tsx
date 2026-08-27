@@ -268,8 +268,8 @@ export function Approval({
                                       <div className="approval-row-main">
                                         <span className="approval-row-name">
                                           {shortName(r.employeeName)}
-                                          {role === "бригадир" && <span className="mark" title="бригадир"> Б</span>}
-                                          {role === "старший" && <span className="mark" title="старший садівник"> С</span>}
+                                          {role === "бригадир" && <span className="mark lead" title="бригадир"> Б</span>}
+                                          {role === "старший" && <span className="mark senior" title="старший садівник"> С</span>}
                                           {selfT && <span className="mark" title="приїхав сам — без доплати за виїзд"> 🚶</span>}
                                         </span>
                                         <span className="approval-nums">

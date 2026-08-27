@@ -1151,3 +1151,28 @@ body {
   font-size: 11px;
   padding: 2px 6px;
 }
+
+/* A role tag is a whisper for "робітник" -- it is the default and repeats on
+   every row -- but the two roles that change how an object's money splits
+   need to be findable at a glance in a list of ten names. */
+.role-tag.lead {
+  background: rgba(255, 149, 0, 0.2);
+  color: #a35c00;
+  font-weight: 700;
+}
+
+.role-tag.senior {
+  background: rgba(175, 82, 222, 0.18);
+  color: #7d3cad;
+  font-weight: 600;
+}
+
+.approval-row-name .mark.lead {
+  color: #a35c00;
+  font-weight: 700;
+}
+
+.approval-row-name .mark.senior {
+  color: #7d3cad;
+  font-weight: 700;
+}
