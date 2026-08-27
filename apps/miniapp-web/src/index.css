@@ -1000,3 +1000,26 @@ body {
   background: rgba(255, 159, 10, 0.12);
   border: 1px solid rgba(255, 159, 10, 0.3);
 }
+
+/* Secondary actions attached to a row (a person at an object). Smaller than a
+   standalone chip: three of them sat under every name and turned the list
+   into a wall of buttons. */
+.chip-sm {
+  padding: 5px 10px;
+  font-size: 13px;
+  border-radius: 14px;
+}
+
+.row-actions {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Cancel/confirm pair closing a picker. */
+.confirm-row {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+}

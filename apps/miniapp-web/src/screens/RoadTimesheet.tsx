@@ -181,6 +181,7 @@ type DraftShape = {
   drivingSegmentStartedAt: string | null;
   atObjectId: string | null;
   headingToObjectId?: string;
+  carAtObjectId?: string;
   // Where AT_OBJECT's "✅ Готово" button should return to (DRIVE, RETURN,
   // etc). Without this an app-kill mid-AT_OBJECT restores to the default
   // "DRIVE", which can wrongly resume the driving-segment timer for a leg
@@ -372,6 +373,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // rather than guessing at the first unvisited object in the list.
   const [headingToObjectId, setHeadingToObjectId] = useState<string>("");
   const [arrivedPickedExpanded, setArrivedPickedExpanded] = useState(true);
+  // Which object the car is parked at, if any. Not the same as "this screen
+  // is open on an object": the foreman can switch the screen to another
+  // object to fix its works while the car stays where it is.
+  const [carAtObjectId, setCarAtObjectId] = useState<string>("");
+  const [arrivedPickerOpen, setArrivedPickerOpen] = useState(false);
   // Which person's "assign works to just them" panel is open, if any -- the
   // same assignment the work list offers, reached from the person instead.
   const [assigningPersonId, setAssigningPersonId] = useState<string | null>(null);
@@ -524,6 +530,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       setDrivingSegmentStartedAt(draft.drivingSegmentStartedAt ?? null);
       setAtObjectId(draft.atObjectId);
       setHeadingToObjectId(draft.headingToObjectId ?? "");
+      setCarAtObjectId(draft.carAtObjectId ?? "");
       setAtObjectReturnStep(draft.atObjectReturnStep ?? "DRIVE");
       setPlanObjectId(draft.planObjectId ?? null);
       setCoefs(draft.coefs ?? {});
@@ -608,6 +615,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       drivingSegmentStartedAt,
       atObjectId,
       headingToObjectId,
+      carAtObjectId,
       atObjectReturnStep,
       planObjectId,
       coefs,
@@ -627,6 +635,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     plans,
     onboard,
     headingToObjectId,
+    carAtObjectId,
     tripStartedAt,
     drivingAccumulatedMs,
     drivingSegmentStartedAt,
@@ -1392,6 +1401,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // ---------- depart ----------
   function startDrive() {
     setHeadingToObjectId("");
+    setCarAtObjectId("");
     setOnboard(employeeIds);
     setTripStartedAt(new Date().toISOString());
     setDrivingAccumulatedMs(0);
@@ -1415,6 +1425,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
   function resumeDrivingSegment() {
     setDrivingSegmentStartedAt((segStart) => segStart ?? new Date().toISOString());
+    setCarAtObjectId("");
   }
 
   const nextUnvisited = plans.find((p) => !p.visited) ?? null;
@@ -1444,6 +1455,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     if (!target) return;
     setPlans((prev) => prev.map((p) => (p.objectId !== objectId ? p : { ...p, visited: true })));
     setAtObjectId(objectId);
+    setCarAtObjectId(objectId);
     setHeadingToObjectId("");
     setAtObjectReturnStep("DRIVE");
     setStep("AT_OBJECT");
@@ -1458,10 +1470,14 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // where "done editing" should return to -- lets the foreman hop between
   // objects (e.g. while stuck at the last one) without ever auto-starting
   // work there.
+  // Opens another object's panel without claiming the car went there. It used
+  // to mark the object visited, which quietly finished the route: with nothing
+  // left unvisited, the main button turned into "повертатись на базу" although
+  // the crew had not driven anywhere. Switching is for fixing an object's
+  // works or people from where you are standing, nothing more.
   function switchAtObject(objectId: string) {
     const target = plans.find((p) => p.objectId === objectId);
     if (!target) return;
-    setPlans((prev) => prev.map((p) => (p.objectId !== objectId ? p : { ...p, visited: true })));
     setAtObjectId(objectId);
     // Never carry an open manual-hours editor across to another object.
     setShowManualHours(false);
@@ -2652,7 +2668,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                   />
                 </div>
               )}
-              <div style={{ display: "flex", gap: 8, padding: "8px 16px" }}>
+              <div className="confirm-row">
                 <button className="chip" onClick={cancelRetroAssign}>
                   Скасувати
                 </button>
@@ -3535,16 +3551,25 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             const earliestOpenStart = openSessions.length
               ? Math.min(...openSessions.map((s) => new Date(s.startedAt).getTime()))
               : null;
-            // The car is physically here only when the driving clock is
-            // paused (arriveAt pauses it). If it's still running, this screen
-            // was opened mid-drive to register early self-transport arrivals,
-            // so dropping people OUT of the moving car makes no sense -- hide
-            // that half and keep only "who came on their own".
-            const carPresent = !drivingSegmentStartedAt;
+            // The car is here only if it actually parked HERE. Two other
+            // cases both mean "not here", and the foreman needs to be told
+            // which: the car is still driving (this screen was opened mid-
+            // route to register early self-transport arrivals), or it is
+            // parked at another object and this panel was switched to.
+            const carPresent = carAtObjectId === plan.objectId;
+            const carElsewhere = !!carAtObjectId && carAtObjectId !== plan.objectId;
+            const carElsewhereName = carElsewhere ? plans.find((p2) => p2.objectId === carAtObjectId)?.objectName ?? "" : "";
             return (
               <>
-                <div className="step-badge">{carPresent ? "НА ОБʼЄКТІ" : "🚗 МАШИНА ЩЕ В ДОРОЗІ"}</div>
-                {!carPresent && (
+                <div className="step-badge">
+                  {carPresent ? "НА ОБʼЄКТІ" : carElsewhere ? "👀 ІНШИЙ ОБʼЄКТ — ПЕРЕГЛЯД" : "🚗 МАШИНА ЩЕ В ДОРОЗІ"}
+                </div>
+                {carElsewhere && (
+                  <div className="hint" style={{ padding: "0 16px 8px" }}>
+                    Машина стоїть на «{carElsewhereName}». Тут можна правити роботи й людей — маршрут це не рухає.
+                  </div>
+                )}
+                {!carPresent && !carElsewhere && (
                   <div className="hint" style={{ padding: "0 16px 8px" }}>
                     Машина зараз не тут. Додайте тих, хто приїхав своїм ходом, і почніть їм роботи — тих, хто в машині, висадять, коли вона приїде.
                   </div>
@@ -3663,17 +3688,23 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                           {picking && (
                             <div style={{ marginTop: 6 }}>
                               <div className="hint">Кому зарахувати цю роботу? Нікого не обрано — гроші за неї ділить уся бригада на обʼєкті.</div>
-                              <div className="chip-row" style={{ padding: "6px 0" }}>
-                                {peopleHere.map((id) => (
-                                  <button
-                                    key={id}
-                                    className={`chip ${assigned.includes(id) ? "selected" : ""}`}
-                                    onClick={() => toggleWorkAssignee(atObjectId, w.workId, id)}
-                                  >
-                                    {assigned.includes(id) ? "✓ " : ""}
-                                    {employeeName(id)}
-                                  </button>
-                                ))}
+                              <div className="list" style={{ margin: "6px 0 0" }}>
+                                {peopleHere.map((id) => {
+                                  const mine = assigned.includes(id);
+                                  return (
+                                    <button
+                                      key={id}
+                                      className={`cell ${mine ? "selected" : ""}`}
+                                      onClick={() => toggleWorkAssignee(atObjectId, w.workId, id)}
+                                    >
+                                      <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                        <span className={`checkbox ${mine ? "checked" : ""}`}>{mine ? "✓" : ""}</span>
+                                        {shortName(employeeName(id))}
+                                      </span>
+                                      <span className="role-tag">{roleFor(id)}</span>
+                                    </button>
+                                  );
+                                })}
                               </div>
                               {assigned.length > 0 && (
                                 <button className="chip" onClick={() => clearWorkAssignees(atObjectId, w.workId)}>
@@ -3730,21 +3761,21 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                                 🛠 окремо: {ownWorks.map((w) => w.workName).join(", ")}
                               </div>
                             )}
-                            <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            <div className="row-actions">
                               <button
-                                className={`chip ${ownWorks.length ? "selected" : ""}`}
+                                className={`chip chip-sm ${ownWorks.length ? "selected" : ""}`}
                                 onClick={() => setAssigningPersonId(picking ? null : id)}
                                 disabled={!plan.works.length}
                               >
-                                🛠 Призначити окремі роботи
+                                🛠 Окремі роботи
                               </button>
                               {carPresent && (
-                                <button className="chip" onClick={() => pickUpOne(plan.objectId, id, false)}>
+                                <button className="chip chip-sm" onClick={() => pickUpOne(plan.objectId, id, false)}>
                                   🚐 У бус
                                 </button>
                               )}
-                              <button className="chip" onClick={() => leaveObjectOnOwn(plan.objectId, [id])}>
-                                🚶 Зняти з обʼєкта
+                              <button className="chip chip-sm" onClick={() => leaveObjectOnOwn(plan.objectId, [id])}>
+                                🚶 Зняти
                               </button>
                             </div>
                             {picking && (
@@ -3801,10 +3832,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         setShowDropPicker(true);
                       }}
                     >
-                      <span className="cell-title">
-                        {carPresent ? "👥 Хто тут — висадити / додати приїхавших самих" : "🚶 Додати тих, хто приїхав сам"}
-                      </span>
-                      <span className="cell-sub">{carPresent ? `🚐 ${onboard.length} в машині` : "машина ще в дорозі"}</span>
+                      <span className="cell-title">{carPresent ? "🚐 Висадити людей" : "🚶 Додати тих, хто приїхав сам"}</span>
+                      <span className="cell-sub">{carPresent ? `${onboard.length} в машині` : "машина ще в дорозі"}</span>
                     </button>
                     {/* Once work is underway, "start the rest" lives next to
                         "finish everyone" in the active-work card above -- keep
@@ -3845,7 +3874,13 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         <span className="cell-title">🔄 Перенести людей на інший обʼєкт</span>
                       </button>
                     )}
-                    {carPresent && (
+                    {/* Only when it is actually needed: work is under way at
+                        this object, yet somebody standing here has no time
+                        recorded at all -- the forgotten-timer case. In the
+                        normal case it was just another row to scroll past,
+                        but it is the only way to rescue a person's pay, so
+                        it must not disappear entirely. */}
+                    {carPresent && plan.sessions.length > 0 && plan.here.some((id) => hoursAtObject(plan, id) <= 0) && (
                       <button
                         className="cell"
                         onClick={() => {
@@ -3855,7 +3890,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         }}
                       >
                         <span className="cell-title">🕒 Ввести години вручну</span>
-                        <span className="cell-sub">якщо забули таймер</span>
+                        <span className="cell-sub">хтось без годин</span>
                       </button>
                     )}
                     {carPresent && !openErrand && (
@@ -3914,23 +3949,45 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                   <>
                     {carPresent && onboard.length > 0 && (
                       <>
-                        <div className="section-title">Кого залишити тут</div>
-                        <div className="chip-row">
-                          {onboard.map((id) => (
-                            <div
-                              key={id}
-                              className={`chip ${dropSelected.includes(id) ? "selected" : ""}`}
-                              onClick={() => setDropSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))}
-                            >
-                              {employeeName(id)}
-                            </div>
-                          ))}
+                        <div className="section-title row">
+                          <span>Кого залишити тут</span>
+                          <button
+                            className="chip chip-sm"
+                            onClick={() => setDropSelected(dropSelected.length === onboard.length ? [] : [...onboard])}
+                          >
+                            {dropSelected.length === onboard.length ? "✕ Зняти всіх" : "✓ Обрати всіх"}
+                          </button>
+                        </div>
+                        <div className="list">
+                          {onboard.map((id) => {
+                            const checked = dropSelected.includes(id);
+                            return (
+                              <button
+                                key={id}
+                                className={`cell ${checked ? "selected" : ""}`}
+                                onClick={() => setDropSelected((prev) => (checked ? prev.filter((x) => x !== id) : [...prev, id]))}
+                              >
+                                <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                  <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
+                                  {shortName(employeeName(id))}
+                                </span>
+                                <span className="role-tag">{roleFor(id)}</span>
+                              </button>
+                            );
+                          })}
                         </div>
                       </>
                     )}
 
-                    <div className="section-title">🚶 Хто приїхав сам (свій транспорт)</div>
-                    {addArrivedSelected.length > 0 && (
+                    {/* Collapsed by default: on most stops nobody arrives on
+                        their own, and this list is the whole staff roster. */}
+                    <div className="section-title row">
+                      <span>🚶 Хто приїхав сам (свій транспорт)</span>
+                      <button className="chip chip-sm" onClick={() => setArrivedPickerOpen((v) => !v)}>
+                        {arrivedPickerOpen ? "▾ Згорнути" : "▸ Показати"}
+                      </button>
+                    </div>
+                    {arrivedPickerOpen && addArrivedSelected.length > 0 && (
                       <div className="picked-panel">
                         <div className="picked-head">
                           <button className="picked-toggle" onClick={() => setArrivedPickedExpanded((v) => !v)}>
@@ -3958,12 +4015,15 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         )}
                       </div>
                     )}
+                    {arrivedPickerOpen && (
                     <input
                       className="search-box"
                       placeholder="Пошук людини…"
                       value={arrivedSearch}
                       onChange={(e) => setArrivedSearch(e.target.value)}
                     />
+                    )}
+                    {arrivedPickerOpen && (
                     <div className="list">
                       {groupByBrigade(
                         employees.filter(
@@ -4024,8 +4084,9 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         );
                       })}
                     </div>
+                    )}
 
-                    <div style={{ display: "flex", gap: 8, padding: "8px 16px" }}>
+                    <div className="confirm-row">
                       <button
                         className="chip"
                         onClick={() => {
@@ -4049,32 +4110,55 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
                 {showMovePicker && (
                   <>
-                    <div className="section-title">Кого перенести</div>
-                    <div className="chip-row">
-                      <button className="chip" onClick={() => setMoveSelected(plan.here)}>
-                        Обрати всіх
+                    <div className="section-title row">
+                      <span>Кого перенести</span>
+                      <button
+                        className="chip chip-sm"
+                        onClick={() => setMoveSelected(moveSelected.length === plan.here.length ? [] : [...plan.here])}
+                      >
+                        {moveSelected.length === plan.here.length ? "✕ Зняти всіх" : "✓ Обрати всіх"}
                       </button>
-                      {plan.here.map((id) => (
-                        <button
-                          key={id}
-                          className={`chip ${moveSelected.includes(id) ? "selected" : ""}`}
-                          onClick={() => setMoveSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))}
-                        >
-                          {employeeName(id)}
-                        </button>
-                      ))}
+                    </div>
+                    <div className="list">
+                      {plan.here.map((id) => {
+                        const checked = moveSelected.includes(id);
+                        return (
+                          <button
+                            key={id}
+                            className={`cell ${checked ? "selected" : ""}`}
+                            onClick={() => setMoveSelected((prev) => (checked ? prev.filter((x) => x !== id) : [...prev, id]))}
+                          >
+                            <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
+                              {shortName(employeeName(id))}
+                            </span>
+                            <span className="role-tag">{roleFor(id)}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                     <div className="section-title">На який обʼєкт</div>
-                    <div className="chip-row">
+                    <div className="list">
                       {plans
                         .filter((p) => p.objectId !== atObjectId)
-                        .map((p) => (
-                          <button key={p.objectId} className={`chip ${moveTargetId === p.objectId ? "selected" : ""}`} onClick={() => setMoveTargetId(p.objectId)}>
-                            {p.objectName}
-                          </button>
-                        ))}
+                        .map((p) => {
+                          const checked = moveTargetId === p.objectId;
+                          return (
+                            <button
+                              key={p.objectId}
+                              className={`cell ${checked ? "selected" : ""}`}
+                              onClick={() => setMoveTargetId(p.objectId)}
+                            >
+                              <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
+                                {p.objectName}
+                              </span>
+                              <span className="badge">{p.here.length ? `${p.here.length} тут` : p.visited ? "відвідано" : "заплановано"}</span>
+                            </button>
+                          );
+                        })}
                     </div>
-                    <div style={{ display: "flex", gap: 8, padding: "8px 16px" }}>
+                    <div className="confirm-row">
                       <button
                         className="chip"
                         onClick={() => {
@@ -4098,7 +4182,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       <div className="section-title">🕒 {employeeName(manualHoursEmployeeId)} — години на «{plan.objectName}»</div>
                       <div className={`big-number ${manualHoursBuffer ? "" : "empty"}`}>{manualHoursBuffer || "0"} год</div>
                       <NumericKeypad value={manualHoursBuffer} onChange={setManualHoursBuffer} />
-                      <div style={{ display: "flex", gap: 8, padding: "8px 16px" }}>
+                      <div className="confirm-row">
                         <button className="chip" onClick={() => setManualHoursEmployeeId(null)}>
                           ← Назад
                         </button>
@@ -4155,16 +4239,19 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       Ці кілометри не враховуються в доплату за виїзд. Оберіть водія (з тих, хто на об'єкті) і введіть спідометр при виїзді.
                     </div>
                     <div className="section-title">Хто за кермом</div>
-                    <div className="chip-row">
-                      {plan.here.map((id) => (
-                        <button
-                          key={id}
-                          className={`chip ${errandDriverId === id ? "selected" : ""}`}
-                          onClick={() => setErrandDriverId(id)}
-                        >
-                          {employeeName(id)}
-                        </button>
-                      ))}
+                    <div className="list">
+                      {plan.here.map((id) => {
+                        const checked = errandDriverId === id;
+                        return (
+                          <button key={id} className={`cell ${checked ? "selected" : ""}`} onClick={() => setErrandDriverId(id)}>
+                            <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
+                              {shortName(employeeName(id))}
+                            </span>
+                            <span className="role-tag">{roleFor(id)}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                     {errandDriverId && (
                       <>
@@ -4173,7 +4260,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         <NumericKeypad value={errandOdoBuffer} onChange={setErrandOdoBuffer} decimal={false} />
                       </>
                     )}
-                    <div style={{ display: "flex", gap: 8, padding: "8px 16px" }}>
+                    <div className="confirm-row">
                       <button
                         className="chip"
                         onClick={() => {
@@ -4218,7 +4305,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         По справам: {Math.max(0, Number(errandOdoBuffer) - openErrand.odoOut)} км — не піде в доплату.
                       </div>
                     )}
-                    <div style={{ display: "flex", gap: 8, padding: "8px 16px" }}>
+                    <div className="confirm-row">
                       <button className="chip" onClick={() => setErrandMode(null)}>
                         Пізніше
                       </button>

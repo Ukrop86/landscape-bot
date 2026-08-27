@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPack } from "../lib/api";
 import { todayISO } from "../lib/date";
 import { confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
-import { employeeRole, initials, roleAccent, groupByBrigade, type EmployeeRole } from "../lib/employee";
+import { employeeRole, initials, roleAccent, groupByBrigade, shortName, type EmployeeRole } from "../lib/employee";
 import { groupWorks } from "../lib/works";
 import { plural, works as nWorks } from "../lib/plural";
 import { BackRow } from "../components/BackRow";
@@ -702,17 +702,22 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
                             {picking && (
                               <div style={{ marginTop: 6 }}>
                                 <div className="hint">Кому зарахувати цю роботу? Нікого не обрано — гроші ділять усі з цього обʼєкта.</div>
-                                <div className="chip-row" style={{ padding: "6px 0" }}>
-                                  {p.employeeIds.map((id) => (
-                                    <button
-                                      key={id}
-                                      className={`chip ${assigned.includes(id) ? "selected" : ""}`}
-                                      onClick={() => toggleWorkAssignee(p.objectId, w.workId, id)}
-                                    >
-                                      {assigned.includes(id) ? "✓ " : ""}
-                                      {employeeName(id)}
-                                    </button>
-                                  ))}
+                                <div className="list" style={{ margin: "6px 0 0" }}>
+                                  {p.employeeIds.map((id) => {
+                                    const mine = assigned.includes(id);
+                                    return (
+                                      <button
+                                        key={id}
+                                        className={`cell ${mine ? "selected" : ""}`}
+                                        onClick={() => toggleWorkAssignee(p.objectId, w.workId, id)}
+                                      >
+                                        <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                          <span className={`checkbox ${mine ? "checked" : ""}`}>{mine ? "✓" : ""}</span>
+                                          {shortName(employeeName(id))}
+                                        </span>
+                                      </button>
+                                    );
+                                  })}
                                 </div>
                               </div>
                             )}
