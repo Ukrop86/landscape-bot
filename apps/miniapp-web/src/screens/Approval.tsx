@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type Employee, type SalaryPack } from "../lib/api";
 import { confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
-import { employeeRole } from "../lib/employee";
+import { employeeRole, shortName } from "../lib/employee";
 import { BackRow } from "../components/BackRow";
 
 type PendingObject = {
@@ -147,14 +147,14 @@ export function Approval({
       {data && !data.items.length && <div className="empty-state">🎉 Немає звітів на підтвердження</div>}
 
       {data && !!data.items.length && (
-        <div className="list">
+        <div>
           {data.items.map((it) => {
             const key = keyOf(it);
             const expanded = expandedKey === key;
             const fund = it.salaryPacks.reduce((a, p) => a + p.objectTotal, 0);
             const busy = busyKey === key;
             return (
-              <div key={key} style={{ borderBottom: "1px solid var(--tg-border)" }}>
+              <div key={key} className={`approval-card ${expanded ? "open" : ""}`}>
                 <button className="cell" onClick={() => setExpandedKey(expanded ? null : key)}>
                   <span className="cell-title">
                     {expanded ? "▾" : "▸"} {it.foremanName}
@@ -204,17 +204,18 @@ export function Approval({
                     {it.objects.map((o) => {
                       const pack = it.salaryPacks.find((p) => p.objectId === o.objectId);
                       return (
-                        <div key={o.objectId} style={{ marginBottom: 14 }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                            <span style={{ fontWeight: 600 }}>{o.objectName}</span>
+                        <div key={o.objectId} className="approval-object">
+                          <div className="approval-object-head">
+                            <span>{o.objectName}</span>
                             {pack && <span className="badge ok">{pack.objectTotal} грн</span>}
                           </div>
 
-                          <div className="list" style={{ margin: "6px 0 0" }}>
+                          <div className="approval-sub">🛠 Роботи</div>
+                          <div className="approval-rows">
                             {o.works.map((w) => (
-                              <div key={w.workId} className="cell" style={{ cursor: "default", display: "block" }}>
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                                  <span className="cell-title">{w.workName}</span>
+                              <div key={w.workId} className="approval-row">
+                                <div className="approval-row-main">
+                                  <span className="approval-row-name wrap">{w.workName}</span>
                                   {w.volume && w.volume !== "?" ? (
                                     <span className="badge ok">
                                       {w.volume}
@@ -227,8 +228,8 @@ export function Approval({
                                 {/* Робота без призначення ділиться всією бригадою --
                                     показуємо лише виняток, щоб не засмічувати список. */}
                                 {!!w.employeeIds?.length && (
-                                  <div className="hint" style={{ marginTop: 4 }}>
-                                    👤 окремо: {w.employeeIds.map((id) => employeeById.get(id)?.name ?? id).join(", ")}
+                                  <div className="hint" style={{ marginTop: 2 }}>
+                                    👤 окремо: {w.employeeIds.map((id) => shortName(employeeById.get(id)?.name ?? id)).join(", ")}
                                   </div>
                                 )}
                               </div>
@@ -236,40 +237,51 @@ export function Approval({
                           </div>
 
                           {!!pack?.rows.length && (
-                            <div className="list" style={{ margin: "6px 0 0" }}>
-                              {pack.rows.map((r) => {
-                                const emp = employeeById.get(r.employeeId);
-                                const role = emp ? employeeRole(emp) : "робітник";
-                                return (
-                                  <div key={r.employeeId} className="cell" style={{ cursor: "default" }}>
-                                    <span className="cell-title">
-                                      {r.employeeName}
-                                      {role !== "робітник" && (
-                                        <span className="role-tag" style={{ marginLeft: 6 }}>
-                                          {role}
+                            <>
+                              <div className="approval-sub">👥 Нарахування</div>
+                              <div className="approval-rows">
+                                {pack.rows.map((r) => {
+                                  const emp = employeeById.get(r.employeeId);
+                                  const role = emp ? employeeRole(emp) : "робітник";
+                                  const selfT = it.selfTransportIds.includes(r.employeeId);
+                                  return (
+                                    <div key={r.employeeId} className="approval-row">
+                                      {/* One line per person: the name gives up
+                                          width first (ellipsis), the figures
+                                          never wrap -- money that jumps to its
+                                          own line stops lining up down the
+                                          column, which is how it gets read. */}
+                                      <div className="approval-row-main">
+                                        <span className="approval-row-name">
+                                          {shortName(r.employeeName)}
+                                          {role === "бригадир" && <span className="mark" title="бригадир"> Б</span>}
+                                          {role === "старший" && <span className="mark" title="старший садівник"> С</span>}
+                                          {selfT && <span className="mark" title="приїхав сам — без доплати за виїзд"> 🚶</span>}
                                         </span>
-                                      )}
-                                      {it.selfTransportIds.includes(r.employeeId) && (
-                                        <span className="badge" style={{ marginLeft: 6 }}>
-                                          🚶 без доплати
+                                        <span className="approval-nums">
+                                          <span className={`badge badge-sm ${r.hours > 0 ? "" : "danger"}`}>{r.hours} год</span>
+                                          {r.coefTotal !== 1 && <span className="badge badge-sm warn">к{r.coefTotal}</span>}
+                                          <span className="badge badge-sm ok">{r.pay} грн</span>
                                         </span>
-                                      )}
-                                    </span>
-                                    <span style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                                      <span className={`badge ${r.hours > 0 ? "" : "danger"}`}>{r.hours} год</span>
-                                      {r.coefTotal !== 1 && <span className="badge warn">к: {r.coefTotal}</span>}
-                                      <span className="badge ok">{r.pay} грн</span>
-                                    </span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                                {pack.companyPay > 0 && (
+                                  <div className="approval-row">
+                                    <div className="approval-row-main">
+                                      <span className="approval-row-name">🏢 Фірма</span>
+                                      <span className="approval-nums">
+                                        <span className="badge badge-sm">{pack.companyPay} грн</span>
+                                      </span>
+                                    </div>
                                   </div>
-                                );
-                              })}
-                              {pack.companyPay > 0 && (
-                                <div className="cell" style={{ cursor: "default" }}>
-                                  <span className="cell-title">🏢 Фірма</span>
-                                  <span className="badge">{pack.companyPay} грн</span>
-                                </div>
-                              )}
-                            </div>
+                                )}
+                              </div>
+                              <div className="hint" style={{ marginTop: 6 }}>
+                                Б — бригадир, С — старший, 🚶 — приїхав сам (без доплати за виїзд)
+                              </div>
+                            </>
                           )}
                         </div>
                       );

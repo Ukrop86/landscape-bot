@@ -1058,3 +1058,96 @@ body {
   border-color: var(--tg-button);
   font-weight: 600;
 }
+
+/* ---- Approval report ----------------------------------------------------
+   Several foremen's reports used to run together as rows of one long list,
+   and inside a report the objects, their works and their payouts were one
+   continuous column of text. Each level gets its own container now: report,
+   object, and within an object the two halves (works, payouts). */
+.approval-card {
+  margin: 10px 12px;
+  border-radius: 14px;
+  background: var(--tg-secondary-bg);
+  overflow: hidden;
+}
+
+.approval-card.open {
+  box-shadow: 0 0 0 1px var(--tg-border);
+}
+
+.approval-object {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--tg-bg);
+}
+
+.approval-object-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.approval-sub {
+  margin-top: 10px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--tg-hint);
+}
+
+.approval-rows {
+  margin-top: 4px;
+}
+
+.approval-row {
+  padding: 7px 0;
+}
+
+.approval-row + .approval-row {
+  border-top: 1px solid var(--tg-border);
+}
+
+.approval-row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* The name yields width first; the figures keep their line so the money
+   stays in one readable column. */
+.approval-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+.approval-row-name.wrap {
+  white-space: normal;
+  overflow: visible;
+}
+
+.approval-nums {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.approval-row-name .mark {
+  color: var(--tg-hint);
+  font-size: 13px;
+}
+
+.badge-sm {
+  font-size: 11px;
+  padding: 2px 6px;
+}
