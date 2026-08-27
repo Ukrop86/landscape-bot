@@ -278,10 +278,6 @@ function fmtHMS(ms: number) {
   return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":");
 }
 
-function fmtHours(ms: number) {
-  return Math.round((ms / 3_600_000) * 100) / 100;
-}
-
 export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => void; onSaved: () => void; onOpenRetro: () => void }) {
   const [step, setStep] = useState<Step>("HUB");
   const [now, setNow] = useState(Date.now());
@@ -346,8 +342,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   const [coefs, setCoefs] = useState<Record<string, CoefPair>>({});
   const [expandedCoefEmployeeId, setExpandedCoefEmployeeId] = useState<string | null>(null);
   const [expandedReviewObjectId, setExpandedReviewObjectId] = useState<string | null>(null);
-  const [reviewPeopleExpanded, setReviewPeopleExpanded] = useState(false);
-  const [reviewWorkersExpanded, setReviewWorkersExpanded] = useState(false);
   const [reviewReturnStep, setReviewReturnStep] = useState<Step>("RETURN");
 
   // --- drive ---
@@ -4771,247 +4765,214 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       {step === "REVIEW" && !retroReplaceObjectId && (
         <>
           <div className="step-badge">ПІДСУМОК ДНЯ</div>
+          {/* One compact block: the numbers of the trip, each with its own way
+              back into the step that owns it. It used to be four full-width
+              sections with a "редагувати" chip each, which pushed the actual
+              day -- the objects -- below the fold. */}
           <div className="section-title">Поїздка</div>
           <div className="list">
             <div className="cell">
               <span className="cell-title">Проїхано</span>
-              <span className="cell-sub">
-                {preview ? `${preview.km} км · клас ${preview.tripClass}` : "рахую…"}
-              </span>
+              <span className="cell-sub">{preview ? `${preview.km} км · клас ${preview.tripClass}` : "рахую…"}</span>
             </div>
             {preview && !!preview.excludedKm && (
               <div className="cell">
                 <span className="cell-title">З них по справам</span>
                 <span className="cell-sub">
-                  {preview.excludedKm} км — не враховано в доплату{preview.billableKm != null ? ` (до класу: ${preview.billableKm} км)` : ""}
+                  {preview.excludedKm} км — не в доплаті{preview.billableKm != null ? ` (до класу: ${preview.billableKm} км)` : ""}
                 </span>
               </div>
             )}
-          </div>
-
-          <div className="section-title row">
-            <span>🚙 Авто{carId ? `: ${cars.find((c) => c.id === carId)?.name ?? ""}` : ""}</span>
-            <button
-              className="chip"
-              onClick={() => {
-                setEditReturnStep("REVIEW");
-                setStep("PICK_CAR");
-              }}
-            >
-              ✏️ Редагувати
-            </button>
-          </div>
-          <div className="hint" style={{ padding: "0 16px 8px" }}>{odoStart} км</div>
-
-          <div className="section-title row">
-            <span>🏁 Одометр на фініші</span>
-            <button
-              className="chip"
-              onClick={() => {
-                setReviewReturnStep("REVIEW");
-                setStep("RETURN");
-              }}
-            >
-              ✏️ Редагувати
-            </button>
-          </div>
-          <div className="hint" style={{ padding: "0 16px 8px" }}>{odoEnd || "—"} км</div>
-
-          <div className="section-title row">
-            <span>Люди — {employeeIds.length}</span>
-            <button
-              className="chip"
-              onClick={() => {
-                setEditReturnStep("REVIEW");
-                setStep("PICK_PEOPLE");
-              }}
-            >
-              ✏️ Редагувати
-            </button>
-          </div>
-          <div style={{ padding: "0 16px 8px" }}>
-            <button className="back-btn" onClick={() => setReviewPeopleExpanded((v) => !v)}>
-              {reviewPeopleExpanded ? "▾ Сховати список" : "▸ Показати список"}
-            </button>
-          </div>
-          {reviewPeopleExpanded && (
-            <div className="list" style={{ marginBottom: 8 }}>
-              {employeeIds.length ? (
-                employeeIds.map((id) => (
-                  <div key={id} className="cell" style={{ cursor: "default" }}>
-                    <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span className={`avatar-circle ${roleAccent(roleFor(id))}`}>{initials(employeeName(id))}</span>
-                      {employeeName(id)}
-                    </span>
-                    {selfTransportIds.includes(id) && <span className="badge">🚶 без доплати за дорогу</span>}
-                  </div>
-                ))
-              ) : (
-                <div className="empty-state">Нікого не обрано</div>
-              )}
+            <div className="cell-row">
+              <div className="cell" style={{ cursor: "default" }}>
+                <span className="cell-title">🚙 {cars.find((c) => c.id === carId)?.name ?? "—"}</span>
+                <span className="cell-sub">
+                  {odoStart} → {odoEnd || "—"} км
+                </span>
+              </div>
+              <button
+                className="cell-action"
+                title="Змінити авто"
+                onClick={() => {
+                  setEditReturnStep("REVIEW");
+                  setStep("PICK_CAR");
+                }}
+              >
+                ✏️
+              </button>
+              <button
+                className="cell-action"
+                title="Змінити кінцевий одометр"
+                onClick={() => {
+                  setReviewReturnStep("REVIEW");
+                  setStep("RETURN");
+                }}
+              >
+                🏁
+              </button>
             </div>
-          )}
+            <div className="cell">
+              <span className="cell-title">Людей у дні</span>
+              <span className="cell-sub">{nPeople(employeeIds.length)}</span>
+            </div>
+          </div>
 
-          <div className="section-title">Обʼєкти · роботи · обсяги</div>
+          {/* People live inside the object they worked at, not in two separate
+              rosters at the bottom of the screen: "who was where, for how
+              long, on what" is one question, and the answer belongs together. */}
+          <div className="section-title">Обʼєкти</div>
           <div className="list">
             {plans.map((p) => {
               const expanded = expandedReviewObjectId === p.objectId;
               const unfilled = p.works.filter((w) => !w.volume || w.volume === "?").length;
+              const peopleHere = [...new Set(p.sessions.map((s) => s.employeeId))];
               return (
                 <div key={p.objectId}>
                   <div className="cell-row">
                     <button className="cell" onClick={() => setExpandedReviewObjectId(expanded ? null : p.objectId)}>
                       <span className="cell-title">
-                        {expanded ? "▾" : "▸"} 📍 {p.objectName}
+                        {expanded ? "▾" : "▸"} {p.objectName}
                       </span>
-                      {p.works.length > 0 && (
-                        <span className={`badge ${unfilled === 0 ? "ok" : "warn"}`}>
-                          {unfilled === 0 ? "✅ обсяги є" : `🟡 ${unfilled} без обсягу`}
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      className="cell-action"
-                      onClick={() => openVolumesForObject(p.objectId, "REVIEW")}
-                      disabled={!p.works.length}
-                      title="Редагувати обсяги"
-                    >
-                      📏
-                    </button>
-                    <button
-                      className="cell-action"
-                      onClick={() => {
-                        setPlanObjectId(p.objectId);
-                        setWorksReturnStep("REVIEW");
-                        setStep("PLAN_WORKS");
-                      }}
-                      title="Редагувати роботи"
-                    >
-                      ✏️
-                    </button>
-                    <button className="cell-action" onClick={() => setRetroReplaceObjectId(p.objectId)} title="Замінити обʼєкт">
-                      🔁
+                      <span style={{ display: "flex", gap: 6 }}>
+                        <span className="badge">👤 {peopleHere.length}</span>
+                        {p.works.length > 0 && (
+                          <span className={`badge ${unfilled === 0 ? "ok" : "warn"}`}>
+                            {unfilled === 0 ? "✅ обсяги є" : `🟡 ${unfilled} без обсягу`}
+                          </span>
+                        )}
+                      </span>
                     </button>
                   </div>
                   {expanded && (
-                    <div style={{ padding: "4px 16px 10px" }}>
+                    <div style={{ padding: "4px 16px 12px" }}>
+                      <div className="hint" style={{ fontWeight: 600 }}>🛠 Роботи</div>
                       {p.works.length ? (
-                        p.works.map((w) => (
-                          <div key={w.workId} className="hint">
-                            • {w.workName}: {w.volume && w.volume !== "?" ? `${w.volume} ${w.unit}` : "не введено"}
-                          </div>
-                        ))
+                        <ul className="bullets">
+                          {p.works.map((w) => (
+                            <li key={w.workId}>
+                              {w.workName}: {w.volume && w.volume !== "?" ? `${w.volume} ${w.unit}` : "не введено"}
+                              {(w.employeeIds ?? []).length > 0 && ` — окремо: ${(w.employeeIds ?? []).map((id) => shortName(employeeName(id))).join(", ")}`}
+                            </li>
+                          ))}
+                        </ul>
                       ) : (
                         <div className="hint">без робіт</div>
                       )}
+                      <div className="row-actions">
+                        <button
+                          className="chip chip-sm"
+                          onClick={() => openVolumesForObject(p.objectId, "REVIEW")}
+                          disabled={!p.works.length}
+                        >
+                          🟡 Змінити обсяги{unfilled ? ` (${unfilled})` : ""}
+                        </button>
+                        <button
+                          className="chip chip-sm"
+                          onClick={() => {
+                            setPlanObjectId(p.objectId);
+                            setWorksReturnStep("REVIEW");
+                            setStep("PLAN_WORKS");
+                          }}
+                        >
+                          ✏️ Змінити роботи
+                        </button>
+                      </div>
+
+                      <div className="hint" style={{ fontWeight: 600, marginTop: 14 }}>👥 Люди на цьому обʼєкті</div>
+                      {peopleHere.length ? (
+                        <div className="list" style={{ margin: "6px 0 0" }}>
+                          {peopleHere.map((id) => {
+                            const c = coefFor(id);
+                            const coefOpen = expandedCoefEmployeeId === `${p.objectId}::${id}`;
+                            return (
+                              <div key={id} className="cell" style={{ cursor: "default", display: "block" }}>
+                                <button
+                                  className="cell"
+                                  style={{ padding: 0, border: "none" }}
+                                  onClick={() => setExpandedCoefEmployeeId(coefOpen ? null : `${p.objectId}::${id}`)}
+                                >
+                                  <span className="cell-title">
+                                    {coefOpen ? "▾" : "▸"} {shortName(employeeName(id))}
+                                    {roleFor(id) !== "робітник" && <span className="role-tag" style={{ marginLeft: 6 }}>{roleFor(id)}</span>}
+                                  </span>
+                                  <span className="cell-sub">
+                                    {hoursAtObject(p, id)} год{c.disciplineCoef !== 1 || c.productivityCoef !== 1 ? ` · ${c.disciplineCoef}/${c.productivityCoef}` : ""}
+                                  </span>
+                                </button>
+                                {coefOpen && (
+                                  <>
+                                    <div className="hint" style={{ marginTop: 6 }}>
+                                      Коефіцієнт єдиний на весь день — діє на всі обʼєкти, де людина працювала.
+                                    </div>
+                                    <div className="coef-row">
+                                      <span className="coef-label">Дисципліна</span>
+                                      {COEF_PRESETS.map((v) => (
+                                        <button
+                                          key={v}
+                                          className={`coef-btn ${c.disciplineCoef === v ? "selected" : ""}`}
+                                          onClick={() => setCoef(id, "disciplineCoef", v)}
+                                        >
+                                          {v}
+                                        </button>
+                                      ))}
+                                    </div>
+                                    <div className="coef-row">
+                                      <span className="coef-label">Продуктивність</span>
+                                      {COEF_PRESETS.map((v) => (
+                                        <button
+                                          key={v}
+                                          className={`coef-btn ${c.productivityCoef === v ? "selected" : ""}`}
+                                          onClick={() => setCoef(id, "productivityCoef", v)}
+                                        >
+                                          {v}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="hint" style={{ color: "#d70015" }}>
+                          Нікого — за цей обʼєкт гроші не розподіляться
+                        </div>
+                      )}
+                      <div className="row-actions">
+                        <button
+                          className="chip chip-sm"
+                          onClick={() => {
+                            setAtObjectId(p.objectId);
+                            setAtObjectReturnStep("REVIEW");
+                            setStep("AT_OBJECT");
+                          }}
+                        >
+                          👥 Змінити людей
+                        </button>
+                        <button
+                          className="chip chip-sm"
+                          onClick={() => {
+                            setAtObjectId(p.objectId);
+                            setAtObjectReturnStep("REVIEW");
+                            setManualHoursEmployeeId(null);
+                            setManualHoursBuffer("");
+                            setShowManualHours(true);
+                            setStep("AT_OBJECT");
+                          }}
+                        >
+                          🕒 Змінити години
+                        </button>
+                        <button className="chip chip-sm" onClick={() => setRetroReplaceObjectId(p.objectId)}>
+                          🔁 Замінити обʼєкт іншим
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
               );
             })}
           </div>
-
-          <div className="section-title">Працівники</div>
-          <div className="hint" style={{ padding: "0 16px 8px" }}>
-            Коефіцієнти впливають лише на розподіл частки робітників у фонді обʼєкта, за замовчуванням 1.0. Тапни на робітника, щоб змінити.
-          </div>
-          <div style={{ padding: "0 16px 8px" }}>
-            <button className="back-btn" onClick={() => setReviewWorkersExpanded((v) => !v)}>
-              {reviewWorkersExpanded ? "▾ Сховати список" : `▸ Показати список (${employeeIds.length})`}
-            </button>
-          </div>
-          {reviewWorkersExpanded && (
-          <div className="list">
-            {employeeIds.map((id) => {
-              const totalMs = plans.reduce((acc, p) => {
-                const ms = p.sessions
-                  .filter((s) => s.employeeId === id)
-                  .reduce((sum, s) => {
-                    const start = new Date(s.startedAt).getTime();
-                    const end = new Date(s.endedAt ?? new Date().toISOString()).getTime();
-                    return sum + Math.max(0, end - start);
-                  }, 0);
-                return acc + ms;
-              }, 0);
-              const isWorker = roleFor(id) === "робітник";
-              const expanded = isWorker && expandedCoefEmployeeId === id;
-              const c = coefFor(id);
-              return (
-                <div key={id}>
-                  {isWorker ? (
-                    <button className="cell" onClick={() => setExpandedCoefEmployeeId(expanded ? null : id)}>
-                      <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span className={`avatar-circle ${roleAccent(roleFor(id))}`}>{initials(employeeName(id))}</span>
-                        {expanded ? "▾" : "▸"} {employeeName(id)}
-                      </span>
-                      <span className="cell-sub">
-                        {fmtHours(totalMs)} год · Дисц. {c.disciplineCoef} · Прод. {c.productivityCoef}
-                      </span>
-                    </button>
-                  ) : (
-                    <div className="cell" style={{ cursor: "default" }}>
-                      <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span className={`avatar-circle ${roleAccent(roleFor(id))}`}>{initials(employeeName(id))}</span>
-                        {employeeName(id)}
-                      </span>
-                      <span className="cell-sub">{fmtHours(totalMs)} год</span>
-                    </div>
-                  )}
-                  {expanded && (
-                    <div style={{ padding: "4px 16px 10px" }}>
-                      <div className="hint">Дисципліна</div>
-                      <div className="chip-row">
-                        {COEF_PRESETS.map((v) => (
-                          <div
-                            key={v}
-                            className={`chip ${c.disciplineCoef === v ? "selected" : ""}`}
-                            onClick={() => setCoef(id, "disciplineCoef", v)}
-                          >
-                            {v}
-                          </div>
-                        ))}
-                      </div>
-                      <div className="hint">Продуктивність</div>
-                      <div className="chip-row">
-                        {COEF_PRESETS.map((v) => (
-                          <div
-                            key={v}
-                            className={`chip ${c.productivityCoef === v ? "selected" : ""}`}
-                            onClick={() => setCoef(id, "productivityCoef", v)}
-                          >
-                            {v}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          )}
-
-          {preview && (
-            <>
-              <div className="section-title">Хто скільки заробив</div>
-              <div className="hint" style={{ padding: "0 16px 8px" }}>
-                🔒 Суми стануть видимі після затвердження звіту адміністратором.
-              </div>
-              <div className="list">
-                {employeeIds.map((id) => (
-                  <div key={id} className="cell" style={{ cursor: "default" }}>
-                    <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span className={`avatar-circle ${roleAccent(roleFor(id))}`}>{initials(employeeName(id))}</span>
-                      {employeeName(id)}
-                      {id === preview.brigadierEmployeeId && <span className="badge">бригадир</span>}
-                      {preview.seniorEmployeeIds.includes(id) && <span className="badge">старший</span>}
-                    </span>
-                    <span className="cell-sub">🔒 •••</span>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
 
           {(() => {
             const unfilled = plans.flatMap((p) =>
