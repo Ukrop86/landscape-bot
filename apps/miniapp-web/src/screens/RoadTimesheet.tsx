@@ -378,6 +378,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // object to fix its works while the car stays where it is.
   const [carAtObjectId, setCarAtObjectId] = useState<string>("");
   const [arrivedPickerOpen, setArrivedPickerOpen] = useState(false);
+  const [coefsExpanded, setCoefsExpanded] = useState(false);
   // Which person's "assign works to just them" panel is open, if any -- the
   // same assignment the work list offers, reached from the person instead.
   const [assigningPersonId, setAssigningPersonId] = useState<string | null>(null);
@@ -1365,7 +1366,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     setVolumeBuffer(work.volume && work.volume !== "?" ? work.volume : "");
   }
 
-  function saveVolumeDetail(deferred: boolean) {
+  function storeVolume(deferred: boolean) {
     if (!planObjectId || !planVolumeWorkId) return;
     setPlans((prev) =>
       prev.map((p) =>
@@ -1380,7 +1381,33 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             },
       ),
     );
+  }
+
+  function saveVolumeDetail(deferred: boolean) {
+    storeVolume(deferred);
     setPlanVolumeWorkId(null);
+  }
+
+  /**
+   * Saves what was typed and opens the next work that still needs a volume,
+   * so a foreman with nine works fills them in one run instead of bouncing
+   * back to the list after every single one. Wraps around, and falls back to
+   * the list once nothing is left unfilled.
+   */
+  function saveVolumeAndNext(deferred: boolean) {
+    if (!planObjectId || !planVolumeWorkId) return;
+    storeVolume(deferred);
+    const works = planFor(planObjectId).works;
+    const from = works.findIndex((w) => w.workId === planVolumeWorkId);
+    const ordered = [...works.slice(from + 1), ...works.slice(0, from)];
+    const next = ordered.find((w) => !w.volume || w.volume === "?");
+    if (!next) {
+      setPlanVolumeWorkId(null);
+      return;
+    }
+    setPlanVolumeWorkId(next.workId);
+    setVolumeBuffer(next.volume && next.volume !== "?" ? next.volume : "");
+    haptic("selection");
   }
 
   function applyBulkVolume(objectId: string, value: string) {
@@ -3002,9 +3029,14 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 <div className="step-badge">{plan.objectName.toUpperCase()} · ОБСЯГИ</div>
                 <div className="section-title row">
                   <span>Обсяги</span>
-                  <button className="chip" onClick={() => setBulkVolumeInput(bulkVolumeInput === null ? "" : null)}>
-                    Масовий ввід
-                  </button>
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span className={`badge ${unfilled.length ? "" : "ok"}`}>
+                      заповнено {plan.works.length - unfilled.length}/{plan.works.length}
+                    </span>
+                    <button className="chip chip-sm" onClick={() => setBulkVolumeInput(bulkVolumeInput === null ? "" : null)}>
+                      Масовий ввід
+                    </button>
+                  </span>
                 </div>
                 {bulkVolumeInput !== null && (
                   <div className="field" style={{ padding: "0 16px 8px" }}>
@@ -3029,7 +3061,17 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                     </div>
                   </div>
                 )}
-                <div className="hint" style={{ padding: "0 16px 8px" }}>Постав число для кожної роботи</div>
+                {unfilled.length > 0 && (
+                  <div style={{ padding: "0 16px 8px" }}>
+                    <button
+                      className="chip selected"
+                      style={{ width: "100%" }}
+                      onClick={() => openVolumeDetail(planObjectId, unfilled[0])}
+                    >
+                      ✍️ Заповнити підряд ({unfilled.length})
+                    </button>
+                  </div>
+                )}
                 <div className="list">
                   {plan.works.map((w) => (
                     <button key={w.workId} className="cell" onClick={() => openVolumeDetail(planObjectId, w)}>
@@ -3045,51 +3087,72 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                   ))}
                 </div>
                 {unfilled.length > 0 && (
-                  <div className="empty-state">🟡 Є роботи без обсягу: {unfilled.map((w) => w.workName).join(", ")}</div>
+                  <div className="hint" style={{ padding: "8px 16px" }}>
+                    🟡 Без обсягу:
+                    <ul className="bullets">
+                      {unfilled.map((w) => (
+                        <li key={w.workId}>{w.workName}</li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
 
                 {volumesReturnStep === "RETURN_PICKUP" &&
                   (() => {
                     const workerIds = [...new Set(plan.sessions.map((s) => s.employeeId))].filter((id) => roleFor(id) === "робітник");
                     if (!workerIds.length) return null;
+                    // 12 buttons per person, on a screen whose job is volumes.
+                    // Almost every day leaves every coefficient at 1.0, so the
+                    // block is collapsed behind a line that says whether
+                    // anything was changed at all.
+                    const changed = workerIds.filter((id) => coefFor(id).disciplineCoef !== 1 || coefFor(id).productivityCoef !== 1);
                     return (
                       <>
-                        <div className="section-title">Коефіцієнти для тих, кого забрали</div>
-                        <div className="hint" style={{ padding: "0 16px 8px" }}>
-                          ⚠️ Коефіцієнт єдиний на весь день — зміна тут вплине на розподіл по всіх обʼєктах, де людина працювала. За
-                          замовчуванням 1.0.
+                        <div className="section-title row">
+                          <span>Коефіцієнти</span>
+                          <button className="chip chip-sm" onClick={() => setCoefsExpanded((v) => !v)}>
+                            {coefsExpanded ? "▾ Згорнути" : changed.length ? `▸ Змінено: ${changed.length}` : "▸ Усі 1.0"}
+                          </button>
                         </div>
-                        <div className="list">
-                          {workerIds.map((id) => (
-                            <div key={id} className="cell" style={{ cursor: "default", display: "block" }}>
-                              <div className="cell-title">{employeeName(id)}</div>
-                              <div className="hint">Дисципліна</div>
-                              <div className="chip-row">
-                                {COEF_PRESETS.map((v) => (
-                                  <div
-                                    key={v}
-                                    className={`chip ${coefFor(id).disciplineCoef === v ? "selected" : ""}`}
-                                    onClick={() => setCoef(id, "disciplineCoef", v)}
-                                  >
-                                    {v}
-                                  </div>
-                                ))}
-                              </div>
-                              <div className="hint">Продуктивність</div>
-                              <div className="chip-row">
-                                {COEF_PRESETS.map((v) => (
-                                  <div
-                                    key={v}
-                                    className={`chip ${coefFor(id).productivityCoef === v ? "selected" : ""}`}
-                                    onClick={() => setCoef(id, "productivityCoef", v)}
-                                  >
-                                    {v}
-                                  </div>
-                                ))}
-                              </div>
+                        {coefsExpanded && (
+                          <>
+                            <div className="hint" style={{ padding: "0 16px 8px" }}>
+                              ⚠️ Коефіцієнт єдиний на весь день — зміна тут вплине на розподіл по всіх обʼєктах, де людина працювала. За
+                              замовчуванням 1.0.
                             </div>
-                          ))}
-                        </div>
+                            <div className="list">
+                              {workerIds.map((id) => (
+                                <div key={id} className="cell" style={{ cursor: "default", display: "block" }}>
+                                  <div className="cell-title">{shortName(employeeName(id))}</div>
+                                  <div className="coef-row">
+                                    <span className="coef-label">Дисципліна</span>
+                                    {COEF_PRESETS.map((v) => (
+                                      <button
+                                        key={v}
+                                        className={`coef-btn ${coefFor(id).disciplineCoef === v ? "selected" : ""}`}
+                                        onClick={() => setCoef(id, "disciplineCoef", v)}
+                                      >
+                                        {v}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <div className="coef-row">
+                                    <span className="coef-label">Продуктивність</span>
+                                    {COEF_PRESETS.map((v) => (
+                                      <button
+                                        key={v}
+                                        className={`coef-btn ${coefFor(id).productivityCoef === v ? "selected" : ""}`}
+                                        onClick={() => setCoef(id, "productivityCoef", v)}
+                                      >
+                                        {v}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        )}
                       </>
                     );
                   })()}
@@ -3104,21 +3167,47 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       {step === "PLAN_VOLUMES" && planObjectId && planVolumeWorkId && (
         <>
           {(() => {
-            const work = planFor(planObjectId).works.find((w) => w.workId === planVolumeWorkId)!;
+            const plan = planFor(planObjectId);
+            const work = plan.works.find((w) => w.workId === planVolumeWorkId)!;
+            const total = plan.works.length;
+            const filled = plan.works.filter((w) => w.volume && w.volume !== "?").length;
+            const index = plan.works.findIndex((w) => w.workId === planVolumeWorkId);
+            // Whether anything else still needs a number, ignoring this work --
+            // it decides if "далі" has anywhere to go.
+            const othersLeft = plan.works.some((w) => w.workId !== planVolumeWorkId && (!w.volume || w.volume === "?"));
             return (
               <>
                 <div className="step-badge">ОБСЯГ РОБОТИ</div>
+                <div className="section-title row">
+                  <span>
+                    Робота {index + 1} з {total}
+                  </span>
+                  <span className={`badge ${filled === total ? "ok" : ""}`}>
+                    заповнено {filled}/{total}
+                  </span>
+                </div>
                 <div className="section-title">🛠 {work.workName}</div>
                 <div className={`big-number ${volumeBuffer ? "" : "empty"}`}>
                   {volumeBuffer || "0"} {work.unit}
                 </div>
                 <div style={{ textAlign: "center", padding: "0 16px 8px" }}>
-                  <button className="back-btn" onClick={() => saveVolumeDetail(true)}>
+                  <button className="back-btn" onClick={() => (othersLeft ? saveVolumeAndNext(true) : saveVolumeDetail(true))}>
                     ❓ Обсяг ще невідомий — заповнити пізніше
                   </button>
                 </div>
                 <NumericKeypad value={volumeBuffer} onChange={setVolumeBuffer} />
-                <MainButton text="Зберегти обсяг" onClick={() => saveVolumeDetail(false)} disabled={!volumeBuffer} />
+                {othersLeft && (
+                  <div style={{ textAlign: "center", padding: "0 16px 8px" }}>
+                    <button className="back-btn" onClick={() => saveVolumeDetail(false)} disabled={!volumeBuffer}>
+                      💾 Зберегти й до списку
+                    </button>
+                  </div>
+                )}
+                <MainButton
+                  text={othersLeft ? "Зберегти й далі →" : "💾 Зберегти обсяг"}
+                  onClick={() => (othersLeft ? saveVolumeAndNext(false) : saveVolumeDetail(false))}
+                  disabled={!volumeBuffer}
+                />
               </>
             );
           })()}
@@ -4355,6 +4444,13 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             // (or be collected by the bus) before the day can finish.
             const returnObjects = plans.filter((p) => p.visited || p.here.length > 0 || p.sessions.length > 0);
             const anyPending = plans.some((p) => p.here.length > 0);
+            // The car's position is known, so this screen can say what to do
+            // next instead of offering one unlabelled "continue driving":
+            // either collect the people standing where the car is parked, or
+            // set off for another object that still has some.
+            const parkedAt = returnObjects.find((p) => p.objectId === carAtObjectId) ?? null;
+            const stillToCollect = returnObjects.filter((p) => p.here.length > 0 && p.objectId !== carAtObjectId);
+            const driving = !!drivingSegmentStartedAt;
             return (
               <>
                 <div className="step-badge">ПОВЕРНЕННЯ НА БАЗУ</div>
@@ -4362,7 +4458,59 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                   {fmtHMS(drivingAccumulatedMs + (drivingSegmentStartedAt ? now - new Date(drivingSegmentStartedAt).getTime() : 0))}
                 </div>
                 <div className="hint" style={{ textAlign: "center" }}>лише час у дорозі — на об'єктах не рахується</div>
-                <div className="section-title">Обʼєкти</div>
+
+                {driving && headingTo && (
+                  <>
+                    <div className="hint" style={{ textAlign: "center", padding: "6px 16px 0" }}>
+                      Прямуємо до 📍 {headingTo.objectName}
+                    </div>
+                    <div style={{ padding: "8px 16px" }}>
+                      <button
+                        className="chip selected"
+                        style={{ width: "100%" }}
+                        onClick={() => {
+                          pauseDrivingSegment();
+                          setCarAtObjectId(headingTo.objectId);
+                          setHeadingToObjectId("");
+                          haptic("medium");
+                        }}
+                      >
+                        📍 Прибув: {headingTo.objectName}
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {!driving && parkedAt && parkedAt.here.length > 0 && (
+                  <>
+                    <div className="section-title">Машина тут — 📍 {parkedAt.objectName}</div>
+                    {renderDepartureChoices(parkedAt, { allowBus: true, pauseForBus: false })}
+                  </>
+                )}
+
+                {!driving && stillToCollect.length > 0 && (
+                  <>
+                    <div className="section-title">Їхати забирати далі</div>
+                    <div className="list">
+                      {stillToCollect.map((p) => (
+                        <button
+                          key={p.objectId}
+                          className="cell"
+                          onClick={() => {
+                            setHeadingToObjectId(p.objectId);
+                            resumeDrivingSegment();
+                            haptic("selection");
+                          }}
+                        >
+                          <span className="cell-title">🚗 Їхати на 📍 {p.objectName}</span>
+                          <span className="badge warn">👤 {p.here.length}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                <div className="section-title">Усі обʼєкти</div>
                 <div className="list">
                   {returnObjects.map((p) => {
                     const expanded = expandedReturnPickupObjectId === p.objectId;
@@ -4415,10 +4563,10 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                     );
                   })}
                 </div>
-                {!drivingSegmentStartedAt && (
+                {!driving && !anyPending && (
                   <div style={{ padding: "0 16px 10px" }}>
                     <button className="chip selected" style={{ width: "100%" }} onClick={resumeDrivingSegment}>
-                      ▶️ Продовжити рух
+                      ▶️ Рушили на базу
                     </button>
                   </div>
                 )}

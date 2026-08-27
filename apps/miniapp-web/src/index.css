@@ -1023,3 +1023,38 @@ body {
   gap: 8px;
   padding: 10px 16px;
 }
+
+/* Coefficient picker: a labelled row of six equal steps rather than a wrapped
+   run of chips, so discipline and productivity line up under each other and
+   the chosen value is findable at a glance. */
+.coef-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.coef-label {
+  flex: 0 0 92px;
+  font-size: 12px;
+  color: var(--tg-hint);
+}
+
+.coef-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 6px 0;
+  border-radius: 8px;
+  border: 1px solid var(--tg-border);
+  background: var(--tg-secondary-bg);
+  font-size: 13px;
+  cursor: pointer;
+  color: inherit;
+}
+
+.coef-btn.selected {
+  background: var(--tg-button);
+  color: var(--tg-button-text);
+  border-color: var(--tg-button);
+  font-weight: 600;
+}
