@@ -171,27 +171,41 @@ export function Approval({
                         is what the day's WORK earned (sum of volume x tariff
                         across every object), and the only road figure is the
                         per-person allowance. */}
-                    <div className="list" style={{ marginBottom: 10 }}>
-                      <div className="cell" style={{ cursor: "default" }}>
-                        <span className="cell-title">🚗 Дорога</span>
-                        <span className="cell-sub">
-                          {it.km} км · клас {it.tripClass}
-                        </span>
+                    {/* Same compact row shape as the objects below -- three
+                        full-height list cells for three numbers pushed the
+                        day itself off the screen. */}
+                    <div className="approval-object" style={{ marginTop: 0 }}>
+                      <div className="approval-rows">
+                        <div className="approval-row">
+                          <div className="approval-row-main">
+                            <span className="approval-row-name">🚗 Дорога</span>
+                            <span className="approval-nums">
+                              <span className="badge badge-sm">{it.km} км</span>
+                              <span className="badge badge-sm">клас {it.tripClass}</span>
+                            </span>
+                          </div>
+                        </div>
+                        <div className="approval-row">
+                          <div className="approval-row-main">
+                            <span className="approval-row-name">💸 Доплата за виїзд</span>
+                            <span className="approval-nums">
+                              <span className="badge badge-sm">{it.roadAllowance.perPerson} грн/особу</span>
+                              <span className="badge badge-sm ok">{it.roadAllowance.total} грн</span>
+                            </span>
+                          </div>
+                        </div>
+                        <div className="approval-row">
+                          <div className="approval-row-main">
+                            <span className="approval-row-name">💰 Фонд робіт (обсяг × тариф)</span>
+                            <span className="approval-nums">
+                              <span className="badge badge-sm ok">{Math.round(fund * 100) / 100} грн</span>
+                            </span>
+                          </div>
+                        </div>
                       </div>
-                      <div className="cell" style={{ cursor: "default" }}>
-                        <span className="cell-title">💸 Доплата за виїзд</span>
-                        <span className="cell-sub">
-                          {it.roadAllowance.perPerson} грн/особу · разом {it.roadAllowance.total} грн
-                        </span>
+                      <div className="hint" style={{ marginTop: 6 }}>
+                        Доплата за виїзд у фонд не входить — вона рахується окремо, від кілометрів.
                       </div>
-                      <div className="cell" style={{ cursor: "default" }}>
-                        <span className="cell-title">💰 Фонд робіт за день</span>
-                        <span className="badge ok">{Math.round(fund * 100) / 100} грн</span>
-                      </div>
-                    </div>
-                    <div className="hint" style={{ marginBottom: 10 }}>
-                      Фонд робіт — це сума всіх робіт на обʼєктах (обсяг × тариф). З нього нараховують людям; доплата за виїзд рахується
-                      окремо, від кілометрів.
                     </div>
 
                     {/* No separate roster: an admin approving money needs to
