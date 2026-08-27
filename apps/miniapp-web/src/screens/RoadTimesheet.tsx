@@ -3874,25 +3874,12 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         <span className="cell-title">🔄 Перенести людей на інший обʼєкт</span>
                       </button>
                     )}
-                    {/* Only when it is actually needed: work is under way at
-                        this object, yet somebody standing here has no time
-                        recorded at all -- the forgotten-timer case. In the
-                        normal case it was just another row to scroll past,
-                        but it is the only way to rescue a person's pay, so
-                        it must not disappear entirely. */}
-                    {carPresent && plan.sessions.length > 0 && plan.here.some((id) => hoursAtObject(plan, id) <= 0) && (
-                      <button
-                        className="cell"
-                        onClick={() => {
-                          setManualHoursEmployeeId(null);
-                          setManualHoursBuffer("");
-                          setShowManualHours(true);
-                        }}
-                      >
-                        <span className="cell-title">🕒 Ввести години вручну</span>
-                        <span className="cell-sub">хтось без годин</span>
-                      </button>
-                    )}
+                    {/* No manual-hours entry here on purpose: hours get
+                        corrected on the way back, once the work is finished
+                        and it is clear whose timer never ran. The editor
+                        itself (showManualHours below) stays wired -- it is
+                        per-object and this screen already knows the object;
+                        the return steps open it. */}
                     {carPresent && !openErrand && (
                       <button
                         className="cell"
