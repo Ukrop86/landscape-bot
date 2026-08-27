@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type Employee, type SalaryPack } from "../lib/api";
 import { confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
-import { employeeRole, initials, roleAccent } from "../lib/employee";
+import { employeeRole } from "../lib/employee";
 import { BackRow } from "../components/BackRow";
 
 type PendingObject = {
@@ -172,58 +172,83 @@ export function Approval({
                       <span>💸 {it.roadAllowance.perPerson} грн/особу</span>
                     </div>
 
-                    <div className="hint" style={{ fontWeight: 600, marginBottom: 4 }}>
-                      👥 Люди ({it.employeeIds.length})
-                    </div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-                      {it.employeeIds.map((id) => {
-                        const emp = employeeById.get(id);
-                        return (
-                          <span key={id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <span
-                              className={`avatar-circle ${roleAccent(emp ? employeeRole(emp) : "робітник")}`}
-                              style={{ width: 22, height: 22, fontSize: 9 }}
-                            >
-                              {initials(emp?.name ?? id)}
-                            </span>
-                            <span className="hint">{emp?.name ?? id}</span>
-                            {it.selfTransportIds.includes(id) && <span className="badge">🚶 без доплати</span>}
-                          </span>
-                        );
-                      })}
-                    </div>
-
+                    {/* No separate roster: an admin approving money needs to
+                        see each person against the object whose fund pays
+                        them, with the hours and coefficient behind the
+                        figure -- a list of names above it answered nothing. */}
                     <div className="hint" style={{ fontWeight: 600, marginBottom: 4 }}>
                       📍 Обʼєкти та нарахування
                     </div>
                     {it.objects.map((o) => {
                       const pack = it.salaryPacks.find((p) => p.objectId === o.objectId);
                       return (
-                        <div key={o.objectId} style={{ marginBottom: 10 }}>
-                          <div style={{ fontWeight: 600 }}>
-                            {o.objectName} {pack ? `— ${pack.objectTotal} грн` : ""}
+                        <div key={o.objectId} style={{ marginBottom: 14 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                            <span style={{ fontWeight: 600 }}>{o.objectName}</span>
+                            {pack && <span className="badge ok">{pack.objectTotal} грн</span>}
                           </div>
-                          {o.works.map((w) => (
-                            <div key={w.workId} className="hint">
-                              {w.workName}
-                              {w.volume && w.volume !== "?" ? `: ${w.volume}${w.unit ? ` ${w.unit}` : ""}` : ""}
-                              {/* Робота без призначення ділиться всією бригадою --
-                                  показуємо лише виняток, щоб не засмічувати список. */}
-                              {w.employeeIds?.length
-                                ? ` · 👤 ${w.employeeIds.map((id) => employeeById.get(id)?.name ?? id).join(", ")}`
-                                : ""}
+
+                          <div className="list" style={{ margin: "6px 0 0" }}>
+                            {o.works.map((w) => (
+                              <div key={w.workId} className="cell" style={{ cursor: "default", display: "block" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                                  <span className="cell-title">{w.workName}</span>
+                                  {w.volume && w.volume !== "?" ? (
+                                    <span className="badge ok">
+                                      {w.volume}
+                                      {w.unit ? ` ${w.unit}` : ""}
+                                    </span>
+                                  ) : (
+                                    <span className="badge warn">без обсягу</span>
+                                  )}
+                                </div>
+                                {/* Робота без призначення ділиться всією бригадою --
+                                    показуємо лише виняток, щоб не засмічувати список. */}
+                                {!!w.employeeIds?.length && (
+                                  <div className="hint" style={{ marginTop: 4 }}>
+                                    👤 окремо: {w.employeeIds.map((id) => employeeById.get(id)?.name ?? id).join(", ")}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+
+                          {!!pack?.rows.length && (
+                            <div className="list" style={{ margin: "6px 0 0" }}>
+                              {pack.rows.map((r) => {
+                                const emp = employeeById.get(r.employeeId);
+                                const role = emp ? employeeRole(emp) : "робітник";
+                                return (
+                                  <div key={r.employeeId} className="cell" style={{ cursor: "default" }}>
+                                    <span className="cell-title">
+                                      {r.employeeName}
+                                      {role !== "робітник" && (
+                                        <span className="role-tag" style={{ marginLeft: 6 }}>
+                                          {role}
+                                        </span>
+                                      )}
+                                      {it.selfTransportIds.includes(r.employeeId) && (
+                                        <span className="badge" style={{ marginLeft: 6 }}>
+                                          🚶 без доплати
+                                        </span>
+                                      )}
+                                    </span>
+                                    <span style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                                      <span className={`badge ${r.hours > 0 ? "" : "danger"}`}>{r.hours} год</span>
+                                      {r.coefTotal !== 1 && <span className="badge warn">к: {r.coefTotal}</span>}
+                                      <span className="badge ok">{r.pay} грн</span>
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                              {pack.companyPay > 0 && (
+                                <div className="cell" style={{ cursor: "default" }}>
+                                  <span className="cell-title">🏢 Фірма</span>
+                                  <span className="badge">{pack.companyPay} грн</span>
+                                </div>
+                              )}
                             </div>
-                          ))}
-                          {/* Hours are what decide who is in the split at all,
-                              so an admin checking a payout needs them next to
-                              the money, not only the money. */}
-                          {pack?.rows.map((r) => (
-                            <div key={r.employeeId} className="hint">
-                              {r.employeeName}: {r.hours > 0 ? `${r.hours} год · ` : ""}
-                              {r.pay} грн
-                            </div>
-                          ))}
-                          {pack && pack.companyPay > 0 && <div className="hint">🏢 Фірма: {pack.companyPay} грн</div>}
+                          )}
                         </div>
                       );
                     })}
