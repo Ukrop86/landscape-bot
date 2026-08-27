@@ -4409,7 +4409,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       ? "✅ Готово"
                       : nextUnvisited
                         ? "➡️ Продовжити маршрут"
-                        : "🏁 Повертатись на базу"
+                        : "🏁 Завершити роботи й повернутись"
                   }
                   onClick={() => {
                     // Last object done: go STRAIGHT to the return-to-base
@@ -4469,6 +4469,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         className="chip selected"
                         style={{ width: "100%" }}
                         onClick={() => {
+                          // Stops the driving clock: loading people can take a
+                          // while, and that is not time on the road.
                           pauseDrivingSegment();
                           setCarAtObjectId(headingTo.objectId);
                           setHeadingToObjectId("");
@@ -4563,21 +4565,24 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                     );
                   })}
                 </div>
-                {!driving && !anyPending && (
-                  <div style={{ padding: "0 16px 10px" }}>
-                    <button className="chip selected" style={{ width: "100%" }} onClick={resumeDrivingSegment}>
-                      ▶️ Рушили на базу
-                    </button>
+                {anyPending && (
+                  <div className="hint" style={{ padding: "0 16px 10px", textAlign: "center" }}>
+                    Заберіть усіх з обʼєктів — тоді зʼявиться кнопка повернення на базу.
                   </div>
                 )}
-                <MainButton
-                  text="🏁 Приїхали на базу"
-                  onClick={() => {
-                    pauseDrivingSegment();
-                    setStep("RETURN");
-                  }}
-                  disabled={anyPending}
-                />
+                {/* Nobody left standing anywhere: first the drive home starts
+                    (the clock was paused while the bus was being loaded), then
+                    it ends. One button slot, two honest taps. */}
+                {!anyPending && !driving && <MainButton text="▶️ Рушили на базу" onClick={resumeDrivingSegment} />}
+                {!anyPending && driving && (
+                  <MainButton
+                    text="🏁 Приїхали на базу"
+                    onClick={() => {
+                      pauseDrivingSegment();
+                      setStep("RETURN");
+                    }}
+                  />
+                )}
               </>
             );
           })()}
