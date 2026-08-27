@@ -179,7 +179,7 @@ export function Logistics({ onBack, onSaved }: { onBack: () => void; onSaved: ()
 
   return (
     <div>
-      <BackRow onBack={goBack} />
+      <BackRow onBack={goBack} onHome={onBack} />
       <div className="header">
         <h1>🚚 Логістика</h1>
         <div className="hint">{todayISO()}</div>

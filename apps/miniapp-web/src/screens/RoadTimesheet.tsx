@@ -2240,7 +2240,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     const returned = !!dayStatus?.returned && pendingTrips.length > 0;
     return (
       <div>
-        <BackRow onBack={goBack} />
+        <BackRow onBack={goBack} onHome={onBack} />
         <div className="header">
           <h1>
             {returned
@@ -2311,7 +2311,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   if (dayStatus === null) {
     return (
       <div>
-        <BackRow onBack={onBack} />
+        <BackRow onBack={onBack} onHome={onBack} />
         <div className="header">
           <h1>🚗 Дорожній табель</h1>
         </div>
@@ -2344,7 +2344,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
   return (
     <div>
-      <BackRow onBack={goBack} />
+      <BackRow onBack={goBack} onHome={onBack} />
       <div className="header">
         <h1>🚗 Дорожній табель</h1>
       </div>
@@ -4473,27 +4473,9 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 <div className="hint" style={{ textAlign: "center" }}>лише час у дорозі — на об'єктах не рахується</div>
 
                 {driving && headingTo && (
-                  <>
-                    <div className="hint" style={{ textAlign: "center", padding: "6px 16px 0" }}>
-                      Прямуємо до 📍 {headingTo.objectName}
-                    </div>
-                    <div style={{ padding: "8px 16px" }}>
-                      <button
-                        className="chip selected"
-                        style={{ width: "100%" }}
-                        onClick={() => {
-                          // Stops the driving clock: loading people can take a
-                          // while, and that is not time on the road.
-                          pauseDrivingSegment();
-                          setCarAtObjectId(headingTo.objectId);
-                          setHeadingToObjectId("");
-                          haptic("medium");
-                        }}
-                      >
-                        📍 Прибув: {headingTo.objectName}
-                      </button>
-                    </div>
-                  </>
+                  <div className="hint" style={{ textAlign: "center", padding: "6px 16px 0" }}>
+                    Прямуємо до 📍 {headingTo.objectName}
+                  </div>
                 )}
 
                 {!driving && parkedAt && parkedAt.here.length > 0 && (
@@ -4503,26 +4485,29 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                   </>
                 )}
 
+                {/* Highlighted, because after boarding the people at this
+                    object the screen otherwise looks finished -- and the next
+                    object still has a crew standing on it. */}
                 {!driving && stillToCollect.length > 0 && (
-                  <>
-                    <div className="section-title">Їхати забирати далі</div>
-                    <div className="list">
-                      {stillToCollect.map((p) => (
-                        <button
-                          key={p.objectId}
-                          className="cell"
-                          onClick={() => {
-                            setHeadingToObjectId(p.objectId);
-                            resumeDrivingSegment();
-                            haptic("selection");
-                          }}
-                        >
-                          <span className="cell-title">🚗 Їхати на 📍 {p.objectName}</span>
-                          <span className="badge warn">👤 {p.here.length}</span>
-                        </button>
-                      ))}
+                  <div className="suggestion-card">
+                    <div className="cell-title" style={{ marginBottom: 6 }}>
+                      🚗 Ще є люди на інших обʼєктах
                     </div>
-                  </>
+                    {stillToCollect.map((p) => (
+                      <button
+                        key={p.objectId}
+                        className="chip selected"
+                        style={{ width: "100%", marginTop: 6, textAlign: "left" }}
+                        onClick={() => {
+                          setHeadingToObjectId(p.objectId);
+                          resumeDrivingSegment();
+                          haptic("selection");
+                        }}
+                      >
+                        Їхати на 📍 {p.objectName} · 👤 {p.here.length}
+                      </button>
+                    ))}
+                  </div>
                 )}
 
                 <div className="section-title">Усі обʼєкти</div>
@@ -4578,16 +4563,38 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                     );
                   })}
                 </div>
-                {anyPending && (
+                {anyPending && !driving && !(parkedAt && parkedAt.here.length) && (
                   <div className="hint" style={{ padding: "0 16px 10px", textAlign: "center" }}>
-                    Заберіть усіх з обʼєктів — тоді зʼявиться кнопка повернення на базу.
+                    Оберіть обʼєкт вище — поїдемо забирати решту.
                   </div>
                 )}
-                {/* Nobody left standing anywhere: first the drive home starts
-                    (the clock was paused while the bus was being loaded), then
-                    it ends. One button slot, two honest taps. */}
-                {!anyPending && !driving && <MainButton text="▶️ Рушили на базу" onClick={resumeDrivingSegment} />}
-                {!anyPending && driving && (
+
+                {/* One slot, following the car: arrive where we are heading,
+                    board everyone where we are parked, then set off for base
+                    and arrive. The clock is paused while the bus is loaded, so
+                    "рушили" and "приїхали" are two honest taps, not one. */}
+                {driving && headingTo ? (
+                  <MainButton
+                    text={`📍 Прибув: ${headingTo.objectName}`}
+                    onClick={() => {
+                      // Stops the driving clock: loading people can take a
+                      // while, and that is not time on the road.
+                      pauseDrivingSegment();
+                      setCarAtObjectId(headingTo.objectId);
+                      setHeadingToObjectId("");
+                      haptic("medium");
+                    }}
+                  />
+                ) : !driving && parkedAt && parkedAt.here.length > 0 ? (
+                  <MainButton
+                    text={`🚐 Посадити всіх у бус (${parkedAt.here.length})`}
+                    onClick={async () => {
+                      await pickUpHere(parkedAt.objectId, parkedAt.here, false);
+                    }}
+                  />
+                ) : !anyPending && !driving ? (
+                  <MainButton text="▶️ Рушили на базу" onClick={resumeDrivingSegment} />
+                ) : !anyPending && driving ? (
                   <MainButton
                     text="🏁 Приїхали на базу"
                     onClick={() => {
@@ -4595,7 +4602,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       setStep("RETURN");
                     }}
                   />
-                )}
+                ) : null}
               </>
             );
           })()}
