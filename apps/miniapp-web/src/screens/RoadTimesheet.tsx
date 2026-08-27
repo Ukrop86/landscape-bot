@@ -70,6 +70,11 @@ type ObjPlan = {
   here: string[]; // physically dropped off at this object right now
   sessions: EmployeeSession[];
   visited: boolean; // reached (formally, or via a quick drop-off during the drive)
+  // Reached, and deliberately left without anybody working there. Arriving and
+  // driving on with the crew still in the bus is almost always a mis-tap, so
+  // by default such an object stays unfinished and the route keeps offering
+  // it; this flag is how a foreman says "we really did just look and leave".
+  noWork?: boolean;
   notes: string;
   photoUrls: string[];
 };
@@ -218,6 +223,7 @@ function normalizeDraftPlan(raw: unknown): ObjPlan {
     here: p.here ?? [],
     sessions,
     visited: p.visited ?? false,
+    noWork: p.noWork ?? false,
     notes: p.notes ?? "",
     photoUrls: p.photoUrls ?? [],
   };
@@ -1491,7 +1497,12 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     setCarAtObjectId("");
   }
 
-  const nextUnvisited = plans.find((p) => !p.visited) ?? null;
+  // "Done with this object" is not the same as "arrived at it". Arriving and
+  // driving on without dropping anybody leaves nothing recorded there, yet the
+  // route counted it as finished -- the object fell out of the destination
+  // chooser and there was no way back to start work on it.
+  const objectUnfinished = (p: ObjPlan) => !p.visited || (!p.noWork && !p.sessions.length && !p.here.length);
+  const nextUnvisited = plans.find(objectUnfinished) ?? null;
   // The chosen destination, but only while it is still ahead of us: an object
   // that got visited (or dropped from the route) must not keep steering the
   // drive screen.
@@ -3330,9 +3341,19 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 }}
               >
                 <span className="cell-title">
-                  {p.visited ? "✅" : "📍"} {p.objectName}
+                  {p.noWork ? "⏭" : p.visited ? "✅" : "📍"} {p.objectName}
                 </span>
-                <span className="badge">{p.visited ? "вже були" : p.works.length ? nWorks(p.works.length) : "не обрано"}</span>
+                <span className="badge">
+                  {p.noWork
+                    ? "без робіт"
+                    : p.visited && (p.sessions.length || p.here.length)
+                      ? "вже були"
+                      : p.visited
+                        ? "були, не працювали"
+                        : p.works.length
+                          ? nWorks(p.works.length)
+                          : "не обрано"}
+                </span>
               </button>
             ))}
           </div>
@@ -4425,7 +4446,24 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                         ? "➡️ Продовжити маршрут"
                         : "🏁 Завершити роботи й повернутись"
                   }
-                  onClick={() => {
+                  onClick={async () => {
+                    // Nobody dropped here and nothing started: almost always a
+                    // mis-tap on the way past, and leaving now means the object
+                    // can never be worked. Confirming records the day's truth
+                    // -- we were there, no work was done -- and only then does
+                    // the object stop asking to be returned to.
+                    if (atObjectReturnStep === "DRIVE" && !plan.here.length && !plan.sessions.length && !plan.noWork) {
+                      const ok = await confirmDialog(
+                        `На «${plan.objectName}» нікого не висаджено і роботи не починались.\n\n` +
+                          `Щоб тут працювали — спочатку висадіть людей.\n\n` +
+                          `Поїхати далі попри це? У звіті буде: були на обʼєкті, роботи не виконувались.`,
+                      );
+                      if (!ok) return;
+                      setPlans((prev) => prev.map((x) => (x.objectId === plan.objectId ? { ...x, noWork: true } : x)));
+                      logChange(`${plan.objectName}: були, роботи не виконувались`);
+                      setStep("DRIVE");
+                      return;
+                    }
                     // Last object done: go STRAIGHT to the return-to-base
                     // pickup list instead of dropping back onto the DRIVE
                     // screen, which showed a second, identically-labelled
@@ -4928,6 +4966,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                   </div>
                   {expanded && (
                     <div style={{ padding: "4px 16px 12px" }}>
+                      {p.noWork && (
+                        <div className="hint" style={{ color: "#b06a00", marginBottom: 6 }}>
+                          ⚠️ Були на обʼєкті, роботи не виконувались
+                        </div>
+                      )}
                       <div className="hint" style={{ fontWeight: 600 }}>🛠 Роботи</div>
                       {p.works.length ? (
                         <ul className="bullets">
