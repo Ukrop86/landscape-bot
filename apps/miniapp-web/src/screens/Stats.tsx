@@ -81,7 +81,7 @@ export function Stats({ onBack, isAdmin }: { onBack: () => void; isAdmin?: boole
 
   return (
     <div>
-      <BackRow onBack={onBack} />
+      <BackRow onBack={onBack} onHome={onBack} />
       <div className="header">
         <h1>📊 Статистика</h1>
         <div className="hint">
@@ -128,170 +128,252 @@ export function Stats({ onBack, isAdmin }: { onBack: () => void; isAdmin?: boole
         </div>
       )}
 
+      {/* Same shape as the approval report: a card per row, and inside it
+          labelled blocks whose figures line up in one right-hand column. The
+          tabs used to be runs of grey text where a name, an hour count and a
+          sum all looked the same. */}
       {data && !loading && (
         <>
           {tab === "objects" && (
             <>
               {!data.byObject.length && <div className="empty-state">Немає даних за цей період</div>}
-              <div className="list">
-                {data.byObject.map((o) => {
-                  const expanded = expandedId === o.objectId;
-                  return (
-                    <div key={o.objectId}>
-                      <button className="cell" onClick={() => setExpandedId(expanded ? null : o.objectId)}>
-                        <span className="cell-title">
-                          {expanded ? "▾" : "▸"} 📍 {o.objectName}
-                        </span>
-                        <span className="badge ok">{data.moneyApproved ? `${o.totalFund} ₴` : "🔒 •••"}</span>
-                      </button>
-                      {expanded && (
-                        <div style={{ padding: "4px 16px 12px" }}>
-                          <div className="hint" style={{ fontWeight: 600 }}>
-                            🛠 Роботи
-                          </div>
+              {data.byObject.map((o) => {
+                const expanded = expandedId === o.objectId;
+                return (
+                  <div key={o.objectId} className={`approval-card ${expanded ? "open" : ""}`}>
+                    <button className="cell" onClick={() => setExpandedId(expanded ? null : o.objectId)}>
+                      <span className="cell-title">
+                        {expanded ? "▾" : "▸"} {o.objectName}
+                      </span>
+                      <span className="badge ok">{data.moneyApproved ? `${o.totalFund} ₴` : "🔒 •••"}</span>
+                    </button>
+                    {expanded && (
+                      <div style={{ padding: "0 12px 12px" }}>
+                        <div className="approval-object">
+                          <div className="approval-sub">🛠 Роботи</div>
                           {o.works.length ? (
-                            o.works.map((w, i) => (
-                              <div key={i} className="hint" style={{ marginBottom: 4 }}>
-                                {w.workName}: {w.totalVolume} {w.unit}
-                                {w.employeeNames.length ? ` — ${w.employeeNames.join(", ")}` : ""}
-                              </div>
-                            ))
+                            <div className="approval-rows">
+                              {o.works.map((w, i) => (
+                                <div key={i} className="approval-row">
+                                  <div className="approval-row-main">
+                                    <span className="approval-row-name wrap">{w.workName}</span>
+                                    <span className="badge badge-sm ok">
+                                      {w.totalVolume} {w.unit}
+                                    </span>
+                                  </div>
+                                  {!!w.employeeNames.length && (
+                                    <div className="hint" style={{ marginTop: 2 }}>
+                                      👤 окремо: {w.employeeNames.join(", ")}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
                           ) : (
                             <div className="hint">Немає робіт</div>
                           )}
-                          <div className="hint" style={{ fontWeight: 600, marginTop: 8 }}>
-                            👥 Люди та нарахування
-                          </div>
+
+                          <div className="approval-sub">👥 Люди та нарахування</div>
                           {!data.moneyApproved ? (
                             <div className="hint">🔒 Буде видно після затвердження адміністратором</div>
                           ) : o.employees.length ? (
-                            o.employees.map((e, i) => (
-                              <div key={i} className="hint" style={{ marginBottom: 4 }}>
-                                {e.employeeName}: {e.hours} год · {e.pay} ₴
-                              </div>
-                            ))
+                            <div className="approval-rows">
+                              {o.employees.map((e, i) => (
+                                <div key={i} className="approval-row">
+                                  <div className="approval-row-main">
+                                    <span className="approval-row-name">{e.employeeName}</span>
+                                    <span className="approval-nums">
+                                      <span className="badge badge-sm">{e.hours} год</span>
+                                      <span className="badge badge-sm ok">{e.pay} ₴</span>
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
                           ) : (
                             <div className="hint">Немає даних</div>
                           )}
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </>
           )}
 
           {tab === "employees" && (
             <>
               {!data.byEmployee.length && <div className="empty-state">Немає даних за цей період</div>}
-              <div className="list">
-                {data.byEmployee.map((e) => {
-                  const expanded = expandedId === e.employeeId;
-                  return (
-                    <div key={e.employeeId}>
-                      <button className="cell" onClick={() => setExpandedId(expanded ? null : e.employeeId)}>
-                        <span className="cell-title">
-                          {expanded ? "▾" : "▸"} {e.employeeName}
-                        </span>
-                        <span className="cell-sub">
-                          {e.totalHours} год · {data.moneyApproved ? `${e.totalPay} ₴` : "🔒 •••"}
-                        </span>
-                      </button>
-                      {expanded && (
-                        <div style={{ padding: "4px 16px 12px" }}>
-                          {e.roadAllowance > 0 && (
-                            <div className="hint" style={{ marginBottom: 6 }}>
-                              💸 Доплата за виїзд: {data.moneyApproved ? `${e.roadAllowance} ₴` : "🔒 •••"}
-                            </div>
-                          )}
-                          <div className="hint" style={{ fontWeight: 600 }}>
-                            📍 Обʼєкти
-                          </div>
+              {data.byEmployee.map((e) => {
+                const expanded = expandedId === e.employeeId;
+                return (
+                  <div key={e.employeeId} className={`approval-card ${expanded ? "open" : ""}`}>
+                    <button className="cell" onClick={() => setExpandedId(expanded ? null : e.employeeId)}>
+                      <span className="cell-title">
+                        {expanded ? "▾" : "▸"} {e.employeeName}
+                      </span>
+                      <span className="approval-nums">
+                        <span className="badge badge-sm">{e.totalHours} год</span>
+                        <span className="badge badge-sm ok">{data.moneyApproved ? `${e.totalPay} ₴` : "🔒 •••"}</span>
+                      </span>
+                    </button>
+                    {expanded && (
+                      <div style={{ padding: "0 12px 12px" }}>
+                        <div className="approval-object">
+                          <div className="approval-sub">📍 Обʼєкти</div>
                           {e.objects.length ? (
-                            e.objects.map((o) => (
-                              <div key={o.objectId} className="hint" style={{ marginBottom: 4 }}>
-                                {o.objectName}: {o.hours} год · {data.moneyApproved ? `${o.pay} ₴` : "🔒 •••"}
-                              </div>
-                            ))
+                            <div className="approval-rows">
+                              {e.objects.map((o) => (
+                                <div key={o.objectId} className="approval-row">
+                                  <div className="approval-row-main">
+                                    <span className="approval-row-name">{o.objectName}</span>
+                                    <span className="approval-nums">
+                                      <span className="badge badge-sm">{o.hours} год</span>
+                                      <span className="badge badge-sm ok">{data.moneyApproved ? `${o.pay} ₴` : "🔒 •••"}</span>
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                              {e.roadAllowance > 0 && (
+                                <div className="approval-row">
+                                  <div className="approval-row-main">
+                                    <span className="approval-row-name">💸 Доплата за виїзд</span>
+                                    <span className="approval-nums">
+                                      <span className="badge badge-sm ok">{data.moneyApproved ? `${e.roadAllowance} ₴` : "🔒 •••"}</span>
+                                    </span>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           ) : (
                             <div className="hint">Без обʼєктів (лише доплата за виїзд)</div>
                           )}
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </>
           )}
 
           {tab === "foremen" && (
             <>
               {!data.byForeman.length && <div className="empty-state">Немає даних за цей період</div>}
-              <div className="list">
-                {data.byForeman.map((f) => {
-                  const expanded = expandedId === f.foremanTgId;
-                  const pending = f.days - f.approvedDays;
-                  return (
-                    <div key={f.foremanTgId}>
-                      <button className="cell" onClick={() => setExpandedId(expanded ? null : f.foremanTgId)}>
-                        <span className="cell-title">
-                          {expanded ? "▾" : "▸"} 🧑‍🔧 {f.foremanName}
-                        </span>
-                        <span className="badge ok">{data.moneyApproved ? `${f.totalFund} ₴` : "🔒 •••"}</span>
-                      </button>
-                      {expanded && (
-                        <div style={{ padding: "4px 16px 12px" }}>
-                          <div className="hint" style={{ marginBottom: 8 }}>
-                            📅 Днів: {f.days}
-                            {pending > 0 ? ` (${pending} без затвердження)` : ""}
-                            <br />🚗 {f.totalKm} км · 📍 обʼєктів: {f.objectsCount} · 👥 людей: {f.crewCount}
-                          </div>
-                          {f.dayList.map((d) => (
-                            <div key={d.date} className="hint" style={{ marginBottom: 8 }}>
-                              <b>{d.date}</b> {d.approved ? "✅" : "⏳"} — {d.km} км · {data.moneyApproved ? `${d.fund} ₴` : "🔒 •••"} · 👥 {d.crewCount}
-                              <br />📍 {d.objectNames.join(", ") || "—"}
+              {data.byForeman.map((f) => {
+                const expanded = expandedId === f.foremanTgId;
+                const pending = f.days - f.approvedDays;
+                return (
+                  <div key={f.foremanTgId} className={`approval-card ${expanded ? "open" : ""}`}>
+                    <button className="cell" onClick={() => setExpandedId(expanded ? null : f.foremanTgId)}>
+                      <span className="cell-title">
+                        {expanded ? "▾" : "▸"} {f.foremanName}
+                      </span>
+                      <span className="badge ok">{data.moneyApproved ? `${f.totalFund} ₴` : "🔒 •••"}</span>
+                    </button>
+                    {expanded && (
+                      <div style={{ padding: "0 12px 12px" }}>
+                        <div className="approval-object">
+                          <div className="approval-sub">Разом за період</div>
+                          <div className="approval-rows">
+                            <div className="approval-row">
+                              <div className="approval-row-main">
+                                <span className="approval-row-name">📅 Днів</span>
+                                <span className="approval-nums">
+                                  <span className="badge badge-sm">{f.days}</span>
+                                  {pending > 0 && <span className="badge badge-sm warn">{pending} без затвердження</span>}
+                                </span>
+                              </div>
                             </div>
-                          ))}
+                            <div className="approval-row">
+                              <div className="approval-row-main">
+                                <span className="approval-row-name">🚗 Пробіг</span>
+                                <span className="approval-nums">
+                                  <span className="badge badge-sm">{f.totalKm} км</span>
+                                </span>
+                              </div>
+                            </div>
+                            <div className="approval-row">
+                              <div className="approval-row-main">
+                                <span className="approval-row-name">📍 Обʼєктів · 👥 людей</span>
+                                <span className="approval-nums">
+                                  <span className="badge badge-sm">{f.objectsCount}</span>
+                                  <span className="badge badge-sm">{f.crewCount}</span>
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="approval-sub">📅 По днях</div>
+                          <div className="approval-rows">
+                            {f.dayList.map((d) => (
+                              <div key={d.date} className="approval-row">
+                                <div className="approval-row-main">
+                                  <span className="approval-row-name">
+                                    {d.approved ? "✅" : "⏳"} {d.date}
+                                  </span>
+                                  <span className="approval-nums">
+                                    <span className="badge badge-sm">{d.km} км</span>
+                                    <span className="badge badge-sm">👥 {d.crewCount}</span>
+                                    <span className="badge badge-sm ok">{data.moneyApproved ? `${d.fund} ₴` : "🔒 •••"}</span>
+                                  </span>
+                                </div>
+                                <div className="hint" style={{ marginTop: 2 }}>
+                                  📍 {d.objectNames.join(", ") || "—"}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </>
           )}
 
           {tab === "cars" && (
             <>
               {!data.byCar.length && <div className="empty-state">Немає даних за цей період</div>}
-              <div className="list">
-                {data.byCar.map((c) => {
-                  const expanded = expandedId === c.carId;
-                  return (
-                    <div key={c.carId}>
-                      <button className="cell" onClick={() => setExpandedId(expanded ? null : c.carId)}>
-                        <span className="cell-title">
-                          {expanded ? "▾" : "▸"} 🚙 {c.carName}
-                        </span>
-                        <span className="badge">{c.totalKm} км</span>
-                      </button>
-                      {expanded && (
-                        <div style={{ padding: "4px 16px 12px" }}>
-                          {c.days.map((d, i) => (
-                            <div key={i} className="hint" style={{ marginBottom: 8 }}>
-                              <b>{d.date}</b> — {d.km} км · клас {d.tripClass || "—"}
-                              <br />👥 {d.riderNames.join(", ") || "—"}
-                              <br />📍 {d.objectNames.join(", ") || "—"}
-                            </div>
-                          ))}
+              {data.byCar.map((c) => {
+                const expanded = expandedId === c.carId;
+                return (
+                  <div key={c.carId} className={`approval-card ${expanded ? "open" : ""}`}>
+                    <button className="cell" onClick={() => setExpandedId(expanded ? null : c.carId)}>
+                      <span className="cell-title">
+                        {expanded ? "▾" : "▸"} {c.carName}
+                      </span>
+                      <span className="badge">{c.totalKm} км</span>
+                    </button>
+                    {expanded && (
+                      <div style={{ padding: "0 12px 12px" }}>
+                        <div className="approval-object">
+                          <div className="approval-sub">📅 По днях</div>
+                          <div className="approval-rows">
+                            {c.days.map((d, i) => (
+                              <div key={i} className="approval-row">
+                                <div className="approval-row-main">
+                                  <span className="approval-row-name">{d.date}</span>
+                                  <span className="approval-nums">
+                                    <span className="badge badge-sm">{d.km} км</span>
+                                    <span className="badge badge-sm">клас {d.tripClass || "—"}</span>
+                                  </span>
+                                </div>
+                                <div className="hint" style={{ marginTop: 2 }}>
+                                  👥 {d.riderNames.join(", ") || "—"}
+                                </div>
+                                <div className="hint">📍 {d.objectNames.join(", ") || "—"}</div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </>
           )}
         </>
