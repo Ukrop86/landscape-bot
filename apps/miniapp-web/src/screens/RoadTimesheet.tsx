@@ -1892,17 +1892,23 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   }
 
   /**
-   * Corrects a wrong object, it does not record a transfer.
+   * Corrects a wrong object: the person leaves this crew and joins the one at
+   * the other object, as if they had been there all along.
    *
-   * This used to close the session at the source and open a new one at the
-   * target, which is what "worked here, then moved on" looks like: the hours
-   * stayed behind and the person showed up in BOTH objects' payroll. But the
-   * foreman reaches for this when they realise they dropped somebody at the
-   * wrong object -- that person was never here, so nothing of theirs may
-   * remain. Their sessions travel unchanged (a running one keeps running,
-   * closed ones keep their times), and any work here that named them loses
-   * the name; a work left with no names is shared by the crew again, which
-   * is the right fallback for a person who was not on this object at all.
+   * Two earlier readings of this action were both wrong. Closing the session
+   * here and opening a new one there is "worked here, then moved on" -- the
+   * hours stay behind and the person is paid out of both objects. Carrying
+   * their own session over is closer, but still dates their work from
+   * whenever the foreman happened to notice the mistake.
+   *
+   * What actually happened is that they were on the other object from the
+   * start, so they get the crew's hours there, not their own: the session
+   * spans the same window as everybody else's at that object, whenever the
+   * correction is made. Nothing of theirs stays behind -- not the sessions,
+   * and not their name on any work here (a work left with no names is the
+   * crew's again, which is right for someone who was never on this object).
+   * At the new object they need no assignment either: the crew's shared works
+   * are theirs by being in the crew.
    */
   function confirmMove() {
     if (!atObjectId || !moveTargetId || !moveSelected.length) return;
@@ -1910,7 +1916,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     const toName = plans.find((p) => p.objectId === moveTargetId)?.objectName ?? "";
     const count = moveSelected.length;
     const moving = new Set(moveSelected);
-    const carried = (plans.find((p) => p.objectId === atObjectId)?.sessions ?? []).filter((s) => moving.has(s.employeeId));
     moveEmployeesTo(moveSelected, { kind: "object", objectId: moveTargetId });
     setPlans((prev) =>
       prev.map((p) => {
@@ -1926,7 +1931,18 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
           };
         }
         if (p.objectId === moveTargetId) {
-          return { ...p, sessions: [...p.sessions, ...carried] };
+          // The crew already at the target defines the window. If nobody has
+          // started there yet, the newcomers simply wait to be started with
+          // everyone else -- no session is invented for them.
+          const crew = p.sessions.filter((s) => !moving.has(s.employeeId));
+          if (!crew.length) return { ...p, sessions: crew };
+          const startedAt = new Date(Math.min(...crew.map((s) => new Date(s.startedAt).getTime()))).toISOString();
+          const stillWorking = crew.some((s) => !s.endedAt);
+          const endedAt = stillWorking
+            ? undefined
+            : new Date(Math.max(...crew.map((s) => new Date(s.endedAt as string).getTime()))).toISOString();
+          const joined = moveSelected.map((employeeId) => ({ employeeId, startedAt, ...(endedAt ? { endedAt } : {}) }));
+          return { ...p, sessions: [...crew, ...joined] };
         }
         return p;
       }),
@@ -4190,8 +4206,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 {showMovePicker && (
                   <>
                     <div className="hint" style={{ padding: "0 16px 8px" }}>
-                      Перенесення = «я помилився обʼєктом». Години й закріплені роботи переїдуть разом з людиною — тут від неї не
-                      лишиться нічого.
+                      Перенесення = «я помилився обʼєктом». Тут від людини не лишиться нічого, а на новому обʼєкті їй зарахуються ті самі
+                      години й роботи, що й усій тамтешній бригаді — незалежно від того, коли ви це виправили.
                     </div>
                     <div className="section-title row">
                       <span>Кого перенести</span>
