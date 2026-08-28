@@ -58,11 +58,13 @@ export type ObjectSalaryPack = {
 };
 
 /**
- * Per-object payroll split. A brigadier who worked at this object takes 20%,
- * seniors split 10%, and the remainder (70%, or 90% with no brigadier here)
- * goes to the workers. If nobody senior worked there that 10% is not handed
- * to the workers instead -- it stays with the company (companyPay), exactly
- * like the bot's roleTotals.company.
+ * Per-object payroll split. The trip's brigadier takes 20% of every object's
+ * fund and the seniors split 10% of it, whether or not they worked at that
+ * particular object -- those cuts pay for running the day. The remainder
+ * (70%, or 90% when the trip has no brigadier at all) is the crew share,
+ * split EQUALLY between everyone with hours there, the brigadier and seniors
+ * included: if they worked, they worked. With no senior on the trip the 10%
+ * is not handed to the crew -- it stays with the company (companyPay).
  *
  * The worker remainder is split EQUALLY, not by hours. Works that name
  * specific people form their own pool each, so a job one person did alone
@@ -90,47 +92,35 @@ export function buildSalaryPacksWithRoles(params: {
   const seniorSet = new Set(seniorEmployeeIds.map(String));
 
   return objects.map((o) => {
-    const rowsSrc = o.rows
-      .filter((r) => r.hours > 0)
-      .map((r) => {
-        const hoursRounded = roundToQuarterHours(r.hours);
-        const coefTotal = Number(r.disciplineCoef) * Number(r.productivityCoef);
-        return { ...r, hoursRounded, coefTotal, points: Math.round(hoursRounded * coefTotal * 100) / 100 };
-      });
+    const all = o.rows.map((r) => {
+      const hoursRounded = roundToQuarterHours(r.hours);
+      const coefTotal = Number(r.disciplineCoef) * Number(r.productivityCoef);
+      return { ...r, hoursRounded, coefTotal, points: Math.round(hoursRounded * coefTotal * 100) / 100 };
+    });
+    // Hours decide who splits the crew share; the role cuts do not depend on
+    // them. A brigadier runs the day whether or not they picked up a spade at
+    // this particular object, so their 20% is owed either way -- the caller
+    // therefore passes a zero-hour row for them (and for the seniors) on every
+    // object, and that row is what makes hasBrigadier/hasSenior true here.
+    const worked = all.filter((r) => r.hours > 0);
 
-    const brigadierRows = rowsSrc.filter((r) => brigadierEmployeeId && r.employeeId === brigadierEmployeeId);
-    const seniorRows = rowsSrc.filter((r) => seniorSet.has(r.employeeId));
-    const hasBrigadier = brigadierRows.length > 0;
+    const isBrigadier = (id: string) => !!brigadierEmployeeId && id === brigadierEmployeeId;
+    const isSenior = (id: string) => seniorSet.has(id);
+
+    const brigadierRow = all.find((r) => isBrigadier(r.employeeId)) ?? null;
+    const seniorRows = all.filter((r) => isSenior(r.employeeId));
+    const hasBrigadier = !!brigadierRow;
     const hasSenior = seniorRows.length > 0;
 
+    // The crew share, and on top of it the role cuts. A brigadier or senior
+    // who DID work also takes an equal share of the crew pot -- they worked
+    // alongside everyone else, and the 20%/10% pays for running the day, not
+    // for the work itself.
     const workerPercent = hasBrigadier ? 0.7 : 0.9;
-    const brigadierPercent = hasBrigadier ? 0.2 : 0;
-    const seniorPercent = hasSenior ? 0.1 : 0;
+    const brigadierBonus = hasBrigadier ? o.objectTotal * 0.2 : 0;
+    const seniorBonusEach = hasSenior ? (o.objectTotal * 0.1) / seniorRows.length : 0;
     const companyPercent = hasSenior ? 0 : 0.1;
 
-    const workerRows = rowsSrc.filter((r) => {
-      if (hasBrigadier && r.employeeId === brigadierEmployeeId) return false;
-      if (hasSenior && seniorSet.has(r.employeeId)) return false;
-      return true;
-    });
-
-    // The brigadier's and the senior's cuts, and the company's, are always
-    // taken off the OBJECT's total, never off individual works -- assigning a
-    // work to one person changes who splits the worker share, not the shape
-    // of the object's split.
-    const brigadierOnePay = brigadierRows.length ? (o.objectTotal * brigadierPercent) / brigadierRows.length : 0;
-    const seniorOnePay = seniorRows.length ? (o.objectTotal * seniorPercent) / seniorRows.length : 0;
-
-    // The worker share (70%/90% of the object's total, after the cuts above)
-    // is split EQUALLY -- everyone in rowsSrc has hours > 0, so hours decide
-    // who is in a split, never how much of it each takes.
-    //
-    // Deliberately not proportional to hours: an object's fund is earned by
-    // the crew finishing the work there, and a stint recorded as 15 minutes
-    // (a timer started and stopped again, which happens constantly in the
-    // field) would otherwise collapse that person's pay to a rounding error
-    // while whoever's timer ran longest took nearly the whole pool.
-    //
     // Works assigned to specific people get their own pool each, split only
     // between those of them who were actually at the object; everything else
     // stays in one shared pool for the crew that did it. "One person drove
@@ -140,11 +130,11 @@ export function buildSalaryPacksWithRoles(params: {
     // An assignment naming nobody who was there is treated as unassigned
     // rather than dropped -- otherwise that work's money would silently
     // vanish from the object.
-    const dedicated: Array<{ value: number; workers: typeof workerRows }> = [];
+    const dedicated: Array<{ value: number; workers: typeof worked }> = [];
     for (const w of o.works ?? []) {
       const assigned = new Set(w.employeeIds ?? []);
       if (!assigned.size) continue;
-      const workers = workerRows.filter((r) => assigned.has(r.employeeId));
+      const workers = worked.filter((r) => assigned.has(r.employeeId));
       if (!workers.length) continue;
       dedicated.push({ value: Number(w.value) || 0, workers });
     }
@@ -153,18 +143,16 @@ export function buildSalaryPacksWithRoles(params: {
     // values don't quite sum to the total it passed.
     const sharedValue = Math.max(0, o.objectTotal - dedicated.reduce((a, d) => a + d.value, 0));
 
-    // Someone named on a work is paid for that work and nothing else: the
-    // shared share is for the crew that did the rest, and a person put on one
-    // job did not do those. Naming a work is therefore a decision about that
-    // person's whole day at this object, not just about one line of it.
+    // Someone named on a work is paid for that work and nothing else out of
+    // the crew pot: the shared share is for the crew that did the rest.
     const dedicatedIds = new Set<string>();
     for (const d of dedicated) for (const w of d.workers) dedicatedIds.add(w.employeeId);
 
     // ...unless that would leave nobody holding the unassigned works. Money
     // must never vanish from an object, so when every worker present has a
     // named work, the remainder falls back to all of them.
-    const sharedWorkers = workerRows.filter((r) => !dedicatedIds.has(r.employeeId));
-    const sharedPool = sharedWorkers.length ? sharedWorkers : workerRows;
+    const sharedWorkers = worked.filter((r) => !dedicatedIds.has(r.employeeId));
+    const sharedPool = sharedWorkers.length ? sharedWorkers : worked;
     const sharedIds = new Set(sharedPool.map((r) => r.employeeId));
     const sharedOnePay = sharedPool.length ? (sharedValue * workerPercent) / sharedPool.length : 0;
 
@@ -174,19 +162,16 @@ export function buildSalaryPacksWithRoles(params: {
       for (const w of d.workers) dedicatedPayByEmployee.set(w.employeeId, (dedicatedPayByEmployee.get(w.employeeId) ?? 0) + onePay);
     }
 
-    const rows: SalaryRow[] = rowsSrc.map((r) => {
-      let pay = 0;
-      if (hasBrigadier && r.employeeId === brigadierEmployeeId) pay = brigadierOnePay;
-      else if (hasSenior && seniorSet.has(r.employeeId)) pay = seniorOnePay;
-      else pay = (sharedIds.has(r.employeeId) ? sharedOnePay : 0) + (dedicatedPayByEmployee.get(r.employeeId) ?? 0);
-
+    const rows: SalaryRow[] = all.map((r) => {
+      const crewShare = (sharedIds.has(r.employeeId) ? sharedOnePay : 0) + (dedicatedPayByEmployee.get(r.employeeId) ?? 0);
+      const roleBonus = (isBrigadier(r.employeeId) ? brigadierBonus : 0) + (isSenior(r.employeeId) ? seniorBonusEach : 0);
       return {
         employeeId: r.employeeId,
         employeeName: r.employeeName,
         hours: Math.round(Number(r.hours || 0) * 100) / 100,
         coefTotal: r.coefTotal,
         points: r.points,
-        pay: Math.round(pay * 100) / 100,
+        pay: Math.round((crewShare + roleBonus) * 100) / 100,
       };
     });
 
@@ -194,7 +179,7 @@ export function buildSalaryPacksWithRoles(params: {
       objectId: o.objectId,
       objectName: o.objectName,
       objectTotal: Math.round(o.objectTotal * 100) / 100,
-      sumPoints: Math.round(rowsSrc.reduce((a, r) => a + r.points, 0) * 100) / 100,
+      sumPoints: Math.round(worked.reduce((a, r) => a + r.points, 0) * 100) / 100,
       companyPay: Math.round(o.objectTotal * companyPercent * 100) / 100,
       rows: rows.filter((r) => r.hours > 0 || r.pay > 0),
     };

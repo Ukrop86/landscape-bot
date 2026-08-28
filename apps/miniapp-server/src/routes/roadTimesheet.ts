@@ -139,6 +139,12 @@ async function computePayroll(params: {
   ]);
   const tariffByWorkId = new Map(workRows.map((w) => [w.id, w.tariff]));
   const employeeById = new Map(employeeRows.map((e) => [e.id, { name: e.name, position: e.position, active: e.active }]));
+  // Needed before the per-object loop: the brigadier's 20% and the seniors'
+  // 10% are owed on every object of the trip, including ones where they never
+  // clocked in, so each object's rows must carry them even at zero hours.
+  const brigadierEmployeeId = pickBrigadierFromRiders(employeeIds ?? [], employeeById);
+  const seniorEmployeeIds = pickSeniorsFromRiders(employeeIds ?? [], employeeById);
+  const roleIds = [...new Set([brigadierEmployeeId, ...seniorEmployeeIds].filter(Boolean))];
 
   const payrollObjectInputs: Array<{
     objectId: string;
@@ -171,6 +177,10 @@ async function computePayroll(params: {
     });
     const objectTotal = workValues.reduce((acc, w) => acc + w.value, 0);
 
+    for (const id of roleIds) {
+      if (!hoursByEmployee.has(id)) hoursByEmployee.set(id, { name: employeeById.get(id)?.name ?? id, ms: 0 });
+    }
+
     const coefByEmployee = new Map((obj.coefs ?? []).map((c) => [c.employeeId, c]));
     payrollObjectInputs.push({
       objectId: obj.objectId,
@@ -187,8 +197,6 @@ async function computePayroll(params: {
     });
   }
 
-  const brigadierEmployeeId = pickBrigadierFromRiders(employeeIds ?? [], employeeById);
-  const seniorEmployeeIds = pickSeniorsFromRiders(employeeIds ?? [], employeeById);
   const salaryPacks = buildSalaryPacksWithRoles({ objects: payrollObjectInputs, brigadierEmployeeId, seniorEmployeeIds });
 
   const roadAllowanceTotal =
