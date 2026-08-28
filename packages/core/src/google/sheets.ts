@@ -120,6 +120,63 @@ export async function loadSheet(sheetName: string, range = "A:Z"): Promise<Loade
   return { header, map, data, all: rows };
 }
 
+/**
+ * Physically removes every row the predicate accepts.
+ *
+ * The sync worker only ever upserts, so a row deleted from Postgres alone is
+ * back within a sync cycle -- anything meant to disappear has to go from the
+ * sheet as well, and the sheet is the source of truth besides.
+ *
+ * Rows are deleted bottom-up so earlier deletions don't shift the indices of
+ * later ones, and consecutive rows are collapsed into one range request.
+ * Returns how many rows went.
+ */
+export async function deleteRowsWhere(
+  sheetName: string,
+  match: (row: any[], map: Record<string, number>) => boolean,
+): Promise<number> {
+  const sheets = getSheetsClient();
+  const { map, all } = await loadSheet(sheetName);
+  if (all.length < 2) return 0;
+
+  // all[0] is the header, so all[i] sits on 1-based sheet row i + 1, which is
+  // the 0-based index i in the API's half-open dimension ranges.
+  const doomed: number[] = [];
+  for (let i = 1; i < all.length; i++) {
+    const row = all[i] ?? [];
+    if (row.some((c: any) => String(c ?? "").trim() !== "") && match(row, map)) doomed.push(i);
+  }
+  if (!doomed.length) return 0;
+
+  const meta = await withSheetsRetry("spreadsheet metadata", () =>
+    sheets.spreadsheets.get({ spreadsheetId: config.sheetId, fields: "sheets.properties(sheetId,title)" }),
+  );
+  const sheetId = (meta.data.sheets ?? []).find((s) => s.properties?.title === sheetName)?.properties?.sheetId;
+  if (sheetId === undefined || sheetId === null) return 0;
+
+  const ranges: { start: number; end: number }[] = [];
+  for (const i of doomed) {
+    const last = ranges[ranges.length - 1];
+    if (last && last.end === i) last.end = i + 1;
+    else ranges.push({ start: i, end: i + 1 });
+  }
+
+  await withSheetsRetry(`${sheetName} delete ${doomed.length} rows`, () =>
+    sheets.spreadsheets.batchUpdate({
+      spreadsheetId: config.sheetId,
+      requestBody: {
+        requests: ranges
+          .slice()
+          .reverse()
+          .map((r) => ({
+            deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: r.start, endIndex: r.end } },
+          })),
+      },
+    }),
+  );
+  return doomed.length;
+}
+
 /** Append rows built from a patch object keyed by header name, respecting the sheet's real column order. */
 export async function appendRowsByHeaders(sheetName: string, patches: Record<string, any>[]) {
   if (!patches.length) return;

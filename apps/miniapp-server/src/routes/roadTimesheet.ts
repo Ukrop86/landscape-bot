@@ -20,6 +20,8 @@ import {
   config,
   buildAccountingRows,
   writeAccountingReportForDay,
+  sheetsClient,
+  sheetNames,
   type LockedTx,
 } from "@landscape/core";
 import { and, eq, inArray, desc, lt, gte } from "drizzle-orm";
@@ -1755,6 +1757,119 @@ roadTimesheetRouter.post("/pending/return", async (req, res) => {
     `🔴 *День повернено адміністратором*\n📅 Дата: ${date}\n📝 Причина: ${reasonText}${note ? ` — ${note}` : ""}\n\nРедагування знову доступне. Відкрий "Дорожній табель", виправ дані і надішли повторно.`,
   );
   res.json({ ok: true });
+});
+
+/**
+ * POST /api/road-timesheet/pending/delete — admin-only. { date, foremanTgId }
+ *
+ * Removes a day's report entirely: the events, the works, the timesheet rows,
+ * the allowances, the day status and the odometer, from the SHEET first and
+ * then from Postgres. Sheet first because the sync worker only upserts -- a
+ * row deleted from Postgres alone is back within a cycle, and the sheet is
+ * the source of truth besides.
+ *
+ * "Повернути на редагування" is the everyday tool; this is for a day that
+ * should never have existed (a test run, a duplicate, the wrong foreman).
+ * It cannot be undone, so the client asks twice.
+ */
+roadTimesheetRouter.post("/pending/delete", async (req, res) => {
+  if (blockNonAdmin(req, res)) return;
+  const { date, foremanTgId } = req.body as { date: string; foremanTgId: number };
+  if (!date || !foremanTgId) {
+    res.status(400).json({ error: "date and foremanTgId are required" });
+    return;
+  }
+  const tgId = BigInt(foremanTgId);
+  const foremanStr = String(foremanTgId);
+
+  // ТАБЕЛЬ carries no foreman column, so the day's own events say which
+  // objects and people were this foreman's -- without that, deleting by date
+  // alone would take another brigade's rows on a shared object.
+  const events = await db
+    .select()
+    .from(schema.events)
+    .where(and(eq(schema.events.date, date), eq(schema.events.foremanTgId, tgId)));
+  const objectIds = new Set<string>();
+  const employeeIds = new Set<string>();
+  const carIds = new Set<string>();
+  for (const e of events) {
+    if (e.carId) carIds.add(e.carId);
+    try {
+      const payload = JSON.parse(e.payload ?? "{}") as {
+        objects?: { objectId?: string; sessions?: { employeeId?: string }[] }[];
+        employeeIds?: string[];
+      };
+      for (const o of payload.objects ?? []) {
+        if (o.objectId) objectIds.add(o.objectId);
+        for (const s of o.sessions ?? []) if (s.employeeId) employeeIds.add(s.employeeId);
+      }
+      for (const id of payload.employeeIds ?? []) employeeIds.add(id);
+    } catch {
+      // a malformed payload must not stop the rest of the day being removed
+    }
+  }
+
+  const { SHEET_NAMES, EVENTS_HEADERS, REPORTS_HEADERS, TIMESHEET_HEADERS, ALLOWANCES_HEADERS, DAY_STATUS_HEADERS, ODOMETER_HEADERS } =
+    sheetNames;
+  const cell = (row: any[], map: Record<string, number>, header: string) => String(sheetsClient.getCell(row, map, header) ?? "").trim();
+  const byDateAndForeman = (dateHeader: string, foremanHeader: string) => (row: any[], map: Record<string, number>) =>
+    cell(row, map, dateHeader) === date && cell(row, map, foremanHeader) === foremanStr;
+
+  let removedFromSheets = 0;
+  try {
+    removedFromSheets += await sheetsClient.deleteRowsWhere(SHEET_NAMES.events, byDateAndForeman(EVENTS_HEADERS.date, EVENTS_HEADERS.foremanTgId));
+    removedFromSheets += await sheetsClient.deleteRowsWhere(
+      SHEET_NAMES.reports,
+      byDateAndForeman(REPORTS_HEADERS.date, REPORTS_HEADERS.foremanTgId),
+    );
+    removedFromSheets += await sheetsClient.deleteRowsWhere(
+      SHEET_NAMES.allowances,
+      byDateAndForeman(ALLOWANCES_HEADERS.date, ALLOWANCES_HEADERS.foremanTgId),
+    );
+    removedFromSheets += await sheetsClient.deleteRowsWhere(
+      SHEET_NAMES.dayStatus,
+      byDateAndForeman(DAY_STATUS_HEADERS.date, DAY_STATUS_HEADERS.foremanTgId),
+    );
+    removedFromSheets += await sheetsClient.deleteRowsWhere(
+      SHEET_NAMES.odometerDay,
+      byDateAndForeman(ODOMETER_HEADERS.date, ODOMETER_HEADERS.foremanTgId),
+    );
+    removedFromSheets += await sheetsClient.deleteRowsWhere(SHEET_NAMES.timesheet, (row, map) => {
+      if (cell(row, map, TIMESHEET_HEADERS.date) !== date) return false;
+      const objectId = cell(row, map, TIMESHEET_HEADERS.objectId);
+      const employeeId = cell(row, map, TIMESHEET_HEADERS.employeeId);
+      return objectIds.has(objectId) && employeeIds.has(employeeId);
+    });
+  } catch (e) {
+    // Stop before touching Postgres: half-deleted is worse than not deleted,
+    // and with the sheet intact the sync would restore whatever we removed.
+    res.status(502).json({ error: `Не вдалось видалити з Google Sheets: ${(e as Error).message}` });
+    return;
+  }
+
+  await db.delete(schema.events).where(and(eq(schema.events.date, date), eq(schema.events.foremanTgId, tgId)));
+  await db.delete(schema.reports).where(and(eq(schema.reports.date, date), eq(schema.reports.foremanTgId, tgId)));
+  await db.delete(schema.allowances).where(and(eq(schema.allowances.date, date), eq(schema.allowances.foremanTgId, tgId)));
+  await db.delete(schema.dayStatuses).where(and(eq(schema.dayStatuses.date, date), eq(schema.dayStatuses.foremanTgId, tgId)));
+  await db.delete(schema.odometerDays).where(and(eq(schema.odometerDays.date, date), eq(schema.odometerDays.foremanTgId, tgId)));
+  if (objectIds.size && employeeIds.size) {
+    await db
+      .delete(schema.timesheetEntries)
+      .where(
+        and(
+          eq(schema.timesheetEntries.date, date),
+          inArray(schema.timesheetEntries.objectId, [...objectIds]),
+          inArray(schema.timesheetEntries.employeeId, [...employeeIds]),
+        ),
+      );
+  }
+
+  await sendTelegramMessage(
+    foremanTgId,
+    `🗑 *Звіт видалено адміністратором*\n📅 Дата: ${date}\n\nЯкщо це помилка — зверніться до адміністратора. День можна внести заново.`,
+  ).catch(() => {});
+
+  res.json({ ok: true, removedFromSheets });
 });
 
 /**

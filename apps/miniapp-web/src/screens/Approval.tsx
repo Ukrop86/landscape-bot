@@ -105,6 +105,28 @@ export function Approval({
     }
   }
 
+  /**
+   * Wipes the day entirely -- for a report that should never have existed (a
+   * test run, a duplicate, the wrong foreman), not for one that needs fixing:
+   * that is what returning it is for. Asked twice because there is no undo.
+   */
+  async function deleteReport(it: PendingItem) {
+    if (!(await confirmDialog(`Видалити звіт ${it.date} — ${it.foremanName}?\n\nЦе не «повернути на редагування»: день зникне повністю.`)))
+      return;
+    if (!(await confirmDialog("Це неможливо скасувати. Дані буде видалено і з Google Sheets, і з бази. Точно видалити?"))) return;
+    setBusyKey(keyOf(it));
+    try {
+      await api.post("/api/road-timesheet/pending/delete", { date: it.date, foremanTgId: it.foremanTgId });
+      haptic("success");
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+      haptic("error");
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
   async function confirmReturn(it: PendingItem) {
     setBusyKey(keyOf(it));
     try {
@@ -356,6 +378,9 @@ export function Approval({
                           disabled={busy}
                         >
                           🔴 Повернути на редагування
+                        </button>
+                        <button className="back-btn danger-btn" onClick={() => deleteReport(it)} disabled={busy}>
+                          🗑 Видалити звіт
                         </button>
                       </div>
                     )}
