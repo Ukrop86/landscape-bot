@@ -2314,7 +2314,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     const returned = !!dayStatus?.returned && pendingTrips.length > 0;
     return (
       <div>
-        <BackRow onBack={goBack} onHome={onBack} />
+        <BackRow onBack={goBack} onHub={() => setStep("HUB")} onHome={onBack} />
         <div className="header">
           <h1>
             {returned
@@ -2422,7 +2422,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
   return (
     <div>
-      <BackRow onBack={goBack} onHome={onBack} />
+      <BackRow onBack={goBack} onHub={step === "HUB" ? undefined : () => setStep("HUB")} onHome={onBack} />
       <div className="header">
         <h1>🚗 Дорожній табель</h1>
       </div>

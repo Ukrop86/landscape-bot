@@ -1,12 +1,16 @@
 export function BackRow({
   onBack,
+  onHub,
   onHome,
   label = "‹ Назад",
 }: {
   onBack: () => void;
-  /** Escape hatch to the main menu. "Back" walks the flow one step at a time,
-      which is right while working through a day but a long way home from the
-      middle of one. */
+  /** Jump to the road timesheet's own hub -- where a day is set up, a next
+      trip is planned, or a parallel one is started. "Back" only steps through
+      the flow, so from deep inside a day (or from a submitted one) the hub was
+      unreachable without leaving to the menu and coming in again. */
+  onHub?: () => void;
+  /** Escape hatch to the main menu. */
   onHome?: () => void;
   label?: string;
 }) {
@@ -15,11 +19,18 @@ export function BackRow({
       <button className="back-btn" onClick={onBack}>
         {label}
       </button>
-      {onHome && (
-        <button className="back-btn" onClick={onHome}>
-          🏠 Меню
-        </button>
-      )}
+      <span style={{ display: "flex", gap: 12 }}>
+        {onHub && (
+          <button className="back-btn" onClick={onHub}>
+            🚗 До табеля
+          </button>
+        )}
+        {onHome && (
+          <button className="back-btn" onClick={onHome}>
+            🏠 Меню
+          </button>
+        )}
+      </span>
     </div>
   );
 }
