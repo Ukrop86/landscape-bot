@@ -10,6 +10,9 @@ type PendingObject = {
   // unit comes from the РОБОТИ dictionary so a volume reads as "1878 м2"
   // rather than a bare number the admin has to guess the meaning of.
   works: { workId: string; workName: string; volume?: string | number; unit?: string | null; employeeIds?: string[] }[];
+  // Знімки виконаних робіт з обʼєкта. Єдине, що адмін може подивитись
+  // очима, перш ніж затвердити суму.
+  photoUrls?: string[];
 };
 type PendingItem = {
   date: string;
@@ -245,6 +248,16 @@ export function Approval({
                             <span>{o.objectName}</span>
                             {pack && <span className="badge ok">{pack.objectTotal} грн</span>}
                           </div>
+
+                          {(o.photoUrls ?? []).length > 0 && (
+                            <div className="picked-panel" style={{ marginTop: 8 }}>
+                              {(o.photoUrls ?? []).map((url, i) => (
+                                <span key={url} className="picked-item">
+                                  <a href={url} target="_blank" rel="noreferrer">📷 фото {i + 1}</a>
+                                </span>
+                              ))}
+                            </div>
+                          )}
 
                           <div className="approval-sub">🛠 Роботи</div>
                           <div className="approval-rows">

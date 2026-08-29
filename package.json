@@ -9,6 +9,10 @@
     "build": "npm run build --workspace=apps/miniapp-web",
     "start": "npm run start --workspace=apps/miniapp-server",
     "build:miniapp": "npm run build --workspace=apps/miniapp-web",
-    "start:miniapp": "npm run start --workspace=apps/miniapp-server"
+    "start:miniapp": "npm run start --workspace=apps/miniapp-server",
+    "test": "node --import tsx --test packages/core/test/*.test.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
   }
 }

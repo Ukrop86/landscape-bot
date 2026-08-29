@@ -1483,6 +1483,9 @@ roadTimesheetRouter.get("/pending", async (req, res) => {
             // людини сума більша за решту бригади на тому ж обʼєкті.
             employeeIds: w.employeeIds ?? [],
           })),
+          // Фото виконаних робіт. Бригадир знімає їх на обʼєкті; для адміна
+          // це єдиний спосіб побачити, за що він платить, не виїжджаючи.
+          photoUrls: o.photoUrls ?? [],
         })),
         employeeIds: unionEmployeeIds,
         selfTransportIds: unionSelfTransportIds,

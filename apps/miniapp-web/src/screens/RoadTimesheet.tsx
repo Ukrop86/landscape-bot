@@ -1380,6 +1380,62 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     setPlans((prev) => prev.map((p) => (p.objectId !== objectId ? p : { ...p, notes })));
   }
 
+  // Photos of the finished work. They ride to Google Drive through the same
+  // endpoint the odometer shots use, and their URLs travel with the object to
+  // the report. Taken AT the object, not while planning it -- a photo of work
+  // that has not happened yet is worth nothing.
+  async function uploadObjectPhoto(file: File, objectId: string) {
+    setUploadingPhoto(true);
+    setError(null);
+    try {
+      const res = await api.upload<{ url: string }>("/api/road-timesheet/photo", file);
+      setPlans((prev) => prev.map((p) => (p.objectId !== objectId ? p : { ...p, photoUrls: [...p.photoUrls, res.url] })));
+      haptic("success");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUploadingPhoto(false);
+    }
+  }
+
+  function removeObjectPhoto(objectId: string, url: string) {
+    setPlans((prev) => prev.map((p) => (p.objectId !== objectId ? p : { ...p, photoUrls: p.photoUrls.filter((u) => u !== url) })));
+  }
+
+  /** The photo strip, shared by the object screen and the day summary. */
+  function renderObjectPhotos(plan: ObjPlan) {
+    return (
+      <div className="list" style={{ marginBottom: 8 }}>
+        <div className="cell" style={{ cursor: "default", display: "block" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <span className="cell-title">📷 Фото обʼєкта</span>
+            {plan.photoUrls.length > 0 && <span className="badge ok">{plan.photoUrls.length}</span>}
+          </div>
+          {plan.photoUrls.length > 0 && (
+            <div className="picked-panel" style={{ marginTop: 8 }}>
+              {plan.photoUrls.map((url, i) => (
+                <span key={url} className="picked-item">
+                  <a href={url} target="_blank" rel="noreferrer">фото {i + 1}</a>
+                  <button className="picked-remove" onClick={() => removeObjectPhoto(plan.objectId, url)} aria-label="Прибрати фото">
+                    ✕
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div style={{ marginTop: 8 }}>
+            <PhotoButton
+              text={uploadingPhoto ? "Завантаження…" : "📷 Додати фото"}
+              disabled={uploadingPhoto}
+              onPick={(file) => uploadObjectPhoto(file, plan.objectId)}
+            />
+            <div className="hint" style={{ marginTop: 6 }}>Не обовʼязково. Зберігається в Google Drive і йде у звіт.</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ---------- works helpers ----------
   function toggleWork(objectId: string, work: Work) {
     setPlans((prev) =>
@@ -3676,6 +3732,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                           ⏱ Роботи тривають {earliestOpenStart ? fmtHMS(now - earliestOpenStart) : ""}: {openSessions.map((s) => employeeName(s.employeeId)).join(", ")}
                         </div>
                       )}
+                      {renderObjectPhotos(p)}
+
                       <div className="hint" style={{ fontWeight: 600 }}>🛠 Роботи</div>
                       <div className="hint">
                         {p.works.length
@@ -3930,6 +3988,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                     </div>
                   </div>
                 )}
+
+                {renderObjectPhotos(plan)}
 
                 {(worksTotal > 0 || plan.here.length > 0) && (
                   <button className="back-btn" onClick={() => setAtObjectDetailsExpanded((v) => !v)}>
@@ -5124,6 +5184,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               const expanded = expandedReviewObjectId === p.objectId;
               const unfilled = p.works.filter((w) => !w.volume || w.volume === "?").length;
               const peopleHere = [...new Set(p.sessions.map((s) => s.employeeId))];
+              // Hours set the amounts now, so they belong on the summary the
+              // foreman signs off, not only in the report the admin sees after
+              // approval. The share is of the object's HOURS -- deliberately
+              // not of the money, which stays hidden until approval.
+              const objectHours = Math.round(peopleHere.reduce((a, id) => a + hoursAtObject(p, id), 0) * 100) / 100;
               return (
                 <div key={p.objectId}>
                   <div className="cell-row">
@@ -5131,8 +5196,10 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       <span className="cell-title">
                         {expanded ? "▾" : "▸"} {p.objectName}
                       </span>
-                      <span style={{ display: "flex", gap: 6 }}>
+                      <span style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
                         <span className="badge">👤 {peopleHere.length}</span>
+                        <span className={`badge ${objectHours > 0 ? "" : "warn"}`}>⏱ {objectHours} год</span>
+                        {p.photoUrls.length > 0 && <span className="badge">📷 {p.photoUrls.length}</span>}
                         {p.works.length > 0 && (
                           <span className={`badge ${unfilled === 0 ? "ok" : "warn"}`}>
                             {unfilled === 0 ? "✅ обсяги є" : `🟡 ${unfilled} без обсягу`}
@@ -5182,6 +5249,9 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       </div>
 
                       <div className="hint" style={{ fontWeight: 600, marginTop: 14 }}>👥 Люди на цьому обʼєкті</div>
+                      {peopleHere.length > 0 && (
+                        <div className="hint">Робітнича частина обʼєкта ділиться пропорційно цим годинам.</div>
+                      )}
                       {peopleHere.length ? (
                         <div className="list" style={{ margin: "6px 0 0" }}>
                           {peopleHere.map((id) => {
@@ -5199,7 +5269,9 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                                     {roleFor(id) !== "робітник" && <span className={roleTagClass(roleFor(id))} style={{ marginLeft: 6 }}>{roleFor(id)}</span>}
                                   </span>
                                   <span className="cell-sub">
-                                    {hoursAtObject(p, id)} год{c.disciplineCoef !== 1 || c.productivityCoef !== 1 ? ` · ${c.disciplineCoef}/${c.productivityCoef}` : ""}
+                                    {hoursAtObject(p, id)} год
+                                    {objectHours > 0 && ` · ${Math.round((hoursAtObject(p, id) / objectHours) * 100)}%`}
+                                    {c.disciplineCoef !== 1 || c.productivityCoef !== 1 ? ` · ${c.disciplineCoef}/${c.productivityCoef}` : ""}
                                   </span>
                                 </button>
                                 {coefOpen && (
