@@ -62,16 +62,17 @@ export type ObjectSalaryPack = {
  * fund and the seniors split 10% of it, whether or not they worked at that
  * particular object -- those cuts pay for running the day. The remainder
  * (70%, or 90% when the trip has no brigadier at all) is the crew share,
- * split EQUALLY between everyone with hours there, the brigadier and seniors
+ * shared out between everyone with hours there, the brigadier and seniors
  * included: if they worked, they worked. With no senior on the trip the 10%
  * is not handed to the crew -- it stays with the company (companyPay).
  *
- * The worker remainder is split EQUALLY, not by hours. Works that name
- * specific people form their own pool each, so a job one person did alone
- * pays only that person -- and that person is then OUT of the shared pool,
- * which belongs to the crew that did the rest. Everything unassigned stays
- * one pool for whoever is left. The discipline/productivity coefficients are recorded
- * per person but move no money.
+ * The worker remainder is split IN PROPORTION TO HOURS: two hours on an
+ * object pay twice what one hour there does. Works that name specific people
+ * form their own pool each (also split by hours between them), so a job one
+ * person did alone pays only that person -- and that person is then OUT of
+ * the shared pool, which belongs to the crew that did the rest. Everything
+ * unassigned stays one pool for whoever is left. The discipline/productivity
+ * coefficients are recorded per person but move no money.
  */
 export function buildSalaryPacksWithRoles(params: {
   objects: Array<{
@@ -97,8 +98,8 @@ export function buildSalaryPacksWithRoles(params: {
       const coefTotal = Number(r.disciplineCoef) * Number(r.productivityCoef);
       return { ...r, hoursRounded, coefTotal, points: Math.round(hoursRounded * coefTotal * 100) / 100 };
     });
-    // Hours decide who splits the crew share; the role cuts do not depend on
-    // them. A brigadier runs the day whether or not they picked up a spade at
+    // Hours decide both who draws on the crew share and how much of it they
+    // draw; the role cuts do not depend on them. A brigadier runs the day whether or not they picked up a spade at
     // this particular object, so their 20% is owed either way -- the caller
     // therefore passes a zero-hour row for them (and for the seniors) on every
     // object, and that row is what makes hasBrigadier/hasSenior true here.
@@ -113,9 +114,9 @@ export function buildSalaryPacksWithRoles(params: {
     const hasSenior = seniorRows.length > 0;
 
     // The crew share, and on top of it the role cuts. A brigadier or senior
-    // who DID work also takes an equal share of the crew pot -- they worked
-    // alongside everyone else, and the 20%/10% pays for running the day, not
-    // for the work itself.
+    // who DID work also draws on the crew pot for the hours they put in --
+    // they worked alongside everyone else, and the 20%/10% pays for running
+    // the day, not for the work itself.
     const workerPercent = hasBrigadier ? 0.7 : 0.9;
     const brigadierBonus = hasBrigadier ? o.objectTotal * 0.2 : 0;
     const seniorBonusEach = hasSenior ? (o.objectTotal * 0.1) / seniorRows.length : 0;
@@ -153,17 +154,25 @@ export function buildSalaryPacksWithRoles(params: {
     // named work, the remainder falls back to all of them.
     const sharedWorkers = worked.filter((r) => !dedicatedIds.has(r.employeeId));
     const sharedPool = sharedWorkers.length ? sharedWorkers : worked;
-    const sharedIds = new Set(sharedPool.map((r) => r.employeeId));
-    const sharedOnePay = sharedPool.length ? (sharedValue * workerPercent) / sharedPool.length : 0;
 
-    const dedicatedPayByEmployee = new Map<string, number>();
-    for (const d of dedicated) {
-      const onePay = (d.value * workerPercent) / d.workers.length;
-      for (const w of d.workers) dedicatedPayByEmployee.set(w.employeeId, (dedicatedPayByEmployee.get(w.employeeId) ?? 0) + onePay);
-    }
+    // Every pot below is divided by hours, not per head. Everyone in a pot is
+    // there because they have hours at the object, so the denominator is
+    // always > 0; the per-head fallback only guards against a caller that
+    // somehow passes an hours-less row into a pot.
+    const splitByHours = (pot: number, pool: typeof worked, into: Map<string, number>) => {
+      const totalHours = pool.reduce((a, r) => a + Number(r.hours || 0), 0);
+      for (const r of pool) {
+        const share = totalHours > 0 ? Number(r.hours || 0) / totalHours : 1 / pool.length;
+        into.set(r.employeeId, (into.get(r.employeeId) ?? 0) + pot * share);
+      }
+    };
+
+    const crewPayByEmployee = new Map<string, number>();
+    if (sharedPool.length) splitByHours(sharedValue * workerPercent, sharedPool, crewPayByEmployee);
+    for (const d of dedicated) splitByHours(d.value * workerPercent, d.workers, crewPayByEmployee);
 
     const rows: SalaryRow[] = all.map((r) => {
-      const crewShare = (sharedIds.has(r.employeeId) ? sharedOnePay : 0) + (dedicatedPayByEmployee.get(r.employeeId) ?? 0);
+      const crewShare = crewPayByEmployee.get(r.employeeId) ?? 0;
       const roleBonus = (isBrigadier(r.employeeId) ? brigadierBonus : 0) + (isSenior(r.employeeId) ? seniorBonusEach : 0);
       return {
         employeeId: r.employeeId,
