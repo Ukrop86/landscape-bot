@@ -773,9 +773,18 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     setStep("HUB");
   }
 
-  async function resetDay() {
+  /**
+   * Throws away the trip being built or driven and starts it over.
+   *
+   * Scoped to the trip, not the day: trips already sent stay exactly as they
+   * are (a sent report is deleted by the admin, never from here). It used to
+   * be labelled "скинути день", which read as if it wiped everything.
+   */
+  async function resetTrip() {
     const confirmed = await confirmDialog(
-      "Точно почати день заново? Усі дані поточної поїздки буде видалено з цього екрана (уже відправлений звіт на сервері це не видаляє, лише перезапише його наступною відправкою).",
+      tripStartedAt
+        ? "Скинути поточну поїздку?\n\nПоїздка вже почалась — години з таймерів, обʼєкти й роботи буде втрачено безповоротно. Уже відправлені поїздки цього дня лишаться на місці."
+        : "Скинути поточну поїздку?\n\nАвто, люди, обʼєкти й роботи з цього екрана буде очищено, резерви звільнено. Уже відправлені поїздки цього дня лишаться на місці.",
     );
     if (!confirmed) return;
     await releaseAndClearDay();
@@ -1589,7 +1598,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // the LIVE trip's state first (objects still to visit -> people to pick up
   // -> final odometer): an earlier trip submitted for this date must not
   // hijack resume into REVIEW while a new/edited trip is actively underway
-  // (e.g. after "Скинути день", or after "Розпочати нову поїздку" for a
+  // (e.g. after "Скинути поїздку", or after "Розпочати нову поїздку" for a
   // second leg the same day). Only THIS trip having its own odoEnd already
   // set (either entered live, or restored by editTrip()) resumes at REVIEW;
   // otherwise it's still mid-route and belongs at RETURN.
@@ -2369,6 +2378,14 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
           </div>
         )}
 
+        {/* Without this a leg started by mistake could only be continued, never
+            dropped: this screen has no hub to walk back to. */}
+        {editingTripSeq === null && (!!carId || employeeIds.length > 0 || plans.length > 0) && (
+          <div style={{ padding: "0 16px 8px", textAlign: "right" }}>
+            <button className="back-btn danger-btn" onClick={resetTrip}>🗑 Скинути цю поїздку</button>
+          </div>
+        )}
+
         <div style={{ padding: "8px 16px" }}>
           <button className="bulk-select-btn" onClick={startNewTrip}>
             ➕ Розпочати нову поїздку
@@ -2474,7 +2491,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
           them. */}
       {step === "HUB" && (carId || employeeIds.length > 0 || plans.length > 0) && (
         <div style={{ padding: "0 16px 8px", textAlign: "right" }}>
-          <button className="back-btn danger-btn" onClick={resetDay}>🗑 Скинути день</button>
+          <button className="back-btn danger-btn" onClick={resetTrip}>🗑 Скинути поїздку</button>
         </div>
       )}
 
