@@ -783,19 +783,29 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   }
 
   /**
-   * Parks the setup on screen as the next trip's plan and clears the day.
+   * Parks the setup on screen as the next trip's plan.
    *
    * There is no separate planning mode: setting up a trip is the same work
    * whether it is for now or for tomorrow, so the foreman builds it with the
-   * pickers they already know and then says "this is for next time". The car
-   * and people ARE released -- a plan must not hold a bus overnight for a day
-   * that has not started.
+   * pickers they already know and then says "this is for next time".
+   *
+   * Whether the day is cleared afterwards depends on whether the day is real
+   * work. A day that never departed and has nothing submitted was obviously
+   * being used as a scratch pad for the plan, so it is cleared and the car and
+   * people are released -- a plan must not hold a bus overnight for a day that
+   * has not started. But once the trip has departed, or the day already
+   * carries sent trips, saving a plan is only ever a COPY of the setup: it
+   * must never take the running day away.
    */
   async function saveAsPlan() {
     if (!carId && !employeeIds.length && !plans.length) return;
+    const dayIsLive = !!tripStartedAt || submittedTrips.length > 0;
     const confirmed = await confirmDialog(
-      "Зберегти це як план на наступний виїзд?\n\n" +
-        "Поточний екран очиститься, авто й люди звільняться. Наступного разу все підтягнеться однією кнопкою.",
+      dayIsLive
+        ? "Зберегти цей склад як план на наступний виїзд?\n\n" +
+            "Поточна поїздка залишиться на місці — план це лише копія (авто, люди, обʼєкти, роботи)."
+        : "Зберегти це як план на наступний виїзд?\n\n" +
+            "Поточний екран очиститься, авто й люди звільняться. Наступного разу все підтягнеться однією кнопкою.",
     );
     if (!confirmed) return;
     saveTripPlan({
@@ -808,7 +818,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       })),
     });
     setTripPlan(loadTripPlan());
-    await releaseAndClearDay();
+    if (dayIsLive) {
+      logChange("Збережено план на наступний виїзд");
+    } else {
+      await releaseAndClearDay();
+    }
     haptic("success");
   }
 
@@ -2304,6 +2318,13 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   };
   useTelegramBackButton(goBack);
 
+  // "До табеля" has to land on the day's front screen, and which screen that
+  // is depends on the day: once anything has been sent, the summary with the
+  // trip cards is the front screen -- HUB is only the builder for the leg
+  // being assembled, and dropping the foreman there looked like the day had
+  // been wiped.
+  const goHub = () => setStep(submittedTrips.length ? "DONE" : "HUB");
+
   if (step === "DONE" && submittedTrips.length) {
     const pendingTrips = submittedTrips.filter((t) => t.status !== "ЗАТВЕРДЖЕНО");
     const approvedTrips = submittedTrips.filter((t) => t.status === "ЗАТВЕРДЖЕНО");
@@ -2314,7 +2335,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     const returned = !!dayStatus?.returned && pendingTrips.length > 0;
     return (
       <div>
-        <BackRow onBack={goBack} onHub={() => setStep("HUB")} onHome={onBack} />
+        <BackRow onBack={goBack} onHome={onBack} />
         <div className="header">
           <h1>
             {returned
@@ -2422,7 +2443,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
   return (
     <div>
-      <BackRow onBack={goBack} onHub={step === "HUB" ? undefined : () => setStep("HUB")} onHome={onBack} />
+      <BackRow onBack={goBack} onHub={step === "HUB" && !submittedTrips.length ? undefined : goHub} onHome={onBack} />
       <div className="header">
         <h1>🚗 Дорожній табель</h1>
       </div>
@@ -2656,6 +2677,27 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               <span className="cell-sub">без таймерів ›</span>
             </button>
           </div>
+          {/* The plan card above only offers itself on an empty day. Without
+              this line a foreman who saved a plan mid-day would see nothing
+              happen and save it again, unsure whether it took. */}
+          {tripPlan && !showPlanSuggestion && (
+            <div className="hint" style={{ padding: "0 16px 8px", display: "flex", justifyContent: "space-between", gap: 10 }}>
+              <span>
+                📋 План на наступний виїзд збережено: {cars.find((c) => c.id === tripPlan.carId)?.name ?? "без авто"} ·{" "}
+                {nPeople(tripPlan.employeeIds.length)} · {nObjects(tripPlan.objects.length)}. Підтягнеться на порожньому дні.
+              </span>
+              <button
+                className="back-btn"
+                onClick={async () => {
+                  if (!(await confirmDialog("Прибрати заплановане?"))) return;
+                  clearTripPlan();
+                  setTripPlan(null);
+                }}
+              >
+                🗑
+              </button>
+            </div>
+          )}
 
           {tripStartedAt && (
             <>
