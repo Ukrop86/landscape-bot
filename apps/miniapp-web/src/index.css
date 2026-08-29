@@ -263,6 +263,10 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  /* Four controls now fit in here on the timesheet (back, hub, menu, reset).
+     Wrapping keeps the last one reachable on a narrow phone instead of
+     pushing it off the edge. */
+  flex-wrap: wrap;
 }
 
 .back-btn {

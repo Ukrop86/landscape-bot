@@ -2334,6 +2334,13 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // been wiped.
   const goHub = () => setStep(submittedTrips.length ? "DONE" : "HUB");
 
+  // "Скинути поїздку" rides in the back row so it is in the same spot on every
+  // step -- the foreman asked to be able to drop a trip at any moment, not
+  // only from the hub. Nothing to throw away means no button; editing an
+  // already-sent trip is not a trip in progress, so it does not get one either
+  // (that report is the admin's to delete).
+  const hasTripInProgress = editingTripSeq === null && (!!carId || employeeIds.length > 0 || plans.length > 0);
+
   if (step === "DONE" && submittedTrips.length) {
     const pendingTrips = submittedTrips.filter((t) => t.status !== "ЗАТВЕРДЖЕНО");
     const approvedTrips = submittedTrips.filter((t) => t.status === "ЗАТВЕРДЖЕНО");
@@ -2344,7 +2351,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     const returned = !!dayStatus?.returned && pendingTrips.length > 0;
     return (
       <div>
-        <BackRow onBack={goBack} onHome={onBack} />
+        <BackRow onBack={goBack} onHome={onBack} onReset={hasTripInProgress ? resetTrip : undefined} />
         <div className="header">
           <h1>
             {returned
@@ -2375,14 +2382,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 <span className="cell-sub">▶️ Продовжити</span>
               </span>
             </button>
-          </div>
-        )}
-
-        {/* Without this a leg started by mistake could only be continued, never
-            dropped: this screen has no hub to walk back to. */}
-        {editingTripSeq === null && (!!carId || employeeIds.length > 0 || plans.length > 0) && (
-          <div style={{ padding: "0 16px 8px", textAlign: "right" }}>
-            <button className="back-btn danger-btn" onClick={resetTrip}>🗑 Скинути цю поїздку</button>
           </div>
         )}
 
@@ -2460,7 +2459,12 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
   return (
     <div>
-      <BackRow onBack={goBack} onHub={step === "HUB" && !submittedTrips.length ? undefined : goHub} onHome={onBack} />
+      <BackRow
+        onBack={goBack}
+        onHub={step === "HUB" && !submittedTrips.length ? undefined : goHub}
+        onHome={onBack}
+        onReset={hasTripInProgress ? resetTrip : undefined}
+      />
       <div className="header">
         <h1>🚗 Дорожній табель</h1>
       </div>
@@ -2482,16 +2486,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       {submittedEditBanner && !dayStatus?.returned && (
         <div className="hint" style={{ padding: "0 16px 8px" }}>
           📤 Це вже відправлений звіт. Можна редагувати — після збереження буде надіслано нову версію, поки адміністратор не затвердить.
-        </div>
-      )}
-
-      {/* Only on the hub. It used to render on every step, which put a
-          destructive action a mis-tap away while driving or while a shift was
-          running at an object -- and the hub is one back-tap away from all of
-          them. */}
-      {step === "HUB" && (carId || employeeIds.length > 0 || plans.length > 0) && (
-        <div style={{ padding: "0 16px 8px", textAlign: "right" }}>
-          <button className="back-btn danger-btn" onClick={resetTrip}>🗑 Скинути поїздку</button>
         </div>
       )}
 

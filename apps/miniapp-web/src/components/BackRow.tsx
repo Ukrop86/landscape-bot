@@ -2,6 +2,7 @@ export function BackRow({
   onBack,
   onHub,
   onHome,
+  onReset,
   label = "‹ Назад",
 }: {
   onBack: () => void;
@@ -12,6 +13,10 @@ export function BackRow({
   onHub?: () => void;
   /** Escape hatch to the main menu. */
   onHome?: () => void;
+  /** Throw away the trip in progress. Lives here so it sits in the same place
+      on every step instead of only on the screens that happen to have room
+      for it -- it is confirmed before it does anything. */
+  onReset?: () => void;
   label?: string;
 }) {
   return (
@@ -28,6 +33,11 @@ export function BackRow({
         {onHome && (
           <button className="back-btn" onClick={onHome}>
             🏠 Меню
+          </button>
+        )}
+        {onReset && (
+          <button className="back-btn danger-btn" onClick={onReset} title="Скинути поточну поїздку" aria-label="Скинути поточну поїздку">
+            🗑
           </button>
         )}
       </span>
