@@ -1856,18 +1856,22 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     // reflex quietly takes a slice off everyone who is actually digging. So
     // ask, every time, instead of guessing.
     const openIds = new Set(plan.sessions.filter((s) => !s.endedAt).map((s) => s.employeeId));
-    const brigadierHere = plan.here.find((id) => !openIds.has(id) && roleFor(id) === "бригадир");
+    // Every brigadier standing here, not just the first: "так" clocks in the
+    // whole group, "ні" leaves all of them out.
+    const brigadiersHere = plan.here.filter((id) => !openIds.has(id) && roleFor(id) === "бригадир");
     let skipIds = new Set<string>();
-    if (brigadierHere) {
+    if (brigadiersHere.length) {
+      const names = brigadiersHere.map((id) => shortName(employeeName(id))).join(", ");
+      const many = brigadiersHere.length > 1;
       const withBrigadier = await askDialog(
-        `${shortName(employeeName(brigadierHere))} — бригадир. Він теж працює на цьому обʼєкті?\n\n` +
-          `Так — піде в поділ бригадної частини за свої години.\n` +
-          `Ні — отримає лише свої 20% за ведення дня.`,
-        "Так, працює",
-        "Ні, тільки веде день",
-        "Почати роботи з бригадиром?",
+        `${names} — ${many ? "бригадири" : "бригадир"}. ${many ? "Вони теж працюють" : "Він теж працює"} на цьому обʼєкті?\n\n` +
+          `Так — ${many ? "ідуть" : "піде"} в поділ бригадної частини за свої години.\n` +
+          `Ні — ${many ? "отримають" : "отримає"} лише свої 20% за ведення дня.`,
+        many ? "Так, працюють" : "Так, працює",
+        many ? "Ні, тільки ведуть день" : "Ні, тільки веде день",
+        many ? "Почати роботи з бригадирами?" : "Почати роботи з бригадиром?",
       );
-      if (!withBrigadier) skipIds = new Set([brigadierHere]);
+      if (!withBrigadier) skipIds = new Set(brigadiersHere);
     }
     const nowIso = new Date().toISOString();
     setPlans((prev) =>
@@ -1887,7 +1891,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     haptic("light");
     logChange(
       `Почато роботи на ${plan.objectName} (${nPeople(plan.here.length - skipIds.size)})` +
-        (skipIds.size ? ` — без бригадира (${shortName(employeeName(brigadierHere as string))})` : ""),
+        (skipIds.size ? ` — без ${[...skipIds].map((id) => shortName(employeeName(id))).join(", ")}` : ""),
     );
   }
 
