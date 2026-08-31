@@ -94,14 +94,17 @@ export function askDialog(message: string, yes = "Так", no = "Ні", title?: 
         {
           ...(title ? { title } : {}),
           message,
-          // "no" first so the answer that changes nothing is the one nearest
-          // the thumb, and it carries the cancel type so dismissing the popup
-          // (swipe, back) resolves to it rather than to a silent "yes".
+          // BOTH buttons are type "default" on purpose. Telegram renders a
+          // "cancel" button with its own localised label ("Скасувати") and
+          // throws the given text away -- which turned a Так/Ні question into
+          // Так/Скасувати. Only "default" keeps the words we wrote.
           buttons: [
-            { id: "no", type: "cancel", text: no },
             { id: "yes", type: "default", text: yes },
+            { id: "no", type: "default", text: no },
           ],
         },
+        // Dismissing the popup (swipe, back) yields no button id, and that
+        // must mean "ні" -- never a silent yes.
         (buttonId) => resolve(buttonId === "yes"),
       ),
     );
