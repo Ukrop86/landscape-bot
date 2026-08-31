@@ -36,6 +36,10 @@ interface TelegramWebApp {
     selectionChanged(): void;
   };
   showConfirm?(message: string, callback: (confirmed: boolean) => void): void;
+  showPopup?(
+    params: { title?: string; message: string; buttons?: Array<{ id?: string; type?: "default" | "ok" | "close" | "cancel" | "destructive"; text?: string }> },
+    callback?: (buttonId: string) => void,
+  ): void;
 }
 
 declare global {
@@ -71,6 +75,38 @@ export function confirmDialog(message: string): Promise<boolean> {
     return new Promise((resolve) => webApp.showConfirm!(message, resolve));
   }
   return Promise.resolve(window.confirm(message));
+}
+
+/**
+ * A yes/no question with the buttons SPELLED OUT.
+ *
+ * showConfirm renders Telegram's own OK/Cancel, which is fine for "are you
+ * sure?" but wrong for a real question -- "Почати роботи з бригадиром?" with
+ * an "OK" button leaves the foreman guessing what OK agreed to. showPopup lets
+ * the buttons say Так and Ні. Older clients without showPopup fall back to the
+ * confirm dialog, where OK still means "так".
+ */
+export function askDialog(message: string, yes = "Так", no = "Ні", title?: string): Promise<boolean> {
+  const webApp = getWebApp();
+  if (webApp?.showPopup) {
+    return new Promise((resolve) =>
+      webApp.showPopup!(
+        {
+          ...(title ? { title } : {}),
+          message,
+          // "no" first so the answer that changes nothing is the one nearest
+          // the thumb, and it carries the cancel type so dismissing the popup
+          // (swipe, back) resolves to it rather than to a silent "yes".
+          buttons: [
+            { id: "no", type: "cancel", text: no },
+            { id: "yes", type: "default", text: yes },
+          ],
+        },
+        (buttonId) => resolve(buttonId === "yes"),
+      ),
+    );
+  }
+  return confirmDialog(message);
 }
 
 // Small tactile feedback on toggles/confirmations -- no-ops outside Telegram

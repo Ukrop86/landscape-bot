@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPack } from "../lib/api";
 import { todayISO } from "../lib/date";
-import { confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
+import { askDialog, confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial, roleTagClass, roleRank, type EmployeeRole } from "../lib/employee";
 import { groupWorks } from "../lib/works";
 import { works as nWorks, people as nPeople, objects as nObjects } from "../lib/plural";
@@ -1850,12 +1850,33 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       );
       if (!ok) return;
     }
+    // The brigadier is at the object more often than he works there -- he is
+    // running the day, and his 20% is paid for exactly that, hours or no
+    // hours. Since the crew share is now split BY hours, clocking him in by
+    // reflex quietly takes a slice off everyone who is actually digging. So
+    // ask, every time, instead of guessing.
+    const openIds = new Set(plan.sessions.filter((s) => !s.endedAt).map((s) => s.employeeId));
+    const brigadierHere = plan.here.find((id) => !openIds.has(id) && roleFor(id) === "бригадир");
+    let skipIds = new Set<string>();
+    if (brigadierHere) {
+      const withBrigadier = await askDialog(
+        `${shortName(employeeName(brigadierHere))} — бригадир. Він теж працює на цьому обʼєкті?\n\n` +
+          `Так — піде в поділ бригадної частини за свої години.\n` +
+          `Ні — отримає лише свої 20% за ведення дня.`,
+        "Так, працює",
+        "Ні, тільки веде день",
+        "Почати роботи з бригадиром?",
+      );
+      if (!withBrigadier) skipIds = new Set([brigadierHere]);
+    }
     const nowIso = new Date().toISOString();
     setPlans((prev) =>
       prev.map((p) => {
         if (p.objectId !== atObjectId) return p;
-        const openIds = new Set(p.sessions.filter((s) => !s.endedAt).map((s) => s.employeeId));
-        const newSessions = p.here.filter((id) => !openIds.has(id)).map((employeeId) => ({ employeeId, startedAt: nowIso }));
+        const open = new Set(p.sessions.filter((s) => !s.endedAt).map((s) => s.employeeId));
+        const newSessions = p.here
+          .filter((id) => !open.has(id) && !skipIds.has(id))
+          .map((employeeId) => ({ employeeId, startedAt: nowIso }));
         // "Почати роботи" is the bulk shortcut -- it should also start every
         // work item's own timer, not just people's, since the per-work
         // Старт/Стоп buttons only cover starting one at a time otherwise.
@@ -1864,7 +1885,10 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       }),
     );
     haptic("light");
-    logChange(`Почато роботи на ${plan.objectName} (${nPeople(plan.here.length)})`);
+    logChange(
+      `Почато роботи на ${plan.objectName} (${nPeople(plan.here.length - skipIds.size)})` +
+        (skipIds.size ? ` — без бригадира (${shortName(employeeName(brigadierHere as string))})` : ""),
+    );
   }
 
   // Stops every still-open session AND every still-running work timer at the
