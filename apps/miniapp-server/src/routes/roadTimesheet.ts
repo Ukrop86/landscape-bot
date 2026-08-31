@@ -11,7 +11,7 @@ import {
   writeAllowanceRows,
   makeEventId,
   uploadPhotoFromBuffer,
-  pickBrigadierFromRiders,
+  pickBrigadiersFromRiders,
   pickSeniorsFromRiders,
   buildSalaryPacksWithRoles,
   DEFAULT_ROAD_ALLOWANCE_BY_CLASS,
@@ -139,12 +139,13 @@ async function computePayroll(params: {
   ]);
   const tariffByWorkId = new Map(workRows.map((w) => [w.id, w.tariff]));
   const employeeById = new Map(employeeRows.map((e) => [e.id, { name: e.name, position: e.position, active: e.active }]));
-  // Needed before the per-object loop: the brigadier's 20% and the seniors'
-  // 10% are owed on every object of the trip, including ones where they never
-  // clocked in, so each object's rows must carry them even at zero hours.
-  const brigadierEmployeeId = pickBrigadierFromRiders(employeeIds ?? [], employeeById);
+  // Needed before the per-object loop: the brigadiers' 20% (split between them
+  // when there is more than one) and the seniors' 10% are owed on every object
+  // of the trip, including ones where they never clocked in, so each object's
+  // rows must carry them even at zero hours.
+  const brigadierEmployeeIds = pickBrigadiersFromRiders(employeeIds ?? [], employeeById);
   const seniorEmployeeIds = pickSeniorsFromRiders(employeeIds ?? [], employeeById);
-  const roleIds = [...new Set([brigadierEmployeeId, ...seniorEmployeeIds].filter(Boolean))];
+  const roleIds = [...new Set([...brigadierEmployeeIds, ...seniorEmployeeIds].filter(Boolean))];
 
   const payrollObjectInputs: Array<{
     objectId: string;
@@ -197,7 +198,7 @@ async function computePayroll(params: {
     });
   }
 
-  const salaryPacks = buildSalaryPacksWithRoles({ objects: payrollObjectInputs, brigadierEmployeeId, seniorEmployeeIds });
+  const salaryPacks = buildSalaryPacksWithRoles({ objects: payrollObjectInputs, brigadierEmployeeIds, seniorEmployeeIds });
 
   const roadAllowanceTotal =
     settingRows.length && Number.isFinite(Number(settingRows[0].value))
@@ -216,7 +217,7 @@ async function computePayroll(params: {
     tripClass,
     salaryPacks,
     roadAllowance: { total: roadAllowanceTotal, perPerson: Math.round(perPerson * 100) / 100 },
-    brigadierEmployeeId,
+    brigadierEmployeeIds,
     seniorEmployeeIds,
     employeeById,
     perObjectHours,
@@ -245,7 +246,7 @@ roadTimesheetRouter.post("/preview", async (req, res) => {
     tripClass: result.tripClass,
     salaryPacks: result.salaryPacks,
     roadAllowance: result.roadAllowance,
-    brigadierEmployeeId: result.brigadierEmployeeId,
+    brigadierEmployeeIds: result.brigadierEmployeeIds,
     seniorEmployeeIds: result.seniorEmployeeIds,
   });
 });
@@ -932,7 +933,7 @@ roadTimesheetRouter.post("/", async (req, res) => {
     tripClass: legResult.tripClass,
     salaryPacks: legResult.salaryPacks,
     roadAllowance: legResult.roadAllowance,
-    brigadierEmployeeId: legResult.brigadierEmployeeId,
+    brigadierEmployeeIds: legResult.brigadierEmployeeIds,
     seniorEmployeeIds: legResult.seniorEmployeeIds,
     combined: {
       km: totalKm,

@@ -15,12 +15,13 @@ function pack(opts: {
   total: number;
   rows: Row[];
   brigadier?: string;
+  brigadiers?: string[];
   seniors?: string[];
   works?: Array<{ workId: string; value: number; employeeIds?: string[] }>;
 }) {
   const [p] = buildSalaryPacksWithRoles({
     objects: [{ objectId: "o", objectName: "o", objectTotal: opts.total, works: opts.works, rows: opts.rows }],
-    brigadierEmployeeId: opts.brigadier ?? "",
+    brigadierEmployeeIds: opts.brigadiers ?? (opts.brigadier ? [opts.brigadier] : []),
     seniorEmployeeIds: opts.seniors ?? [],
   });
   return p;
@@ -65,6 +66,24 @@ test("робітнича частка ділиться пропорційно г
   assert.equal(payOf(p, "w2"), 233.33);
   // Вдвічі більше годин -- вдвічі більше грошей.
   assert.ok(Math.abs(payOf(p, "w1") / payOf(p, "w2") - 2) < 0.001);
+});
+
+test("двоє бригадирів ділять 20% між собою", () => {
+  const p = pack({ total: 1000, rows: [row("b1", 0), row("b2", 0), row("w1", 8)], brigadiers: ["b1", "b2"] });
+  assert.equal(payOf(p, "b1"), 100);
+  assert.equal(payOf(p, "b2"), 100);
+  // Бригада ділить ті самі 70%, а не 50% -- частка за ведення дня одна на всіх.
+  assert.equal(payOf(p, "w1"), 700);
+  assert.equal(p.companyPay, 100);
+  assert.equal(distributed(p), 1000);
+});
+
+test("двоє бригадирів, один з них працював", () => {
+  const p = pack({ total: 1000, rows: [row("b1", 0), row("b2", 4), row("w1", 4)], brigadiers: ["b1", "b2"] });
+  assert.equal(payOf(p, "b1"), 100); // тільки половина доплати за день
+  assert.equal(payOf(p, "b2"), 450); // 100 + половина з 700 за свої години
+  assert.equal(payOf(p, "w1"), 350);
+  assert.equal(distributed(p), 1000);
 });
 
 test("старші ділять 10% між собою, фірмі тоді нічого", () => {

@@ -101,7 +101,7 @@ type PayrollPreview = {
   tripClass: string;
   salaryPacks: SalaryPack[];
   roadAllowance: { total: number; perPerson: number };
-  brigadierEmployeeId: string;
+  brigadierEmployeeIds: string[];
   seniorEmployeeIds: string[];
 };
 // The day-combined totals -- what actually gets paid out -- once more than

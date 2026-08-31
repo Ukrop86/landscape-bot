@@ -9,16 +9,19 @@ export function isSeniorPosition(position: string | null | undefined) {
   return String(position ?? "").toLowerCase().includes("старш");
 }
 
-/** Only one brigadier per trip: the first rider (in the given order) who is an active brigadier. */
-export function pickBrigadierFromRiders(
+/**
+ * Every active brigadier riding on the trip. Two brigadiers on one trip split
+ * the 20% between them, the same way seniors split their 10% -- the cut pays
+ * for running the day, and a day run by two people is not worth 40%.
+ */
+export function pickBrigadiersFromRiders(
   riderIds: string[],
   employeeById: Map<string, { position: string | null; active: boolean }>,
-): string {
-  for (const id of riderIds) {
+): string[] {
+  return riderIds.filter((id) => {
     const e = employeeById.get(id);
-    if (e && isBrigadierPosition(e.position, e.active)) return id;
-  }
-  return "";
+    return !!e && isBrigadierPosition(e.position, e.active);
+  });
 }
 
 export function pickSeniorsFromRiders(
@@ -73,9 +76,9 @@ export type ObjectSalaryPack = {
 };
 
 /**
- * Per-object payroll split. The trip's brigadier takes 20% of every object's
- * fund and the seniors split 10% of it, whether or not they worked at that
- * particular object -- those cuts pay for running the day. The remainder
+ * Per-object payroll split. The trip's brigadiers split 20% of every object's
+ * fund between them and the seniors split 10% of it, whether or not they
+ * worked at that particular object -- those cuts pay for running the day. The remainder
  * (70%, or 90% when the trip has no brigadier at all) is the crew share,
  * shared out between everyone with hours there, the brigadier and seniors
  * included: if they worked, they worked. With no senior on the trip the 10%
@@ -102,10 +105,12 @@ export function buildSalaryPacksWithRoles(params: {
     works?: Array<{ workId: string; value: number; employeeIds?: string[] }>;
     rows: Array<{ employeeId: string; employeeName: string; hours: number; disciplineCoef: number; productivityCoef: number }>;
   }>;
-  brigadierEmployeeId: string;
+  /** Every brigadier on the trip -- they split the 20% between them. */
+  brigadierEmployeeIds: string[];
   seniorEmployeeIds: string[];
 }): ObjectSalaryPack[] {
-  const { objects, brigadierEmployeeId, seniorEmployeeIds } = params;
+  const { objects, brigadierEmployeeIds, seniorEmployeeIds } = params;
+  const brigadierSet = new Set(brigadierEmployeeIds.filter(Boolean).map(String));
   const seniorSet = new Set(seniorEmployeeIds.map(String));
 
   return objects.map((o) => {
@@ -125,12 +130,12 @@ export function buildSalaryPacksWithRoles(params: {
     // (small) cut off everyone who actually worked.
     const worked = all.filter((r) => r.hours >= MIN_PAID_HOURS);
 
-    const isBrigadier = (id: string) => !!brigadierEmployeeId && id === brigadierEmployeeId;
+    const isBrigadier = (id: string) => brigadierSet.has(id);
     const isSenior = (id: string) => seniorSet.has(id);
 
-    const brigadierRow = all.find((r) => isBrigadier(r.employeeId)) ?? null;
+    const brigadierRows = all.filter((r) => isBrigadier(r.employeeId));
     const seniorRows = all.filter((r) => isSenior(r.employeeId));
-    const hasBrigadier = !!brigadierRow;
+    const hasBrigadier = brigadierRows.length > 0;
     const hasSenior = seniorRows.length > 0;
 
     // The crew share, and on top of it the role cuts. A brigadier or senior
@@ -138,7 +143,9 @@ export function buildSalaryPacksWithRoles(params: {
     // they worked alongside everyone else, and the 20%/10% pays for running
     // the day, not for the work itself.
     const workerPercent = hasBrigadier ? 0.7 : 0.9;
-    const brigadierBonus = hasBrigadier ? o.objectTotal * 0.2 : 0;
+    // 20% for the day, not 20% each: two brigadiers on one trip halve it, the
+    // same rule the seniors have always had for their 10%.
+    const brigadierBonusEach = hasBrigadier ? (o.objectTotal * 0.2) / brigadierRows.length : 0;
     const seniorBonusEach = hasSenior ? (o.objectTotal * 0.1) / seniorRows.length : 0;
     const companyPercent = hasSenior ? 0 : 0.1;
 
@@ -193,7 +200,7 @@ export function buildSalaryPacksWithRoles(params: {
 
     const rows: SalaryRow[] = all.map((r) => {
       const crewShare = crewPayByEmployee.get(r.employeeId) ?? 0;
-      const roleBonus = (isBrigadier(r.employeeId) ? brigadierBonus : 0) + (isSenior(r.employeeId) ? seniorBonusEach : 0);
+      const roleBonus = (isBrigadier(r.employeeId) ? brigadierBonusEach : 0) + (isSenior(r.employeeId) ? seniorBonusEach : 0);
       return {
         employeeId: r.employeeId,
         employeeName: r.employeeName,
