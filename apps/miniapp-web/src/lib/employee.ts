@@ -1,12 +1,31 @@
 import type { Employee } from "./api";
 
-export type EmployeeRole = "бригадир" | "старший" | "робітник";
+/**
+ * "бригадир" and "старший" are the two roles the money split cares about, so
+ * they stay fixed strings the code can compare against. Everything else is the
+ * person's ACTUAL job title from the КОРИСТУВАЧІ sheet -- "Керівник ландшафту"
+ * has to read as itself, not be flattened into "робітник".
+ */
+export type EmployeeRole = "бригадир" | "старший" | (string & {});
+
+/** Positions that mean "an ordinary worker" -- the tag for these stays hidden. */
+const PLAIN_WORKER = new Set(["", "робітник", "робочий", "работник", "рабочий"]);
 
 export function employeeRole(emp: Employee): EmployeeRole {
-  const pos = (emp.position ?? "").toLowerCase();
-  if (pos.includes("бригадир")) return "бригадир";
-  if (pos.includes("старш")) return "старший";
-  return "робітник";
+  const pos = (emp.position ?? "").trim();
+  const lower = pos.toLowerCase();
+  if (lower.includes("бригадир")) return "бригадир";
+  if (lower.includes("старш")) return "старший";
+  // Anything else is shown exactly as written in the sheet. An empty cell or a
+  // plain "Робітник" collapses to the default, which the UI keeps quiet.
+  return PLAIN_WORKER.has(lower) ? "робітник" : pos;
+}
+
+/** Ranks a role for sorting; anything that is not a lead sorts last. */
+export function roleRank(role: EmployeeRole): number {
+  if (role === "бригадир") return 0;
+  if (role === "старший") return 1;
+  return 2;
 }
 
 // First letters of the first two words (e.g. "Агромаков Денис" -> "АД") for
@@ -67,6 +86,14 @@ function brigadeTitleMap(roster: Employee[]): Map<string, string> {
       titleById.set(id, e.position.replace(/^бригадир\s*/i, "").trim() || e.position);
     }
   }
+  // A brigade with no brigadier in the roster used to fall back to its raw id
+  // ("BR_002" as a section heading). Any member's job title beats that.
+  for (const e of roster) {
+    const id = e.brigadeId?.trim();
+    if (!id || titleById.has(id)) continue;
+    const pos = (e.position ?? "").trim();
+    if (pos) titleById.set(id, pos);
+  }
   return titleById;
 }
 
@@ -74,10 +101,8 @@ function brigadeTitleMap(roster: Employee[]): Map<string, string> {
 // the trip (and earns their 20% per object only if they are on it), the senior
 // gardener comes next, and everyone else follows by name. Alphabetical order
 // buried the two people a foreman looks for first somewhere in the middle.
-const ROLE_RANK: Record<EmployeeRole, number> = { бригадир: 0, старший: 1, робітник: 2 };
-
 function byRoleThenName(a: Employee, b: Employee) {
-  const rank = ROLE_RANK[employeeRole(a)] - ROLE_RANK[employeeRole(b)];
+  const rank = roleRank(employeeRole(a)) - roleRank(employeeRole(b));
   return rank !== 0 ? rank : a.name.localeCompare(b.name);
 }
 
@@ -85,16 +110,36 @@ export function groupByBrigade(employees: Employee[], roster: Employee[] = emplo
   const NO_BRIGADE = "__NO_BRIGADE__";
   const titleById = brigadeTitleMap(roster);
   const map = new Map<string, Employee[]>();
+  const titleByKey = new Map<string, string>();
   for (const e of employees) {
-    const id = e.brigadeId?.trim() || NO_BRIGADE;
-    const list = map.get(id) ?? [];
+    const brigadeId = e.brigadeId?.trim();
+    let key: string;
+    let title: string;
+    if (brigadeId) {
+      key = brigadeId;
+      title = titleById.get(brigadeId) ?? brigadeId;
+    } else {
+      // Someone outside every brigade is not simply "unassigned" -- a Керівник
+      // ландшафту has a job title, and that title is the only heading that
+      // says anything. Each such position becomes its own section; only people
+      // with no position at all are left under "Без бригади".
+      const pos = (e.position ?? "").trim();
+      key = pos ? `${NO_BRIGADE}:${pos}` : NO_BRIGADE;
+      title = pos || "Без бригади";
+    }
+    titleByKey.set(key, title);
+    const list = map.get(key) ?? [];
     list.push(e);
-    map.set(id, list);
+    map.set(key, list);
   }
+  const isLoose = (id: string) => id.startsWith(NO_BRIGADE);
   return [...map.entries()]
-    .map(([id, members]) => {
-      const title = id === NO_BRIGADE ? "Без бригади" : titleById.get(id) ?? id;
-      return { id, title, members: [...members].sort(byRoleThenName) };
-    })
-    .sort((a, b) => (a.id === NO_BRIGADE ? 1 : b.id === NO_BRIGADE ? -1 : a.title.localeCompare(b.title)));
+    .map(([id, members]) => ({ id, title: titleByKey.get(id) ?? id, members: [...members].sort(byRoleThenName) }))
+    .sort((a, b) => {
+      // Brigades first, then the standalone roles, then the nameless leftovers.
+      if (isLoose(a.id) !== isLoose(b.id)) return isLoose(a.id) ? 1 : -1;
+      if (a.id === NO_BRIGADE) return 1;
+      if (b.id === NO_BRIGADE) return -1;
+      return a.title.localeCompare(b.title);
+    });
 }

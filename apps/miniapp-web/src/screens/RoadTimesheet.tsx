@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPack } from "../lib/api";
 import { todayISO } from "../lib/date";
 import { confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
-import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial, roleTagClass } from "../lib/employee";
+import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial, roleTagClass, roleRank, type EmployeeRole } from "../lib/employee";
 import { groupWorks } from "../lib/works";
 import { works as nWorks, people as nPeople, objects as nObjects } from "../lib/plural";
 import { saveDraft, loadDraft, clearDraft } from "../lib/draft";
@@ -655,9 +655,9 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     return employees.find((e) => e.id === id)?.name ?? id;
   }
 
-  const ROLE_RANK: Record<"бригадир" | "старший" | "робітник", number> = { бригадир: 0, старший: 1, робітник: 2 };
 
-  function roleFor(id: string): "бригадир" | "старший" | "робітник" {
+
+  function roleFor(id: string): EmployeeRole {
     const emp = employees.find((e) => e.id === id);
     return emp ? employeeRole(emp) : "робітник";
   }
@@ -3490,7 +3490,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                 {employeeIds.length ? (
                   <ul className="bullets">
                     {[...employeeIds]
-                      .sort((a, b) => ROLE_RANK[roleFor(a)] - ROLE_RANK[roleFor(b)])
+                      .sort((a, b) => roleRank(roleFor(a)) - roleRank(roleFor(b)))
                       .map((id) => (
                         <li key={id}>
                           {employeeName(id)}

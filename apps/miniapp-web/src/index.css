@@ -433,7 +433,12 @@ body {
   border-radius: 6px;
   background: rgba(0, 122, 255, 0.12);
   color: var(--tg-link);
-  white-space: nowrap;
+  /* The tag now carries the real job title from the sheet, and those run long
+     ("Керівник ландшафту"). Wrapping inside the pill costs a line; nowrap on a
+     narrow phone pushed the name it belongs to off the row. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
   flex-shrink: 0;
 }
 

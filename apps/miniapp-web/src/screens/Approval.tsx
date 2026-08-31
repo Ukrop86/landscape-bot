@@ -309,9 +309,12 @@ export function Approval({
                                           {selfT && <span className="mark" title="приїхав сам — без доплати за виїзд"> 🚶</span>}
                                         </span>
                                         <span className="approval-nums">
-                                          {/* Червоне = ці години не в поділі: або їх нема, або менше мінімуму.
-    Саме тому в людини поруч може стояти 0 грн або лише роль. */}
-<span className={`badge badge-sm ${r.hours >= MIN_PAID_HOURS ? "" : "danger"}`}>{fmtHours(r.hours)}</span>
+                                          {/* Червоне = ці години не в поділі: або їх
+                                              нема, або менше мінімуму. Саме тому в
+                                              людини поруч може стояти 0 грн. */}
+                                          <span className={`badge badge-sm ${r.hours >= MIN_PAID_HOURS ? "" : "danger"}`}>
+                                            {fmtHours(r.hours)}
+                                          </span>
                                           {r.coefTotal !== 1 && <span className="badge badge-sm warn">к{r.coefTotal}</span>}
                                           <span className="badge badge-sm ok">{r.pay} грн</span>
                                         </span>
