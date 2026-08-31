@@ -204,6 +204,9 @@ type DraftShape = {
   // without this, an interrupted edit (app killed before resubmitting) would
   // resume as if it were a brand-new trip and create a duplicate on save.
   editingTripSeq: number | null;
+  // Without this a plan reopened after the app was killed would come back
+  // looking exactly like a half-built day.
+  planEditing?: boolean;
 };
 
 // Autosaved drafts can predate a schema change (e.g. the old singular
@@ -377,6 +380,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   const [headingToObjectId, setHeadingToObjectId] = useState<string>("");
   const [arrivedPickedExpanded, setArrivedPickedExpanded] = useState(true);
   const [tripPlan, setTripPlan] = useState<TripPlan | null>(() => loadTripPlan());
+  // A parked plan is edited by loading it back into the ordinary pickers --
+  // there is no second builder. This flag is what tells the day apart from the
+  // plan while that is happening: no reservations are taken, and "Запланувати"
+  // saves back over the plan instead of making another one.
+  const [planEditing, setPlanEditing] = useState(false);
   const [planExpanded, setPlanExpanded] = useState(false);
   // Which object the car is parked at, if any. Not the same as "this screen
   // is open on an object": the foreman can switch the screen to another
@@ -540,6 +548,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       setPlanObjectId(draft.planObjectId ?? null);
       setCoefs(draft.coefs ?? {});
       setEditingTripSeq(draft.editingTripSeq ?? null);
+      setPlanEditing(!!draft.planEditing);
       setInProgressResumeStep(draft.step);
       setStep(draft.step);
       setRestoredBanner(true);
@@ -625,6 +634,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       planObjectId,
       coefs,
       editingTripSeq,
+      planEditing,
     });
   }, [
     date,
@@ -649,6 +659,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     planObjectId,
     coefs,
     editingTripSeq,
+    planEditing,
   ]);
 
   function employeeName(id: string) {
@@ -696,6 +707,9 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // the meantime) so callers can stop the wizard from advancing instead of
   // just showing the error text underneath a screen the user already left.
   async function reserveIfPossible(): Promise<boolean> {
+    // A plan is an intention, not a claim (see lib/tripPlan.ts). Editing one
+    // must not hold today's bus or crew for a trip that has not started.
+    if (planEditing) return true;
     if (!carId && !employeeIds.length) return true;
     try {
       await api.post("/api/road-timesheet/reserve", { date, carId, employeeIds });
@@ -771,6 +785,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     setPreview(null);
     setEditingTripSeq(null);
     setInProgressResumeStep(null);
+    setPlanEditing(false);
     setStep("HUB");
   }
 
@@ -782,6 +797,9 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
    * be labelled "скинути день", which read as if it wiped everything.
    */
   async function resetTrip() {
+    // While a plan is open in the pickers there is no trip to reset -- the
+    // same button means "drop the edits".
+    if (planEditing) return cancelPlanEdit();
     const confirmed = await confirmDialog(
       tripStartedAt
         ? "Скинути поточну поїздку?\n\nПоїздка вже почалась — години з таймерів, обʼєкти й роботи буде втрачено безповоротно. Уже відправлені поїздки цього дня лишаться на місці."
@@ -825,8 +843,35 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       })),
     });
     setTripPlan(loadTripPlan());
-    logChange("Збережено план на наступний виїзд");
+    logChange(planEditing ? "Змінено план на наступний виїзд" : "Збережено план на наступний виїзд");
     haptic("success");
+    // The setup on screen existed only to edit the plan -- put the day back
+    // the way it was found.
+    if (planEditing) await releaseAndClearDay();
+  }
+
+  /**
+   * Opens the parked plan in the ordinary pickers so it can be changed.
+   *
+   * Only from an empty day: the plan and the day share one set of builder
+   * state, and loading the plan over a half-built trip would destroy it. That
+   * is also when a plan actually gets revised -- in the evening, before
+   * anything has started.
+   */
+  async function startPlanEdit() {
+    if (!tripPlan) return;
+    if (carId || employeeIds.length || plans.length) {
+      setError("Спочатку завершіть або скиньте поточну поїздку — план редагується на порожньому дні.");
+      return;
+    }
+    applyTripPlan();
+    setPlanEditing(true);
+    setStep("HUB");
+  }
+
+  async function cancelPlanEdit() {
+    if (!(await confirmDialog("Вийти без збереження? Зміни в плані буде втрачено, сам план лишиться як був."))) return;
+    await releaseAndClearDay();
   }
 
   /** Pulls a saved plan into the day, odometer included. */
@@ -1114,6 +1159,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     setSubmittedEditBanner(false);
     setPreview(null);
     setInProgressResumeStep(null);
+    setPlanEditing(false);
     haptic("selection");
     setStep("HUB");
   }
@@ -1401,6 +1447,80 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
   function removeObjectPhoto(objectId: string, url: string) {
     setPlans((prev) => prev.map((p) => (p.objectId !== objectId ? p : { ...p, photoUrls: p.photoUrls.filter((u) => u !== url) })));
+  }
+
+  /**
+   * The parked plan, as a card you can act on.
+   *
+   * It used to be a grey hint line on a day that already had something in it:
+   * you could read the one-line summary and delete it, and that was all. A
+   * plan made the night before is exactly the thing a foreman wants to open
+   * and correct in the morning, so it is the same card in both places --
+   * "Використати" only where a day is empty enough to take it.
+   */
+  function renderPlanCard(canApply: boolean) {
+    if (!tripPlan) return null;
+    const plan = tripPlan;
+    return (
+      <div className="suggestion-card">
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="setup-icon accent-teal" style={{ width: 34, height: 34, fontSize: 16 }}>
+            📋
+          </span>
+          <div className="cell-title">{canApply ? "Є заплановане на цей виїзд" : "План на наступний виїзд"}</div>
+        </div>
+        <div className="hint" style={{ marginTop: 6 }}>
+          {cars.find((c) => c.id === plan.carId)?.name ?? "без авто"} · {nPeople(plan.employeeIds.length)} ·{" "}
+          {nObjects(plan.objects.length)}
+        </div>
+        <div style={{ marginTop: 6 }}>
+          <button className="chip chip-sm" onClick={() => setPlanExpanded((v) => !v)}>
+            {planExpanded ? "▾ Сховати деталі" : "▸ Показати деталі"}
+          </button>
+        </div>
+        {planExpanded && (
+          <div style={{ marginTop: 10 }}>
+            <div className="hint" style={{ fontWeight: 600 }}>👥 Люди</div>
+            <ul className="bullets">
+              {plan.employeeIds.length ? plan.employeeIds.map((id) => <li key={id}>{employeeName(id)}</li>) : <li>—</li>}
+            </ul>
+            <div className="hint" style={{ fontWeight: 600, marginTop: 14 }}>📍 Обʼєкти та роботи</div>
+            {plan.objects.length ? (
+              plan.objects.map((o) => (
+                <div key={o.objectId} style={{ marginTop: 10 }}>
+                  <div className="hint" style={{ fontWeight: 600 }}>{o.objectName}</div>
+                  <ul className="bullets">
+                    {o.works.length ? o.works.map((w) => <li key={w.workId}>{w.workName}</li>) : <li>без робіт</li>}
+                  </ul>
+                </div>
+              ))
+            ) : (
+              <div className="hint">—</div>
+            )}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+          <button
+            className="chip"
+            onClick={async () => {
+              if (!(await confirmDialog("Прибрати заплановане?"))) return;
+              clearTripPlan();
+              setTripPlan(null);
+            }}
+          >
+            🗑 Прибрати
+          </button>
+          <button className="chip" onClick={startPlanEdit}>
+            ✏️ Змінити
+          </button>
+          {canApply && (
+            <button className="chip selected" onClick={applyTripPlan}>
+              Використати заплановане
+            </button>
+          )}
+        </div>
+      </div>
+    );
   }
 
   /** The photo strip, shared by the object screen and the day summary. */
@@ -2593,67 +2713,27 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             </div>
           )}
 
-          {restoredBanner && (
+          {restoredBanner && !planEditing && (
             <div className="hint" style={{ padding: "0 16px 8px" }}>
               🔄 Відновлено чернетку дня, яку не встигли відправити.
             </div>
           )}
 
-          {showPlanSuggestion && tripPlan && (
-            <div className="suggestion-card">
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span className="setup-icon accent-teal" style={{ width: 34, height: 34, fontSize: 16 }}>
-                  📋
-                </span>
-                <div className="cell-title">Є заплановане на цей виїзд</div>
-              </div>
-              <div className="hint" style={{ marginTop: 6 }}>
-                {cars.find((c) => c.id === tripPlan.carId)?.name ?? "без авто"} · {nPeople(tripPlan.employeeIds.length)} ·{" "}
-                {nObjects(tripPlan.objects.length)}
-              </div>
-              <div style={{ marginTop: 6 }}>
-                <button className="chip chip-sm" onClick={() => setPlanExpanded((v) => !v)}>
-                  {planExpanded ? "▾ Сховати деталі" : "▸ Показати деталі"}
-                </button>
-              </div>
-              {planExpanded && (
-                <div style={{ marginTop: 10 }}>
-                  <div className="hint" style={{ fontWeight: 600 }}>👥 Люди</div>
-                  <ul className="bullets">
-                    {tripPlan.employeeIds.length ? (
-                      tripPlan.employeeIds.map((id) => <li key={id}>{employeeName(id)}</li>)
-                    ) : (
-                      <li>—</li>
-                    )}
-                  </ul>
-                  <div className="hint" style={{ fontWeight: 600, marginTop: 14 }}>📍 Обʼєкти та роботи</div>
-                  {tripPlan.objects.map((o) => (
-                    <div key={o.objectId} style={{ marginTop: 10 }}>
-                      <div className="hint" style={{ fontWeight: 600 }}>{o.objectName}</div>
-                      <ul className="bullets">
-                        {o.works.length ? o.works.map((w) => <li key={w.workId}>{w.workName}</li>) : <li>без робіт</li>}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                <button
-                  className="chip"
-                  onClick={async () => {
-                    if (!(await confirmDialog("Прибрати заплановане?"))) return;
-                    clearTripPlan();
-                    setTripPlan(null);
-                  }}
-                >
-                  🗑 Прибрати
-                </button>
-                <button className="chip selected" onClick={applyTripPlan}>
-                  Використати заплановане
+          {/* Without this the screen is indistinguishable from a real day being
+              built -- same pickers, same car, same people. */}
+          {planEditing && (
+            <div className="empty-state" style={{ textAlign: "left" }}>
+              ✏️ <b>Редагуєте план на наступний виїзд.</b> Міняйте авто, людей, обʼєкти й роботи звичайними кнопками нижче, потім
+              «Зберегти зміни в плані». Авто й люди при цьому не бронюються.
+              <div style={{ marginTop: 8 }}>
+                <button className="chip" onClick={cancelPlanEdit}>
+                  Скасувати редагування
                 </button>
               </div>
             </div>
           )}
+
+          {showPlanSuggestion && tripPlan && renderPlanCard(true)}
 
           {showCopySuggestion && lastTrip && (
             <div className="suggestion-card">
@@ -2753,9 +2833,9 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             <button className="cell" onClick={saveAsPlan} disabled={!carId && !employeeIds.length && !plans.length}>
               <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <span className="setup-icon accent-teal">📋</span>
-                <span className="cell-title">Запланувати наступний виїзд</span>
+                <span className="cell-title">{planEditing ? "Зберегти зміни в плані" : "Запланувати наступний виїзд"}</span>
               </span>
-              <span className="cell-sub">копія цього складу ›</span>
+              <span className="cell-sub">{planEditing ? "перезаписати план ›" : "копія цього складу ›"}</span>
             </button>
             <button className="cell" onClick={onOpenRetro}>
               <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -2765,28 +2845,10 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               <span className="cell-sub">без таймерів ›</span>
             </button>
           </div>
-          {/* The plan card above only offers itself on an empty day. Without
-              this line a foreman who saved a plan mid-day would see nothing
-              happen and save it again, unsure whether it took. */}
-          {tripPlan && !showPlanSuggestion && (
-            <div className="hint" style={{ padding: "0 16px 8px", display: "flex", justifyContent: "space-between", gap: 10 }}>
-              <span>
-                📋 План на наступний виїзд збережено: {cars.find((c) => c.id === tripPlan.carId)?.name ?? "без авто"} ·{" "}
-                {nPeople(tripPlan.employeeIds.length)} · {nObjects(tripPlan.objects.length)}. Підтягнеться на порожньому дні. Щоб
-                звільнити авто й людей — «🗑» угорі.
-              </span>
-              <button
-                className="back-btn"
-                onClick={async () => {
-                  if (!(await confirmDialog("Прибрати заплановане?"))) return;
-                  clearTripPlan();
-                  setTripPlan(null);
-                }}
-              >
-                🗑
-              </button>
-            </div>
-          )}
+          {/* The card above only offers itself on an empty day; on a day that
+              already has something in it the plan still has to be readable and
+              editable, just without the "use it now" button. */}
+          {tripPlan && !showPlanSuggestion && !planEditing && renderPlanCard(false)}
 
           {tripStartedAt && (
             <>
