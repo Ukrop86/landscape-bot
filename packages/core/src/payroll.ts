@@ -39,6 +39,21 @@ export function roundToQuarterHours(hours: number) {
   return 1;
 }
 
+/**
+ * Below this many hours at an object a session is not paid work.
+ *
+ * Hours decide the amounts now, so a mis-tap that opens and closes a timer a
+ * second later used to draw a slice of the crew pot. 0.1 h = 6 minutes: long
+ * enough that nobody reaches it by accident, short enough for a real "drove
+ * up, tied a tree, left" call. The person still appears in the report with
+ * their real time and 0 pay -- silently dropping them would hide the mistake
+ * that needs fixing (🕒 Ввести години вручну).
+ *
+ * The role cuts are untouched: a brigadier is owed 20% for running the day
+ * whether or not they touched a spade, which is what a zero-hour row is for.
+ */
+export const MIN_PAID_HOURS = 0.1;
+
 export type SalaryRow = {
   employeeId: string;
   employeeName: string;
@@ -67,7 +82,8 @@ export type ObjectSalaryPack = {
  * is not handed to the crew -- it stays with the company (companyPay).
  *
  * The worker remainder is split IN PROPORTION TO HOURS: two hours on an
- * object pay twice what one hour there does. Works that name specific people
+ * object pay twice what one hour there does, and anything under MIN_PAID_HOURS
+ * counts as no work at all. Works that name specific people
  * form their own pool each (also split by hours between them), so a job one
  * person did alone pays only that person -- and that person is then OUT of
  * the shared pool, which belongs to the crew that did the rest. Everything
@@ -103,7 +119,11 @@ export function buildSalaryPacksWithRoles(params: {
     // this particular object, so their 20% is owed either way -- the caller
     // therefore passes a zero-hour row for them (and for the seniors) on every
     // object, and that row is what makes hasBrigadier/hasSenior true here.
-    const worked = all.filter((r) => r.hours > 0);
+    //
+    // MIN_PAID_HOURS, not "> 0": a timer opened and closed by accident is not
+    // work, and since the crew share is proportional it would otherwise take a
+    // (small) cut off everyone who actually worked.
+    const worked = all.filter((r) => r.hours >= MIN_PAID_HOURS);
 
     const isBrigadier = (id: string) => !!brigadierEmployeeId && id === brigadierEmployeeId;
     const isSenior = (id: string) => seniorSet.has(id);

@@ -6,7 +6,7 @@
 //   npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildSalaryPacksWithRoles } from "../src/payroll.ts";
+import { buildSalaryPacksWithRoles, MIN_PAID_HOURS } from "../src/payroll.ts";
 
 type Row = { employeeId: string; employeeName: string; hours: number; disciplineCoef: number; productivityCoef: number };
 const row = (id: string, hours: number): Row => ({ employeeId: id, employeeName: id, hours, disciplineCoef: 1, productivityCoef: 1 });
@@ -36,7 +36,7 @@ test("фонд об'єкта завжди розподіляється повн�
     pack({ total: 1000, rows: [row("b", 0), row("w1", 8), row("w2", 4)], brigadier: "b" }),
     pack({ total: 1000, rows: [row("b", 8), row("s", 6), row("w1", 2)], brigadier: "b", seniors: ["s"] }),
     pack({ total: 1000, rows: [row("w1", 5), row("w2", 5)] }),
-    pack({ total: 225, rows: [row("b", 0), row("w1", 0.01), row("w2", 0.01)], brigadier: "b" }),
+    pack({ total: 225, rows: [row("b", 0), row("w1", 3), row("w2", 3)], brigadier: "b" }),
     pack({
       total: 1000,
       rows: [row("b", 0), row("w1", 6), row("w2", 2)],
@@ -140,14 +140,36 @@ test("коли в усіх присутніх є закріплені робот
   assert.equal(payOf(p, "w1"), payOf(p, "w2"));
 });
 
-test("сесія в кілька секунд не округлюється до нуля в звіті", () => {
-  // 1 секунда = 0.000278 год. Округлення до 2 знаків показувало "0 год" поруч
-  // із виплатою, яку ця людина реально отримала з бригадного кошика.
-  const p = pack({ total: 687.5, rows: [row("b", 1 / 3600), row("w1", 0.01)], brigadier: "b" });
+test("сесія в кілька секунд видима у звіті, але не оплачується", () => {
+  // 1 секунда = 0.000278 год. Округлення до 2 знаків раніше показувало "0 год"
+  // поруч із виплатою з бригадного кошика; тепер години видно, а поріг
+  // MIN_PAID_HOURS не пускає таку сесію в поділ.
+  const p = pack({ total: 687.5, rows: [row("b", 1 / 3600), row("w1", 4)], brigadier: "b" });
   const b = p.rows.find((r) => r.employeeId === "b")!;
-  assert.ok(b.hours > 0, "години бригадира не мають бути нулем");
-  assert.ok(b.pay > 687.5 * 0.2, "він у бригадному поділі, отже отримує більше за самі 20%");
+  assert.ok(b.hours > 0, "години бригадира мають лишитись видимими");
+  assert.equal(b.pay, Math.round(687.5 * 0.2 * 100) / 100, "лише 20% за ведення дня, без частки бригади");
   assert.equal(distributed(p), 687.5);
+});
+
+test(`години менші за ${MIN_PAID_HOURS} не потрапляють у поділ`, () => {
+  const p = pack({ total: 1000, rows: [row("w1", 8), row("w2", MIN_PAID_HOURS - 0.001)] });
+  assert.equal(payOf(p, "w2"), 0);
+  assert.equal(payOf(p, "w1"), 900);
+  assert.equal(distributed(p), 1000);
+});
+
+test(`рівно ${MIN_PAID_HOURS} години вже оплачуються`, () => {
+  const p = pack({ total: 1000, rows: [row("w1", MIN_PAID_HOURS), row("w2", MIN_PAID_HOURS)] });
+  assert.equal(payOf(p, "w1"), 450);
+  assert.equal(payOf(p, "w2"), 450);
+});
+
+test("людина з надто короткою сесією лишається у звіті з нулем — помилку видно", () => {
+  const p = pack({ total: 1000, rows: [row("w1", 8), row("w2", 0.01)] });
+  const short = p.rows.find((r) => r.employeeId === "w2");
+  assert.ok(short, "рядок має лишитись, інакше забуті години зникли б мовчки");
+  assert.equal(short!.pay, 0);
+  assert.equal(short!.hours, 0.01);
 });
 
 test("коефіцієнти не рухають гроші", () => {

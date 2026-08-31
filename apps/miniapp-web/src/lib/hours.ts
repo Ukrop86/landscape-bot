@@ -13,3 +13,11 @@ export function fmtHours(hours: number): string {
   if (minutes >= 1) return `${Math.round(minutes)} хв`;
   return "<1 хв";
 }
+
+/**
+ * Mirror of MIN_PAID_HOURS in packages/core/src/payroll.ts -- the web app does
+ * not import the server package, so the value is repeated here on purpose.
+ * Change one and change the other, or the screen will promise money the split
+ * will not pay.
+ */
+export const MIN_PAID_HOURS = 0.1;

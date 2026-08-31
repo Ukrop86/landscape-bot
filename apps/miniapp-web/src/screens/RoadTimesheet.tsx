@@ -11,7 +11,7 @@ import { BackRow } from "../components/BackRow";
 import { MainButton } from "../components/MainButton";
 import { NumericKeypad } from "../components/NumericKeypad";
 import { PhotoButton } from "../components/PhotoButton";
-import { fmtHours } from "../lib/hours";
+import { fmtHours, MIN_PAID_HOURS } from "../lib/hours";
 
 // Hub-based flow: after opening the road timesheet, the foreman lands on a HUB
 // screen with editable cards -- Авто, Люди, Обʼєкти, Роботи. Each card opens
@@ -4965,18 +4965,24 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
           </div>
 
           {(() => {
-            // No session anywhere today means no hours, and hours are what
-            // decide who is in an object's split at all -- so this person
-            // would be paid nothing, silently. The rescue (🕒 Години вручну)
-            // sits on each object right above; this says who needs it.
-            const noHours = employeeIds.filter((id) => plans.every((p) => hoursAtObject(p, id) <= 0));
-            if (!noHours.length) return null;
+            // Hours decide both who is in an object's split and how big their
+            // slice is, and anything under MIN_PAID_HOURS counts as no work at
+            // all -- so these people would be paid nothing, silently. A
+            // forgotten timer and a mis-tapped one land here alike. The rescue
+            // (🕒 Години вручну) sits on each object right above.
+            const unpaid = employeeIds
+              .map((id) => ({ id, best: Math.max(0, ...plans.map((p) => hoursAtObject(p, id))) }))
+              .filter((x) => x.best < MIN_PAID_HOURS);
+            if (!unpaid.length) return null;
             return (
               <div className="hint" style={{ padding: "0 16px 10px", color: "#d70015" }}>
-                ⚠️ Без годин — за цей день нічого не нарахується:
+                ⚠️ Менше {MIN_PAID_HOURS} год — за цей день нічого не нарахується:
                 <ul className="bullets">
-                  {noHours.map((id) => (
-                    <li key={id}>{shortName(employeeName(id))}</li>
+                  {unpaid.map((x) => (
+                    <li key={x.id}>
+                      {shortName(employeeName(x.id))}
+                      {x.best > 0 ? ` — ${fmtHours(x.best)}` : ""}
+                    </li>
                   ))}
                 </ul>
                 Відкрийте «🕒 Години вручну» на тому обʼєкті, де людина працювала.
@@ -5189,7 +5195,13 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               // foreman signs off, not only in the report the admin sees after
               // approval. The share is of the object's HOURS -- deliberately
               // not of the money, which stays hidden until approval.
-              const objectHours = peopleHere.reduce((a, id) => a + hoursAtObject(p, id), 0);
+              // Only hours that will actually be paid: someone under the
+              // minimum is not in the pot, so counting them would make
+              // everyone else's percentage read lower than they will be paid.
+              const objectHours = peopleHere.reduce((a, id) => {
+                const h = hoursAtObject(p, id);
+                return a + (h >= MIN_PAID_HOURS ? h : 0);
+              }, 0);
               return (
                 <div key={p.objectId}>
                   <div className="cell-row">
@@ -5271,7 +5283,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                                   </span>
                                   <span className="cell-sub">
                                     {fmtHours(hoursAtObject(p, id))}
-                                    {objectHours > 0 && ` · ${Math.round((hoursAtObject(p, id) / objectHours) * 100)}%`}
+                                    {hoursAtObject(p, id) < MIN_PAID_HOURS ? (
+                                      <span style={{ color: "#d70015" }}> · не оплачується</span>
+                                    ) : (
+                                      objectHours > 0 && ` · ${Math.round((hoursAtObject(p, id) / objectHours) * 100)}%`
+                                    )}
                                     {c.disciplineCoef !== 1 || c.productivityCoef !== 1 ? ` · ${c.disciplineCoef}/${c.productivityCoef}` : ""}
                                   </span>
                                 </button>
