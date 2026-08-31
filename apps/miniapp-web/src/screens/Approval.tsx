@@ -3,6 +3,7 @@ import { api, type Employee, type SalaryPack } from "../lib/api";
 import { confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, shortName } from "../lib/employee";
 import { BackRow } from "../components/BackRow";
+import { fmtHours } from "../lib/hours";
 
 type PendingObject = {
   objectId: string;
@@ -308,7 +309,7 @@ export function Approval({
                                           {selfT && <span className="mark" title="приїхав сам — без доплати за виїзд"> 🚶</span>}
                                         </span>
                                         <span className="approval-nums">
-                                          <span className={`badge badge-sm ${r.hours > 0 ? "" : "danger"}`}>{r.hours} год</span>
+                                          <span className={`badge badge-sm ${r.hours > 0 ? "" : "danger"}`}>{fmtHours(r.hours)}</span>
                                           {r.coefTotal !== 1 && <span className="badge badge-sm warn">к{r.coefTotal}</span>}
                                           <span className="badge badge-sm ok">{r.pay} грн</span>
                                         </span>

@@ -11,6 +11,7 @@ import { BackRow } from "../components/BackRow";
 import { MainButton } from "../components/MainButton";
 import { NumericKeypad } from "../components/NumericKeypad";
 import { PhotoButton } from "../components/PhotoButton";
+import { fmtHours } from "../lib/hours";
 
 // Hub-based flow: after opening the road timesheet, the foreman lands on a HUB
 // screen with editable cards -- Авто, Люди, Обʼєкти, Роботи. Each card opens
@@ -1014,7 +1015,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                               )}
                             </span>
                             <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                              <span className="badge">{hrs} год</span>
+                              <span className="badge">{fmtHours(hrs)}</span>
                               {(disc !== 1 || prod !== 1) && (
                                 <span className="badge warn">
                                   к: {disc} / {prod}
@@ -1930,7 +1931,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     const ms = plan.sessions
       .filter((s) => s.employeeId === employeeId)
       .reduce((a, s) => a + Math.max(0, (s.endedAt ? new Date(s.endedAt).getTime() : now) - new Date(s.startedAt).getTime()), 0);
-    return Math.round((ms / 3_600_000) * 100) / 100;
+    return Math.round((ms / 3_600_000) * 10000) / 10000;
   }
 
   // Manual override: replace a person's sessions at an object with ONE closed
@@ -5188,7 +5189,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               // foreman signs off, not only in the report the admin sees after
               // approval. The share is of the object's HOURS -- deliberately
               // not of the money, which stays hidden until approval.
-              const objectHours = Math.round(peopleHere.reduce((a, id) => a + hoursAtObject(p, id), 0) * 100) / 100;
+              const objectHours = peopleHere.reduce((a, id) => a + hoursAtObject(p, id), 0);
               return (
                 <div key={p.objectId}>
                   <div className="cell-row">
@@ -5198,7 +5199,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       </span>
                       <span style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
                         <span className="badge">👤 {peopleHere.length}</span>
-                        <span className={`badge ${objectHours > 0 ? "" : "warn"}`}>⏱ {objectHours} год</span>
+                        <span className={`badge ${objectHours > 0 ? "" : "warn"}`}>⏱ {fmtHours(objectHours)}</span>
                         {p.photoUrls.length > 0 && <span className="badge">📷 {p.photoUrls.length}</span>}
                         {p.works.length > 0 && (
                           <span className={`badge ${unfilled === 0 ? "ok" : "warn"}`}>
@@ -5269,7 +5270,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                                     {roleFor(id) !== "робітник" && <span className={roleTagClass(roleFor(id))} style={{ marginLeft: 6 }}>{roleFor(id)}</span>}
                                   </span>
                                   <span className="cell-sub">
-                                    {hoursAtObject(p, id)} год
+                                    {fmtHours(hoursAtObject(p, id))}
                                     {objectHours > 0 && ` · ${Math.round((hoursAtObject(p, id) / objectHours) * 100)}%`}
                                     {c.disciplineCoef !== 1 || c.productivityCoef !== 1 ? ` · ${c.disciplineCoef}/${c.productivityCoef}` : ""}
                                   </span>

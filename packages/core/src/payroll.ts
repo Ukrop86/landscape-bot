@@ -177,7 +177,10 @@ export function buildSalaryPacksWithRoles(params: {
       return {
         employeeId: r.employeeId,
         employeeName: r.employeeName,
-        hours: Math.round(Number(r.hours || 0) * 100) / 100,
+        // Four decimals, not two: a session of a few seconds is still work
+        // that draws on the crew pot, and rounding it to 0.00 made the report
+        // say "0 год" next to a payout the crew split had actually earned.
+        hours: Math.round(Number(r.hours || 0) * 10000) / 10000,
         coefTotal: r.coefTotal,
         points: r.points,
         pay: Math.round((crewShare + roleBonus) * 100) / 100,

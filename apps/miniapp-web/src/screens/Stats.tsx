@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { todayISO } from "../lib/date";
+import { fmtHours } from "../lib/hours";
 import { useTelegramBackButton } from "../lib/telegram";
 import { BackRow } from "../components/BackRow";
 
@@ -183,7 +184,7 @@ export function Stats({ onBack, isAdmin }: { onBack: () => void; isAdmin?: boole
                                   <div className="approval-row-main">
                                     <span className="approval-row-name">{e.employeeName}</span>
                                     <span className="approval-nums">
-                                      <span className="badge badge-sm">{e.hours} год</span>
+                                      <span className="badge badge-sm">{fmtHours(e.hours)}</span>
                                       <span className="badge badge-sm ok">{e.pay} ₴</span>
                                     </span>
                                   </div>
@@ -229,7 +230,7 @@ export function Stats({ onBack, isAdmin }: { onBack: () => void; isAdmin?: boole
                                   <div className="approval-row-main">
                                     <span className="approval-row-name">{o.objectName}</span>
                                     <span className="approval-nums">
-                                      <span className="badge badge-sm">{o.hours} год</span>
+                                      <span className="badge badge-sm">{fmtHours(o.hours)}</span>
                                       <span className="badge badge-sm ok">{data.moneyApproved ? `${o.pay} ₴` : "🔒 •••"}</span>
                                     </span>
                                   </div>
