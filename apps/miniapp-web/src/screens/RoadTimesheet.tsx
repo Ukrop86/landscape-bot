@@ -1861,15 +1861,14 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     const brigadiersHere = plan.here.filter((id) => !openIds.has(id) && roleFor(id) === "бригадир");
     let skipIds = new Set<string>();
     if (brigadiersHere.length) {
-      const names = brigadiersHere.map((id) => shortName(employeeName(id))).join(", ");
-      const many = brigadiersHere.length > 1;
+      // Just the question and the names. The foreman taps this several times a
+      // day and already knows what it means -- an explanation of how the 20%
+      // works turns a two-second tap into something to read.
       const withBrigadier = await askDialog(
-        `${names} — ${many ? "бригадири" : "бригадир"}. ${many ? "Вони теж працюють" : "Він теж працює"} на цьому обʼєкті?\n\n` +
-          `Так — ${many ? "ідуть" : "піде"} в поділ бригадної частини за свої години.\n` +
-          `Ні — ${many ? "отримають" : "отримає"} лише свої 20% за ведення дня.`,
+        brigadiersHere.map((id) => `• ${shortName(employeeName(id))}`).join("\n"),
         "Так",
         "Ні",
-        many ? "Почати роботи з бригадирами?" : "Почати роботи з бригадиром?",
+        brigadiersHere.length > 1 ? "Почати роботи з бригадирами?" : "Почати роботи з бригадиром?",
       );
       if (!withBrigadier) skipIds = new Set(brigadiersHere);
     }
