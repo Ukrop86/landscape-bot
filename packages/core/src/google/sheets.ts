@@ -177,6 +177,37 @@ export async function deleteRowsWhere(
   return doomed.length;
 }
 
+/**
+ * Removes every data row from a sheet, keeping the header.
+ *
+ * For wiping a test run: the tabs the PROGRAM writes (the event journal, the
+ * timesheet, the accounting export) rather than the dictionaries a human
+ * maintains. A missing tab is not an error -- it is already as empty as it can
+ * be. Returns how many rows went.
+ */
+export async function clearSheetData(sheetName: string): Promise<number> {
+  const sheets = getSheetsClient();
+  const meta = await withSheetsRetry("spreadsheet metadata", () =>
+    sheets.spreadsheets.get({ spreadsheetId: config.sheetId, fields: "sheets.properties(sheetId,title)" }),
+  );
+  const sheetId = (meta.data.sheets ?? []).find((s) => s.properties?.title === sheetName)?.properties?.sheetId;
+  if (sheetId === undefined || sheetId === null) return 0;
+
+  const { all } = await loadSheet(sheetName);
+  if (all.length < 2) return 0;
+
+  await withSheetsRetry(`${sheetName} clear ${all.length - 1} rows`, () =>
+    sheets.spreadsheets.batchUpdate({
+      spreadsheetId: config.sheetId,
+      requestBody: {
+        // One half-open range from just under the header to the last row.
+        requests: [{ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: 1, endIndex: all.length } } }],
+      },
+    }),
+  );
+  return all.length - 1;
+}
+
 /** Append rows built from a patch object keyed by header name, respecting the sheet's real column order. */
 export async function appendRowsByHeaders(sheetName: string, patches: Record<string, any>[]) {
   if (!patches.length) return;

@@ -5,7 +5,18 @@ import fs from "node:fs";
 import express from "express";
 import cors from "cors";
 import { sql } from "drizzle-orm";
-import { startSyncLoop, runSyncCycle, runMigrations, config, db, schema } from "@landscape/core";
+import {
+  startSyncLoop,
+  runSyncCycle,
+  runMigrations,
+  config,
+  db,
+  schema,
+  sheetsClient,
+  sheetNames,
+  ACCOUNTING_SHEET,
+  ACCOUNTING_META_SHEET,
+} from "@landscape/core";
 import { requireTelegramAuth } from "./authMiddleware.js";
 import { registerTelegramWebhook, setupTelegramWebhook } from "./telegramWebhook.js";
 import { dictionariesRouter } from "./routes/dictionaries.js";
@@ -89,6 +100,31 @@ const WORKING_DATA_TABLES = [
   "material_moves",
   "tool_moves",
   "sync_cursors",
+  // Plans are working data too -- the accountant never sees them, and a wiped
+  // plan costs five minutes of re-picking (see schema.ts:tripPlans).
+  "trip_plans",
+] as const;
+
+/**
+ * The tabs the PROGRAM writes, as opposed to the dictionaries a human keeps.
+ *
+ * Order matters when wiping: six of these are read back by runSyncCycle, so
+ * Postgres must be cleared AFTER the sheets or the next cycle (~45s) puts them
+ * straight back. БУХЗВІТ_META holds the export's idempotency keys -- leaving it
+ * behind would make a re-approved day silently skip its export.
+ */
+const WORKING_DATA_SHEETS = [
+  sheetNames.SHEET_NAMES.events,
+  sheetNames.SHEET_NAMES.reports,
+  sheetNames.SHEET_NAMES.timesheet,
+  sheetNames.SHEET_NAMES.odometerDay,
+  sheetNames.SHEET_NAMES.allowances,
+  sheetNames.SHEET_NAMES.dayStatus,
+  sheetNames.SHEET_NAMES.closures,
+  sheetNames.SHEET_NAMES.materialsMove,
+  sheetNames.SHEET_NAMES.toolsMove,
+  ACCOUNTING_SHEET,
+  ACCOUNTING_META_SHEET,
 ] as const;
 
 // Full reset of a test run's accumulated data, so real-world testing can
@@ -111,6 +147,45 @@ app.post("/internal/reset-working-data", requireBotToken, async (_req, res) => {
     res.json({ ok: true, cleared: before });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+/**
+ * POST /internal/reset-all — wipes an entire test run: the sheets the program
+ * writes, then the Postgres tables behind them.
+ *
+ * Dictionaries are NOT touched: КОРИСТУВАЧІ, ПРАЦІВНИКИ, ОБЄКТИ, РОБОТИ, АВТО,
+ * ЛОГІСТИКА, МАТЕРІАЛИ, ІНСТРУМЕНТИ, НАЛАШТУВАННЯ are maintained by hand and
+ * are the input, not the output.
+ *
+ * Sheets go first and Postgres only if every one of them succeeded. Half a
+ * wipe is worse than none: clearing Postgres alone lets the sync restore it,
+ * and clearing some sheets while the database still holds the day leaves the
+ * two disagreeing about what happened.
+ */
+app.post("/internal/reset-all", requireBotToken, async (_req, res) => {
+  const sheetsCleared: Record<string, number> = {};
+  try {
+    for (const name of WORKING_DATA_SHEETS) {
+      sheetsCleared[name] = await sheetsClient.clearSheetData(name);
+    }
+  } catch (e) {
+    console.error("[maintenance] sheet clearing failed, Postgres left untouched", e);
+    res.status(502).json({
+      error: `Не вдалося очистити аркуші: ${(e as Error).message}. Базу не чіпали — спробуйте ще раз.`,
+      sheetsCleared,
+    });
+    return;
+  }
+
+  try {
+    const countQuery = WORKING_DATA_TABLES.map((t) => `SELECT '${t}' AS "table", count(*)::int AS rows FROM ${t}`).join(" UNION ALL ");
+    const before = await db.execute(sql.raw(countQuery));
+    await db.execute(sql.raw(`TRUNCATE TABLE ${WORKING_DATA_TABLES.join(", ")} RESTART IDENTITY`));
+    console.log(`[maintenance] full reset: sheets=${JSON.stringify(sheetsCleared)} tables=${JSON.stringify(before)}`);
+    res.json({ ok: true, sheetsCleared, tablesCleared: before });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message, sheetsCleared });
   }
 });
 

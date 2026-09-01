@@ -228,12 +228,23 @@ apps/bot/ — ВИДАЛЕНО (старий Telegram-бот). Його єдин
 ```bash
 POST /internal/sync-now             # негайний цикл Sheets → Postgres
 POST /internal/reset-odometer       # чистить odometer_days (показники біля авто)
-POST /internal/reset-working-data   # чистить усі 10 робочих таблиць, довідники не чіпає
+POST /internal/reset-working-data   # чистить робочі таблиці Postgres, довідники не чіпає
+POST /internal/reset-all            # ★ повне обнулення: спершу АРКУШІ, потім Postgres
 ```
 
 `reset-working-data` = events, reports, timesheet_entries, odometer_days,
-allowances, day_statuses, closures, material_moves, tool_moves, sync_cursors.
-**Спершу очистити відповідні аркуші**, інакше синк поверне їх за ~45с.
+allowances, day_statuses, closures, material_moves, tool_moves, sync_cursors,
+trip_plans. **Спершу очистити відповідні аркуші**, інакше синк поверне їх
+за ~45с.
+
+**`reset-all` робить це сам і в правильному порядку.** Чистить аркуші, які
+пише програма — ЖУРНАЛ_ПОДІЙ, ЗВІТИ, ТАБЕЛЬ, ОДОМЕТР_ДЕНЬ, ДОПЛАТИ,
+СТАТУС_ДНЯ, ЗАКРИТТЯ, МАТЕРІАЛИ_РУХ, ІНСТРУМЕНТ_РУХ, **БУХЗВІТ** і
+**БУХЗВІТ_META** — і лише якщо ВСІ вони очистились, робить TRUNCATE у Postgres.
+Довідники (КОРИСТУВАЧІ, ПРАЦІВНИКИ, ОБЄКТИ, РОБОТИ, АВТО, ЛОГІСТИКА,
+МАТЕРІАЛИ, ІНСТРУМЕНТИ, НАЛАШТУВАННЯ) не чіпає — це вхідні дані, їх веде людина.
+БУХЗВІТ_META обов'язково входить: у ньому ключі ідемпотентності експорту, і без
+його очистки повторно затверджений день мовчки не експортувався б.
 
 ## Env-змінні (сервіс miniapp на Railway)
 

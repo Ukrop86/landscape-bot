@@ -3,8 +3,8 @@ import { ensureSheet, loadSheet, appendRows } from "./google/sheets.js";
 // Same tab names/headers the legacy bot writes into (apps/bot/src/google/sheets/accounting.ts)
 // so an approval from either the bot or the mini-app lands in the ONE report the
 // accountant actually opens -- there must never be two separate "БУХЗВІТ"s.
-const ACCOUNTING_SHEET = "БУХЗВІТ";
-const ACCOUNTING_META_SHEET = "БУХЗВІТ_META";
+export const ACCOUNTING_SHEET = "БУХЗВІТ";
+export const ACCOUNTING_META_SHEET = "БУХЗВІТ_META";
 const ACCOUNTING_HEADERS = ["№", "Дата", "Працівник", "Об'єкт", "Роботи", "Обсяг робіт", "Нарахування", "Примітки"] as const;
 const ACCOUNTING_META_HEADERS = ["key", "createdAt", "rowsCount"] as const;
 
