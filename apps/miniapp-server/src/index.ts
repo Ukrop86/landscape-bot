@@ -105,6 +105,19 @@ const WORKING_DATA_TABLES = [
   "trip_plans",
 ] as const;
 
+/** The working tables that carry a `date` column, for a keep-one-day wipe. */
+const DATED_WORKING_TABLES = [
+  "events",
+  "reports",
+  "timesheet_entries",
+  "odometer_days",
+  "allowances",
+  "day_statuses",
+  "closures",
+  "material_moves",
+  "tool_moves",
+] as const;
+
 /**
  * The tabs the PROGRAM writes, as opposed to the dictionaries a human keeps.
  *
@@ -163,11 +176,27 @@ app.post("/internal/reset-working-data", requireBotToken, async (_req, res) => {
  * and clearing some sheets while the database still holds the day leaves the
  * two disagreeing about what happened.
  */
-app.post("/internal/reset-all", requireBotToken, async (_req, res) => {
+app.post("/internal/reset-all", requireBotToken, async (req, res) => {
+  // Optional surgical mode: keep one day, delete the rest. Every working sheet
+  // carries a ДАТА column (БУХЗВІТ spells it "Дата", and БУХЗВІТ_META encodes
+  // it inside its key as MINIAPP|<date>|<foreman>|...), so one date is the one
+  // thing that can be matched consistently everywhere.
+  const keepDate = typeof (req.body as { keepDate?: string } | undefined)?.keepDate === "string"
+    ? String((req.body as { keepDate?: string }).keepDate).trim()
+    : "";
+
   const sheetsCleared: Record<string, number> = {};
   try {
     for (const name of WORKING_DATA_SHEETS) {
-      sheetsCleared[name] = await sheetsClient.clearSheetData(name);
+      if (!keepDate) {
+        sheetsCleared[name] = await sheetsClient.clearSheetData(name);
+        continue;
+      }
+      const dateHeader = name === ACCOUNTING_SHEET ? "Дата" : "ДАТА";
+      sheetsCleared[name] = await sheetsClient.deleteRowsWhere(name, (row, map) => {
+        if (name === ACCOUNTING_META_SHEET) return String(row?.[0] ?? "").split("|")[1] !== keepDate;
+        return String(sheetsClient.getCell(row, map, dateHeader) ?? "").trim() !== keepDate;
+      });
     }
   } catch (e) {
     console.error("[maintenance] sheet clearing failed, Postgres left untouched", e);
@@ -181,11 +210,46 @@ app.post("/internal/reset-all", requireBotToken, async (_req, res) => {
   try {
     const countQuery = WORKING_DATA_TABLES.map((t) => `SELECT '${t}' AS "table", count(*)::int AS rows FROM ${t}`).join(" UNION ALL ");
     const before = await db.execute(sql.raw(countQuery));
-    await db.execute(sql.raw(`TRUNCATE TABLE ${WORKING_DATA_TABLES.join(", ")} RESTART IDENTITY`));
-    console.log(`[maintenance] full reset: sheets=${JSON.stringify(sheetsCleared)} tables=${JSON.stringify(before)}`);
-    res.json({ ok: true, sheetsCleared, tablesCleared: before });
+    if (keepDate) {
+      // Everything except that one day. sync_cursors is emptied either way --
+      // it only records how far the sheet reader got, and re-reading is
+      // harmless. trip_plans is deliberately LEFT ALONE: plans are not trips,
+      // and deleting more than asked cannot be undone.
+      for (const t of DATED_WORKING_TABLES) {
+        await db.execute(sql.raw(`DELETE FROM ${t} WHERE date <> '${keepDate.replace(/'/g, "''")}'`));
+      }
+      await db.execute(sql.raw("TRUNCATE TABLE sync_cursors"));
+    } else {
+      // TRUNCATE rather than DELETE: it also resets the serial id sequences.
+      await db.execute(sql.raw(`TRUNCATE TABLE ${WORKING_DATA_TABLES.join(", ")} RESTART IDENTITY`));
+    }
+    const after = await db.execute(sql.raw(countQuery));
+    console.log(`[maintenance] reset keepDate=${keepDate || "-"} sheets=${JSON.stringify(sheetsCleared)}`);
+    res.json({ ok: true, keepDate: keepDate || null, sheetsCleared, tablesBefore: before, tablesAfter: after });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message, sheetsCleared });
+  }
+});
+
+/** Read-only: what days exist, so a wipe can be aimed before it is fired. */
+app.get("/internal/data-summary", requireBotToken, async (_req, res) => {
+  try {
+    const rows = await db.execute(
+      sql.raw(`SELECT e.date,
+                      e.foreman_tg_id::text AS foreman_tg_id,
+                      COALESCE(u.pib, '') AS foreman_name,
+                      count(*) FILTER (WHERE e.type = 'RTS_SAVE')::int AS trips,
+                      max(e.ts)::text AS last_event,
+                      string_agg(DISTINCT e.status, ',') AS statuses
+               FROM events e
+               LEFT JOIN users u ON u.tg_id = e.foreman_tg_id
+               GROUP BY e.date, e.foreman_tg_id, u.pib
+               ORDER BY e.date DESC, last_event DESC`),
+    );
+    const plans = await db.execute(sql.raw("SELECT count(*)::int AS plans FROM trip_plans"));
+    res.json({ days: rows, plans });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
   }
 });
 
