@@ -1785,15 +1785,33 @@ export function RoadTimesheet({
             )}
           </div>
         )}
-        {(plan.mine || isAdmin) && (
-          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-            <button className="chip" onClick={() => deletePlan(plan)}>🗑 Прибрати</button>
-            <button className="chip" onClick={() => openPlanner(plan)}>✏️ Змінити</button>
-            {plan.mine && (
-              <button className="chip selected" onClick={() => usePlan(plan)}>▶️ Використати</button>
-            )}
-          </div>
-        )}
+        {(() => {
+          // An admin's assignment is a task, not a suggestion: the brigadier
+          // runs it, the admin is the one who changes or withdraws it. Mirrors
+          // loadPlan() on the server -- the buttons and the rule agree.
+          const canEdit = isAdmin || (plan.mine && !plan.assignedByAdmin);
+          if (!canEdit && !plan.mine) return null;
+          return (
+            <>
+              {!canEdit && (
+                <div className="hint" style={{ marginTop: 8 }}>
+                  Змінити або прибрати може лише адміністратор.
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                {canEdit && (
+                  <>
+                    <button className="chip" onClick={() => deletePlan(plan)}>🗑 Прибрати</button>
+                    <button className="chip" onClick={() => openPlanner(plan)}>✏️ Змінити</button>
+                  </>
+                )}
+                {plan.mine && (
+                  <button className="chip selected" onClick={() => usePlan(plan)}>▶️ Використати</button>
+                )}
+              </div>
+            </>
+          );
+        })()}
       </div>
     );
   }

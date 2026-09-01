@@ -148,21 +148,36 @@ tripPlansRouter.post("/", async (req, res) => {
   res.json({ id: row.id, assignedByAdmin });
 });
 
-/** Owner or admin — nobody else edits or deletes someone's plan. */
-async function loadEditable(id: string, tgId: number, isAdmin: boolean) {
+/**
+ * Who may do what with a plan.
+ *
+ * A plan an admin assigned to a brigadier is a TASK, not a suggestion: the
+ * brigadier drives it, the admin is the one who changes it. So they may use it
+ * and nothing else -- otherwise the assignment means nothing the moment it is
+ * received. Plans a brigadier made for themselves stay entirely theirs.
+ */
+async function loadPlan(id: string, tgId: number, isAdmin: boolean) {
   const [row] = await db.select().from(schema.tripPlans).where(eq(schema.tripPlans.id, id));
-  if (!row) return { row: null as null, allowed: false };
-  return { row, allowed: isAdmin || Number(row.foremanTgId) === tgId || Number(row.createdByTgId) === tgId };
+  if (!row) return { row: null as null, canEdit: false, canUse: false };
+  const isOwner = Number(row.foremanTgId) === tgId;
+  const isCreator = Number(row.createdByTgId) === tgId;
+  return {
+    row,
+    canEdit: isAdmin || ((isOwner || isCreator) && !row.assignedByAdmin),
+    canUse: isAdmin || isOwner,
+  };
 }
 
 tripPlansRouter.put("/:id", async (req, res) => {
-  const { row, allowed } = await loadEditable(req.params.id, req.user!.tgId, req.user!.role === "ADMIN");
+  const { row, canEdit } = await loadPlan(req.params.id, req.user!.tgId, req.user!.role === "ADMIN");
   if (!row) {
     res.status(404).json({ error: "План не знайдено" });
     return;
   }
-  if (!allowed) {
-    res.status(403).json({ error: "Це чужий план" });
+  if (!canEdit) {
+    res.status(403).json({
+      error: row.assignedByAdmin ? "Цей виїзд запланував адміністратор — змінити може тільки він" : "Це чужий план",
+    });
     return;
   }
   const body = req.body as PlanBody;
@@ -193,13 +208,15 @@ tripPlansRouter.put("/:id", async (req, res) => {
 });
 
 tripPlansRouter.delete("/:id", async (req, res) => {
-  const { row, allowed } = await loadEditable(req.params.id, req.user!.tgId, req.user!.role === "ADMIN");
+  const { row, canEdit } = await loadPlan(req.params.id, req.user!.tgId, req.user!.role === "ADMIN");
   if (!row) {
     res.status(404).json({ error: "План не знайдено" });
     return;
   }
-  if (!allowed) {
-    res.status(403).json({ error: "Це чужий план" });
+  if (!canEdit) {
+    res.status(403).json({
+      error: row.assignedByAdmin ? "Цей виїзд запланував адміністратор — прибрати може тільки він" : "Це чужий план",
+    });
     return;
   }
   await db.delete(schema.tripPlans).where(eq(schema.tripPlans.id, req.params.id));
@@ -213,12 +230,12 @@ tripPlansRouter.delete("/:id", async (req, res) => {
  * stops immediately while the row is still there if anything needs looking up.
  */
 tripPlansRouter.post("/:id/use", async (req, res) => {
-  const { row, allowed } = await loadEditable(req.params.id, req.user!.tgId, req.user!.role === "ADMIN");
+  const { row, canUse } = await loadPlan(req.params.id, req.user!.tgId, req.user!.role === "ADMIN");
   if (!row) {
     res.status(404).json({ error: "План не знайдено" });
     return;
   }
-  if (!allowed) {
+  if (!canUse) {
     res.status(403).json({ error: "Це чужий план" });
     return;
   }
