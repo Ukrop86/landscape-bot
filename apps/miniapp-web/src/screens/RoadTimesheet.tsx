@@ -172,6 +172,38 @@ type LastTripSuggestion = {
   objects: { objectId: string; objectName: string; works: { workId: string; workName: string }[] }[];
 };
 
+/**
+ * Everything the trip builder holds for ONE trip.
+ *
+ * The planner borrows the same pickers, so entering it puts the day in here
+ * and leaving it puts the day back. That is why planning no longer demands an
+ * empty day: the two never occupy the builder at the same time.
+ */
+type BuilderSnapshot = {
+  step: Step;
+  carId: string;
+  odoStart: string;
+  odoStartPhoto: string | null;
+  odoEnd: string;
+  odoEndPhoto: string | null;
+  employeeIds: string[];
+  selfTransportIds: string[];
+  errands: Errand[];
+  plans: ObjPlan[];
+  onboard: string[];
+  tripStartedAt: string | null;
+  drivingAccumulatedMs: number;
+  drivingSegmentStartedAt: string | null;
+  atObjectId: string | null;
+  headingToObjectId: string;
+  carAtObjectId: string;
+  atObjectReturnStep: Step;
+  planObjectId: string | null;
+  coefs: Record<string, CoefPair>;
+  editingTripSeq: number | null;
+  changeLog: { ts: number; label: string }[];
+};
+
 type DraftShape = {
   date: string;
   step: Step;
@@ -211,6 +243,10 @@ type DraftShape = {
   planEditing?: boolean;
   editingPlanId?: string | null;
   planForemanTgId?: number | null;
+  // The day that was set aside while the planner borrowed the pickers. Kept in
+  // the draft so an app-kill during planning cannot lose a running trip -- on
+  // restore this is what comes back, and the half-written plan is dropped.
+  dayStash?: BuilderSnapshot | null;
 };
 
 // Autosaved drafts can predate a schema change (e.g. the old singular
@@ -404,6 +440,9 @@ export function RoadTimesheet({
   // Admin only: whose plan this is. Empty means "mine".
   const [planForemanTgId, setPlanForemanTgId] = useState<number | null>(null);
   const [expandedPlanId, setExpandedPlanId] = useState<string | null>(null);
+  // The day set aside while the planner is using the pickers. Non-null only in
+  // plan mode; putting it back is what "exit the planner" means.
+  const [dayStash, setDayStash] = useState<BuilderSnapshot | null>(null);
   // A parked plan is edited by loading it back into the ordinary pickers --
   // there is no second builder. This flag is what tells the day apart from the
   // plan while that is happening: no reservations are taken, and "Запланувати"
@@ -549,7 +588,19 @@ export function RoadTimesheet({
     // actually entered -- "Розпочати нову поїздку" itself autosaves a blank
     // HUB draft the moment it's tapped, and that blank leftover must not
     // masquerade as real work and block the submitted-trips list below.
-    const hasContent = !!draft && (!!draft.carId || draft.employeeIds.length > 0 || draft.plans.length > 0 || !!draft.tripStartedAt);
+    // A stashed day counts as content on its own: the builder may be holding a
+    // half-written plan (or nothing) while the real trip sits in the stash.
+    const stash = draft?.dayStash ?? null;
+    const hasContent =
+      !!draft &&
+      (!!draft.carId ||
+        draft.employeeIds.length > 0 ||
+        draft.plans.length > 0 ||
+        !!draft.tripStartedAt ||
+        !!stash?.carId ||
+        (stash?.employeeIds.length ?? 0) > 0 ||
+        (stash?.plans.length ?? 0) > 0 ||
+        !!stash?.tripStartedAt);
     if (draft && hasContent && draft.step !== "DONE") {
       if (draft.date !== date) setDate(draft.date);
       setCarId(draft.carId);
@@ -572,9 +623,21 @@ export function RoadTimesheet({
       setPlanObjectId(draft.planObjectId ?? null);
       setCoefs(draft.coefs ?? {});
       setEditingTripSeq(draft.editingTripSeq ?? null);
-      setPlanEditing(!!draft.planEditing);
-      setEditingPlanId(draft.editingPlanId ?? null);
-      setPlanForemanTgId(draft.planForemanTgId ?? null);
+      if (draft.planEditing) {
+        // The app died with the planner open. A half-written plan is five
+        // minutes of re-picking; the trip underneath it is a day's work, so
+        // the stash wins and plan mode is dropped.
+        if (stash) restoreBuilder(stash);
+        else blankBuilder();
+        setPlanEditing(false);
+        setEditingPlanId(null);
+        setPlanForemanTgId(null);
+        setDayStash(null);
+        setStep(stash?.tripStartedAt ? stash.step : "INDEX");
+        setRestoredBanner(true);
+        draftRestoredRef.current = true;
+        return;
+      }
       setInProgressResumeStep(draft.step);
       // A trip that has DEPARTED resumes exactly where it was -- the foreman
       // reopening the app between two objects wants the object screen, not a
@@ -667,6 +730,7 @@ export function RoadTimesheet({
       planEditing,
       editingPlanId,
       planForemanTgId,
+      dayStash,
     });
   }, [
     date,
@@ -694,6 +758,7 @@ export function RoadTimesheet({
     planEditing,
     editingPlanId,
     planForemanTgId,
+    dayStash,
   ]);
 
   function employeeName(id: string) {
@@ -813,6 +878,92 @@ export function RoadTimesheet({
     }
   }
 
+  /** Everything the builder currently holds, as one value. */
+  function snapshotBuilder(): BuilderSnapshot {
+    return {
+      step,
+      carId,
+      odoStart,
+      odoStartPhoto,
+      odoEnd,
+      odoEndPhoto,
+      employeeIds,
+      selfTransportIds,
+      errands,
+      plans,
+      onboard,
+      tripStartedAt,
+      drivingAccumulatedMs,
+      drivingSegmentStartedAt,
+      atObjectId,
+      headingToObjectId,
+      carAtObjectId,
+      atObjectReturnStep,
+      planObjectId,
+      coefs,
+      editingTripSeq,
+      changeLog,
+    };
+  }
+
+  /**
+   * Blanks the builder WITHOUT releasing anything server-side.
+   *
+   * releaseAndClearDay hands the car and the crew back, which is right when a
+   * trip is being thrown away and wrong when it is only being set aside for a
+   * minute while the planner borrows the screen.
+   */
+  function blankBuilder() {
+    setCarId("");
+    setOdoStart("");
+    setOdoStartPhoto(null);
+    setOdoEnd("");
+    setOdoEndPhoto(null);
+    setEmployeeIds([]);
+    setSelfTransportIds([]);
+    setErrands([]);
+    setErrandMode(null);
+    setPlans([]);
+    setCoefs({});
+    setOnboard([]);
+    setTripStartedAt(null);
+    setDrivingAccumulatedMs(0);
+    setDrivingSegmentStartedAt(null);
+    setAtObjectId(null);
+    setHeadingToObjectId("");
+    setCarAtObjectId("");
+    setAtObjectReturnStep("DRIVE");
+    setPlanObjectId(null);
+    setChangeLog([]);
+    setEditingTripSeq(null);
+    setPreview(null);
+  }
+
+  function restoreBuilder(snap: BuilderSnapshot) {
+    setCarId(snap.carId);
+    setOdoStart(snap.odoStart);
+    setOdoStartPhoto(snap.odoStartPhoto);
+    setOdoEnd(snap.odoEnd);
+    setOdoEndPhoto(snap.odoEndPhoto);
+    setEmployeeIds(snap.employeeIds);
+    setSelfTransportIds(snap.selfTransportIds);
+    setErrands(snap.errands);
+    setPlans(snap.plans);
+    setOnboard(snap.onboard);
+    setTripStartedAt(snap.tripStartedAt);
+    setDrivingAccumulatedMs(snap.drivingAccumulatedMs);
+    setDrivingSegmentStartedAt(snap.drivingSegmentStartedAt);
+    setAtObjectId(snap.atObjectId);
+    setHeadingToObjectId(snap.headingToObjectId);
+    setCarAtObjectId(snap.carAtObjectId);
+    setAtObjectReturnStep(snap.atObjectReturnStep);
+    setPlanObjectId(snap.planObjectId);
+    setCoefs(snap.coefs);
+    setEditingTripSeq(snap.editingTripSeq);
+    setChangeLog(snap.changeLog);
+    setInProgressResumeStep(snap.step === "HUB" || snap.step === "INDEX" || snap.step === "DONE" ? null : snap.step);
+  }
+
   async function releaseAndClearDay() {
     if (carId || employeeIds.length) {
       try {
@@ -851,6 +1002,7 @@ export function RoadTimesheet({
     setPlanEditing(false);
     setEditingPlanId(null);
     setPlanForemanTgId(null);
+    setDayStash(null);
     setStep("HUB");
   }
 
@@ -913,34 +1065,43 @@ export function RoadTimesheet({
     }
     await refreshPlans();
     haptic("success");
-    // The builder only held the plan -- give the day back the way it was.
-    await releaseAndClearDay();
-    setStep("INDEX");
+    exitPlanner();
   }
 
   /**
    * Opens the planner: the ordinary pickers, with nothing reserved.
    *
-   * Only from an empty day, because the plan and the day share one set of
-   * builder state and loading a plan over a half-built trip would destroy it.
+   * Works at ANY time, mid-trip included. Planning is a draft for another day,
+   * so it has no business demanding that today be finished first -- the whole
+   * point is to fill tomorrow in while there is a spare minute. The day being
+   * built or driven is set aside in `dayStash` and put back on the way out.
    */
   function openPlanner(plan: TripPlan | null) {
-    if (carId || employeeIds.length || plans.length) {
-      setError("Спочатку завершіть або скиньте поточну поїздку — планувати можна на порожньому дні.");
-      return;
-    }
+    if (!planEditing) setDayStash(snapshotBuilder());
+    blankBuilder();
     setEditingPlanId(plan?.id ?? null);
-    setPlanForemanTgId(plan && isAdmin ? plan.foremanTgId : null);
+    setPlanForemanTgId(plan && isAdmin && !plan.mine ? plan.foremanTgId : null);
     if (plan) applyPlanToBuilder(plan, { withOdometer: false });
     setPlanEditing(true);
     setStep("HUB");
     haptic("selection");
   }
 
-  async function cancelPlanEdit() {
-    if (!(await confirmDialog("Вийти без збереження? Зміни в плані буде втрачено, сам план лишиться як був."))) return;
-    await releaseAndClearDay();
+  /** Puts the day back exactly as it was and leaves plan mode. */
+  function exitPlanner() {
+    if (dayStash) restoreBuilder(dayStash);
+    else blankBuilder();
+    setDayStash(null);
+    setPlanEditing(false);
+    setEditingPlanId(null);
+    setPlanForemanTgId(null);
     setStep("INDEX");
+  }
+
+  async function cancelPlanEdit() {
+    const dirty = !!carId || employeeIds.length > 0 || plans.length > 0;
+    if (dirty && !(await confirmDialog("Вийти без збереження? Незбережені зміни плану буде втрачено."))) return;
+    exitPlanner();
   }
 
   async function deletePlan(plan: TripPlan) {
@@ -983,7 +1144,9 @@ export function RoadTimesheet({
   /** Turns a planned trip into today's trip and retires the plan. */
   async function usePlan(plan: TripPlan) {
     if (carId || employeeIds.length || plans.length) {
-      setError("Спочатку завершіть або скиньте поточну поїздку.");
+      // Planning is free at any time; STARTING a planned trip is not, because
+      // it has to land in the builder and there is already a trip in it.
+      setError("У конструкторі вже є поїздка. Відправте або скиньте її, і тоді підтягніть запланований виїзд.");
       return;
     }
     applyPlanToBuilder(plan, { withOdometer: true });
@@ -1259,6 +1422,7 @@ export function RoadTimesheet({
     setPreview(null);
     setInProgressResumeStep(null);
     setPlanEditing(false);
+    setDayStash(null);
     haptic("selection");
     setStep("HUB");
   }
@@ -2537,6 +2701,13 @@ export function RoadTimesheet({
   // at the object, or catching up on unfilled volumes from RETURN), so its
   // back target is wherever it was actually opened from, not a fixed step.
   const goBack = () => {
+    // Leaving the planner's own screen means leaving the planner -- walking
+    // out to the index with a plan still loaded in the builder would show it
+    // as if it were a trip in progress.
+    if (planEditing && step === "HUB") {
+      cancelPlanEdit();
+      return;
+    }
     if (step === "PLAN_VOLUMES") {
       // Mid-entry for one specific work's number -- back should return to
       // that object's works list, not skip past it to wherever the whole
@@ -2897,10 +3068,10 @@ export function RoadTimesheet({
       {step === "HUB" && (
         <>
           <div className="section-title row">
-            <span>Поточна поїздка · {date}</span>
-            {!tripStartedAt && <span className="hint">{readinessScore}/4 готово</span>}
+            <span>{planEditing ? "Планування наступного виїзду" : `Поточна поїздка · ${date}`}</span>
+            {!tripStartedAt && !planEditing && <span className="hint">{readinessScore}/4 готово</span>}
           </div>
-          {!tripStartedAt && (
+          {!tripStartedAt && !planEditing && (
             <div className="progress-track">
               <div className={`progress-fill ${readinessScore === 4 ? "done" : ""}`} style={{ width: `${(readinessScore / 4) * 100}%` }} />
             </div>
@@ -3043,25 +3214,19 @@ export function RoadTimesheet({
           </div>
           {/* Escape hatch from the live, step-by-step day above: a day that's
               already been worked can't be re-lived with timers, so it gets a
-              flat form where hours are typed in instead of measured. */}
-          <div className="list">
-            {planEditing && (
-              <button className="cell" onClick={savePlan} disabled={!carId && !employeeIds.length && !plans.length}>
+              flat form where hours are typed in instead of measured. Not while
+              planning -- a plan has no day to enter after the fact. */}
+          {!planEditing && (
+            <div className="list">
+              <button className="cell" onClick={onOpenRetro}>
                 <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <span className="setup-icon accent-teal">💾</span>
-                  <span className="cell-title">{editingPlanId ? "Зберегти зміни" : "Зберегти план"}</span>
+                  <span className="setup-icon accent-teal">🗓</span>
+                  <span className="cell-title">Внести день заднім числом</span>
                 </span>
-                <span className="cell-sub">і назад до табеля ›</span>
+                <span className="cell-sub">без таймерів ›</span>
               </button>
-            )}
-            <button className="cell" onClick={onOpenRetro}>
-              <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <span className="setup-icon accent-teal">🗓</span>
-                <span className="cell-title">Внести день заднім числом</span>
-              </span>
-              <span className="cell-sub">без таймерів ›</span>
-            </button>
-          </div>
+            </div>
+          )}
 
           {tripStartedAt && (
             <>
@@ -3115,7 +3280,13 @@ export function RoadTimesheet({
             </div>
           )}
 
-          {tripStartedAt ? (
+          {planEditing ? (
+            <MainButton
+              text={editingPlanId ? "💾 Зберегти зміни" : "💾 Зберегти план"}
+              onClick={savePlan}
+              disabled={!carId && !employeeIds.length && !plans.length}
+            />
+          ) : tripStartedAt ? (
             <MainButton text="↩️ Повернутися до поїздки" onClick={() => setStep(tripResumeStep)} />
           ) : (
             <MainButton text="Далі → Перевірка перед виїздом" onClick={() => setStep("READY")} disabled={!readyToDepart} />
