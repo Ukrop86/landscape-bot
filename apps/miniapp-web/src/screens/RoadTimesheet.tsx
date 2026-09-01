@@ -638,7 +638,10 @@ export function RoadTimesheet({
         draftRestoredRef.current = true;
         return;
       }
-      setInProgressResumeStep(draft.step);
+      // Only a real trip step is worth resuming to. INDEX/HUB/DONE are the
+      // screens the resume button lives on, so storing one of them turns that
+      // button into a no-op.
+      setInProgressResumeStep(draft.step === "INDEX" || draft.step === "HUB" ? null : draft.step);
       // A trip that has DEPARTED resumes exactly where it was -- the foreman
       // reopening the app between two objects wants the object screen, not a
       // menu. A setup that never left the yard goes to the index instead, so
@@ -660,7 +663,11 @@ export function RoadTimesheet({
   // the "▶️ Продовжити" card on DONE would send the user back to a stale step
   // instead of the one they'd actually progressed to since mount.
   useEffect(() => {
-    if (step !== "HUB" && step !== "DONE") setInProgressResumeStep(step);
+    // INDEX is excluded for the same reason as HUB and DONE, and it is the one
+    // that actually bit: INDEX is where the "▶️ Продовжити" card lives, so
+    // recording it made that button set the step it was already on -- a tap
+    // that did nothing at all.
+    if (step !== "HUB" && step !== "DONE" && step !== "INDEX" && !planEditing) setInProgressResumeStep(step);
   }, [step]);
 
   // Not-yet-approved submissions aren't locked -- the foreman can keep
@@ -826,10 +833,16 @@ export function RoadTimesheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
-  /** Who has already planned this car / person, for the picker badges. */
+  /**
+   * Who has already planned this car / person.
+   *
+   * The plan being edited is skipped, or its own crew would lock itself out
+   * the moment you reopened it.
+   */
   const plannedCarBy = new Map<string, string>();
   const plannedEmployeeBy = new Map<string, string>();
   for (const p of tripPlans) {
+    if (p.id === editingPlanId) continue;
     if (p.carId && !plannedCarBy.has(p.carId)) plannedCarBy.set(p.carId, p.foremanName);
     for (const id of p.employeeIds) if (!plannedEmployeeBy.has(id)) plannedEmployeeBy.set(id, p.foremanName);
   }
@@ -1399,7 +1412,15 @@ export function RoadTimesheet({
   // Blanks the working state for a brand-new leg while leaving today's
   // already-submitted trips exactly as they are -- e.g. came back to base at
   // lunch, swapped crew, and is heading out to a different object.
-  function startNewTrip() {
+  async function startNewTrip() {
+    // The builder holds ONE trip. Blanking it while an unsent trip is in there
+    // is not "starting a new one", it is throwing the old one away -- which is
+    // exactly what happened to a foreman who tapped this and then went back.
+    if (carId || employeeIds.length || plans.length) {
+      setError("У конструкторі вже є незавершена поїздка. Продовжте її або скиньте (🗑 угорі), і тоді створюйте нову.");
+      haptic("error");
+      return;
+    }
     setEditingTripSeq(null);
     setCarId("");
     setOdoStart("");
@@ -2843,11 +2864,13 @@ export function RoadTimesheet({
           </div>
         </div>
 
+        {error && <div className="empty-state">⚠️ {error}</div>}
+
         {pendingTrips.map((trip) => renderTripCard(trip, true))}
 
         {editingTripSeq === null && (!!carId || employeeIds.length > 0 || plans.length > 0) && (
           <div className="list" style={{ marginTop: 8 }}>
-            <button className="cell" onClick={() => setStep(inProgressResumeStep ?? "HUB")}>
+            <button className="cell" onClick={() => setStep(inProgressResumeStep ?? (tripStartedAt ? tripResumeStep : "HUB"))}>
               <span className="cell-title">🚧 {cars.find((c) => c.id === carId)?.name ?? "Нова поїздка"}</span>
               <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <span className="badge warn">в процесі</span>
@@ -2939,7 +2962,7 @@ export function RoadTimesheet({
         {submittedTrips.map((trip) => renderTripCard(trip, trip.status !== "ЗАТВЕРДЖЕНО"))}
         {hasBuilderContent && editingTripSeq === null && !planEditing && (
           <div className="list" style={{ marginTop: 8 }}>
-            <button className="cell" onClick={() => setStep(inProgressResumeStep ?? "HUB")}>
+            <button className="cell" onClick={() => setStep(inProgressResumeStep ?? (tripStartedAt ? tripResumeStep : "HUB"))}>
               <span className="cell-title">🚧 {cars.find((c) => c.id === carId)?.name ?? "Нова поїздка"}</span>
               <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <span className="badge warn">в процесі</span>
@@ -3304,12 +3327,16 @@ export function RoadTimesheet({
               // apply -- see openPlanner.
               const takenBy = planEditing ? undefined : takenCars.get(c.id);
               const plannedBy = plannedCarBy.get(c.id);
+              // Two plans must not claim the same bus -- that is the whole
+              // reason plans are shared. But a plan for the next trip never
+              // blocks TODAY's real one: the day always wins over an intention.
+              const lockedByPlan = planEditing && !!plannedBy;
               return (
                 <button
                   key={c.id}
                   className={`cell ${carId === c.id ? "selected" : ""}`}
                   onClick={() => {
-                    if (takenBy) return;
+                    if (takenBy || lockedByPlan) return;
                     if (c.id !== carId) {
                       setOdoStart("");
                       setOdoStartPhoto(null);
@@ -3317,8 +3344,8 @@ export function RoadTimesheet({
                     setCarId(c.id);
                     haptic("selection");
                   }}
-                  disabled={!!takenBy}
-                  style={takenBy ? { opacity: 0.4 } : undefined}
+                  disabled={!!takenBy || lockedByPlan}
+                  style={takenBy || lockedByPlan ? { opacity: 0.4 } : undefined}
                 >
                   <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
                     <span className="setup-icon accent-blue">🚙</span>
@@ -3329,10 +3356,7 @@ export function RoadTimesheet({
                   {takenBy ? (
                     <span className="badge warn">🔒 {surnameInitial(takenBy)}</span>
                   ) : plannedBy ? (
-                    // Not a lock: somebody planned it, which is a heads-up, not
-                    // a claim. Two brigades may well plan the same bus and sort
-                    // it out between themselves.
-                    <span className="badge">📋 {surnameInitial(plannedBy)}</span>
+                    <span className={`badge ${lockedByPlan ? "warn" : ""}`}>📋 {surnameInitial(plannedBy)}</span>
                   ) : c.id === lastTripCarId ? (
                     <span className="badge">минулого разу</span>
                   ) : null}
@@ -3543,21 +3567,26 @@ export function RoadTimesheet({
                             .map((emp) => {
                             const busyBy = planEditing ? undefined : busyEmployees.get(emp.id);
                             const plannedBy = plannedEmployeeBy.get(emp.id);
+                            // Same rule as the cars: a plan blocks another
+                            // plan, never today's trip.
+                            const lockedByPlan = planEditing && !!plannedBy;
                             const checked = employeeIds.includes(emp.id);
                             return (
                               <button
                                 key={emp.id}
                                 className={`cell ${checked ? "selected" : ""}`}
                                 onClick={() => toggleEmployee(emp.id)}
-                                disabled={!!busyBy}
-                                style={busyBy ? { opacity: 0.4 } : undefined}
+                                disabled={!!busyBy || lockedByPlan}
+                                style={busyBy || lockedByPlan ? { opacity: 0.4 } : undefined}
                               >
                                 <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
                                   <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
                                   {shortName(emp.name)}
                                 </span>
                                 <span style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                                  {plannedBy && !busyBy && <span className="badge">📋 {surnameInitial(plannedBy)}</span>}
+                                  {plannedBy && !busyBy && (
+                                    <span className={`badge ${lockedByPlan ? "warn" : ""}`}>📋 {surnameInitial(plannedBy)}</span>
+                                  )}
                                   {busyBy ? (
                                     <span className="badge warn">🔒 {surnameInitial(busyBy)}</span>
                                   ) : (
