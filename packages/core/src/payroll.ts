@@ -79,7 +79,7 @@ export type ObjectSalaryPack = {
  * Per-object payroll split. The trip's brigadiers split 20% of every object's
  * fund between them and the seniors split 10% of it, whether or not they
  * worked at that particular object -- those cuts pay for running the day. The remainder
- * (70%, or 90% when the trip has no brigadier at all) is the crew share,
+ * (always 70%) is the crew share,
  * shared out between everyone with hours there, the brigadier and seniors
  * included: if they worked, they worked. With no senior on the trip the 10%
  * is not handed to the crew -- it stays with the company (companyPay).
@@ -142,12 +142,17 @@ export function buildSalaryPacksWithRoles(params: {
     // who DID work also draws on the crew pot for the hours they put in --
     // they worked alongside everyone else, and the 20%/10% pays for running
     // the day, not for the work itself.
-    const workerPercent = hasBrigadier ? 0.7 : 0.9;
+    // Always 70%. The 20% belongs to whoever ran the day, and the caller is
+    // expected to name them -- the brigadier who rode along, or failing that
+    // the foreman who filled the day in. It falls to the company only when
+    // there is nobody to attribute it to at all; it never quietly enlarges the
+    // crew's share, which is what "90% when no brigadier" used to do.
+    const workerPercent = 0.7;
     // 20% for the day, not 20% each: two brigadiers on one trip halve it, the
     // same rule the seniors have always had for their 10%.
     const brigadierBonusEach = hasBrigadier ? (o.objectTotal * 0.2) / brigadierRows.length : 0;
     const seniorBonusEach = hasSenior ? (o.objectTotal * 0.1) / seniorRows.length : 0;
-    const companyPercent = hasSenior ? 0 : 0.1;
+    const companyPercent = (hasBrigadier ? 0 : 0.2) + (hasSenior ? 0 : 0.1);
 
     // Works assigned to specific people get their own pool each, split only
     // between those of them who were actually at the object; everything else

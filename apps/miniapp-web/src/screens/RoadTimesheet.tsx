@@ -3468,7 +3468,7 @@ export function RoadTimesheet({
               choice, but it used to be an invisible one. */}
           {employeeIds.length > 0 && !employeeIds.some((id) => roleFor(id) === "бригадир") && (
             <div className="hint" style={{ padding: "0 16px 8px" }}>
-              ⚠️ У поїздці немає бригадира — його 20% не нараховуватимуться, робітники поділять 90%.
+              ⚠️ У поїздці немає бригадира — 20% за ведення дня отримаєте ви як той, хто веде цей день. Бригада ділить свої 70%.
             </div>
           )}
           {employeeIds.length > 0 && (
@@ -4050,7 +4050,7 @@ export function RoadTimesheet({
           </div>
           {!employeeIds.some((id) => roleFor(id) === "бригадир") && (
             <div className="hint" style={{ padding: "0 16px 8px" }}>
-              ⚠️ У поїздці немає бригадира — його 20% не нараховуватимуться, робітники поділять 90%.
+              ⚠️ У поїздці немає бригадира — 20% за ведення дня отримаєте ви як той, хто веде цей день. Бригада ділить свої 70%.
             </div>
           )}
           <div className="section-title">Обʼєкти · роботи</div>

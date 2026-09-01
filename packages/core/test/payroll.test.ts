@@ -98,11 +98,15 @@ test("без старшого його 10% лишаються фірмі", () =>
   assert.equal(p.companyPay, 100);
 });
 
-test("без бригадира робітники ділять 90%", () => {
+test("без бригадира робітнича частка лишається 70%, а 20% ідуть фірмі", () => {
+  // 20% платять за ведення дня. Якщо назвати нікого (сервер не зміг зіставити
+  // бригадира поїздки з довідником) — гроші лишаються фірмі, а НЕ збільшують
+  // бригадну частку мовчки.
   const p = pack({ total: 1000, rows: [row("w1", 6), row("w2", 2)] });
-  assert.equal(payOf(p, "w1"), 675);
-  assert.equal(payOf(p, "w2"), 225);
-  assert.equal(p.companyPay, 100);
+  assert.equal(payOf(p, "w1"), 525);
+  assert.equal(payOf(p, "w2"), 175);
+  assert.equal(p.companyPay, 300); // 20% бригадира + 10% старшого
+  assert.equal(distributed(p), 1000);
 });
 
 test("робітник з нульовими годинами не отримує нічого і не потрапляє в рядки", () => {
@@ -128,11 +132,11 @@ test("закріплена робота теж ділиться за годин�
     rows: [row("w1", 9), row("w2", 3), row("w3", 1)],
     works: [{ workId: "a", value: 600 }, { workId: "b", value: 400, employeeIds: ["w1", "w2"] }],
   });
-  // 400 * 0.9 = 360 на двох у пропорції 9:3 -> 270 / 90
-  // 600 * 0.9 = 540 лишається w3 одному
-  assert.equal(payOf(p, "w1"), 270);
-  assert.equal(payOf(p, "w2"), 90);
-  assert.equal(payOf(p, "w3"), 540);
+  // 400 * 0.7 = 280 на двох у пропорції 9:3 -> 210 / 70
+  // 600 * 0.7 = 420 лишається w3 одному
+  assert.equal(payOf(p, "w1"), 210);
+  assert.equal(payOf(p, "w2"), 70);
+  assert.equal(payOf(p, "w3"), 420);
 });
 
 test("призначення на того, кого не було на об'єкті, не з'їдає гроші", () => {
@@ -141,7 +145,7 @@ test("призначення на того, кого не було на об'є�
     rows: [row("w1", 4)],
     works: [{ workId: "a", value: 1000, employeeIds: ["ghost"] }],
   });
-  assert.equal(payOf(p, "w1"), 900);
+  assert.equal(payOf(p, "w1"), 700);
   assert.equal(distributed(p), 1000);
 });
 
@@ -173,14 +177,14 @@ test("сесія в кілька секунд видима у звіті, але
 test(`години менші за ${MIN_PAID_HOURS} не потрапляють у поділ`, () => {
   const p = pack({ total: 1000, rows: [row("w1", 8), row("w2", MIN_PAID_HOURS - 0.001)] });
   assert.equal(payOf(p, "w2"), 0);
-  assert.equal(payOf(p, "w1"), 900);
+  assert.equal(payOf(p, "w1"), 700);
   assert.equal(distributed(p), 1000);
 });
 
 test(`рівно ${MIN_PAID_HOURS} години вже оплачуються`, () => {
   const p = pack({ total: 1000, rows: [row("w1", MIN_PAID_HOURS), row("w2", MIN_PAID_HOURS)] });
-  assert.equal(payOf(p, "w1"), 450);
-  assert.equal(payOf(p, "w2"), 450);
+  assert.equal(payOf(p, "w1"), 350);
+  assert.equal(payOf(p, "w2"), 350);
 });
 
 test("людина з надто короткою сесією лишається у звіті з нулем — помилку видно", () => {
@@ -189,6 +193,16 @@ test("людина з надто короткою сесією лишаєтьс�
   assert.ok(short, "рядок має лишитись, інакше забуті години зникли б мовчки");
   assert.equal(short!.pay, 0);
   assert.equal(short!.hours, 0.01);
+});
+
+test("бригадна частка завжди 70% — відсутній бригадир її не збільшує", () => {
+  const withB = pack({ total: 1000, rows: [row("b", 0), row("w1", 4), row("w2", 4)], brigadier: "b" });
+  const noB = pack({ total: 1000, rows: [row("w1", 4), row("w2", 4)] });
+  assert.equal(payOf(withB, "w1"), payOf(noB, "w1"));
+  assert.equal(payOf(withB, "w2"), payOf(noB, "w2"));
+  // Різниця лише в тому, кому дістались 20%: бригадиру чи фірмі.
+  assert.equal(payOf(withB, "b"), 200);
+  assert.equal(noB.companyPay - withB.companyPay, 200);
 });
 
 test("коефіцієнти не рухають гроші", () => {

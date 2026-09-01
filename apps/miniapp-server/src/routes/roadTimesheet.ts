@@ -132,6 +132,36 @@ function sumErrandKm(errands?: Errand[]): number {
   }, 0);
 }
 
+/**
+ * Links the Telegram user who runs a day to their row in the ПРАЦІВНИКИ
+ * dictionary, by name.
+ *
+ * There is no id shared between КОРИСТУВАЧІ and ПРАЦІВНИКИ -- the sheets were
+ * never joined -- so the full name is the only bridge. Matching is forgiving
+ * about case, spacing and the three apostrophes Ukrainian text uses
+ * interchangeably; an active row wins over an inactive one. No match means no
+ * payout target, and the 20% goes to the company rather than to somebody
+ * arbitrary.
+ */
+function normalizeName(v: string): string {
+  return String(v ?? "")
+    .toLowerCase()
+    .replace(/[\u2019\u02BC'`]/g, "ʼ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function resolveForemanEmployeeId(
+  foremanTgId: number,
+  employeeRows: Array<{ id: string; name: string; active: boolean }>,
+): Promise<string> {
+  const [user] = await db.select().from(schema.users).where(eq(schema.users.tgId, BigInt(foremanTgId)));
+  if (!user?.pib) return "";
+  const target = normalizeName(user.pib);
+  const matches = employeeRows.filter((e) => normalizeName(e.name) === target);
+  return (matches.find((e) => e.active) ?? matches[0])?.id ?? "";
+}
+
 async function computePayroll(params: {
   odoStart: number;
   odoEnd: number;
@@ -139,8 +169,10 @@ async function computePayroll(params: {
   objects: ObjectInput[];
   selfTransportIds?: string[];
   excludedKm?: number;
+  /** Whose day this is -- the fallback owner of the 20% (see below). */
+  foremanTgId?: number;
 }) {
-  const { odoStart, odoEnd, employeeIds, objects, selfTransportIds = [], excludedKm = 0 } = params;
+  const { odoStart, odoEnd, employeeIds, objects, selfTransportIds = [], excludedKm = 0, foremanTgId } = params;
 
   // grossKm = what the odometer actually moved. billableKm subtracts any
   // "car left on errands" mileage (see the errands payload) so those side
@@ -163,7 +195,16 @@ async function computePayroll(params: {
   // when there is more than one) and the seniors' 10% are owed on every object
   // of the trip, including ones where they never clocked in, so each object's
   // rows must carry them even at zero hours.
-  const brigadierEmployeeIds = pickBrigadiersFromRiders(employeeIds ?? [], employeeById);
+  let brigadierEmployeeIds = pickBrigadiersFromRiders(employeeIds ?? [], employeeById);
+  // The 20% is for RUNNING the day, so it is always owed to somebody. If no
+  // brigadier rode along, that somebody is whoever runs this day: the foreman
+  // who filled it in -- which is also the brigadier an admin planned it for,
+  // since they are the one who submits it. Only when that person cannot be
+  // matched to an employee row does the 20% fall to the company.
+  if (!brigadierEmployeeIds.length && foremanTgId) {
+    const fallback = await resolveForemanEmployeeId(foremanTgId, employeeRows);
+    if (fallback) brigadierEmployeeIds = [fallback];
+  }
   const seniorEmployeeIds = pickSeniorsFromRiders(employeeIds ?? [], employeeById);
   const roleIds = [...new Set([...brigadierEmployeeIds, ...seniorEmployeeIds].filter(Boolean))];
 
@@ -258,7 +299,15 @@ roadTimesheetRouter.post("/preview", async (req, res) => {
     selfTransportIds?: string[];
     errands?: Errand[];
   };
-  const result = await computePayroll({ odoStart, odoEnd, employeeIds, objects, selfTransportIds, excludedKm: sumErrandKm(errands) });
+  const result = await computePayroll({
+    odoStart,
+    odoEnd,
+    employeeIds,
+    objects,
+    selfTransportIds,
+    excludedKm: sumErrandKm(errands),
+    foremanTgId: req.user!.tgId,
+  });
   res.json({
     km: result.km,
     billableKm: result.billableKm,
@@ -601,7 +650,15 @@ roadTimesheetRouter.post("/", async (req, res) => {
   // card -- separate from the day-combined totals computed below. Read-only
   // dictionary lookups, doesn't depend on any other foreman's/leg's state,
   // so it's fine to compute before the lock.
-  const legResult = await computePayroll({ odoStart, odoEnd, employeeIds, objects, selfTransportIds, excludedKm: sumErrandKm(errands) });
+  const legResult = await computePayroll({
+    odoStart,
+    odoEnd,
+    employeeIds,
+    objects,
+    selfTransportIds,
+    excludedKm: sumErrandKm(errands),
+    foremanTgId,
+  });
 
   // The idempotency key (generated once per "Відправити" tap on the client,
   // reused across its own network retries) makes the eventId stable across
@@ -709,6 +766,7 @@ roadTimesheetRouter.post("/", async (req, res) => {
         objects: newMergedObjects,
         selfTransportIds: unionSelfTransportIds,
         excludedKm: totalExcludedKm,
+        foremanTgId,
       });
       newMergedObjectsForNotify = newMergedObjects;
 
@@ -1339,6 +1397,7 @@ roadTimesheetRouter.get("/submitted-today", async (req, res) => {
     objects: mergedObjects,
     selfTransportIds: unionSelfTransportIds,
     excludedKm: totalExcludedKm,
+    foremanTgId,
   });
 
   res.json({
@@ -1482,7 +1541,7 @@ roadTimesheetRouter.get("/pending", async (req, res) => {
       // the admin decides from is exactly what gets written. Recomputing the
       // day inline here used to omit excludedKm, quietly showing a higher
       // trip class and travel allowance than approval would then record.
-      const { mergedObjects, unionEmployeeIds, unionSelfTransportIds, totalKm, combined } = await computeApprovedDayTotals(trips);
+      const { mergedObjects, unionEmployeeIds, unionSelfTransportIds, totalKm, combined } = await computeApprovedDayTotals(trips, foremanTgId);
       return {
         date: r.date,
         foremanTgId,
@@ -1558,7 +1617,7 @@ async function setDayStatus(date: string, foremanTgId: number, status: string, t
  * payroll -- computed ONCE and shared by everything that reports on an
  * approved day, so the accountant's БУХЗВІТ rows and the summary the foreman
  * receives can never disagree about the same day's money. */
-async function computeApprovedDayTotals(trips: StoredTrip[]) {
+async function computeApprovedDayTotals(trips: StoredTrip[], foremanTgId?: number) {
   const mergedObjects = mergeObjects(trips.map((t) => t.objects));
   const unionEmployeeIds = [...new Set(trips.flatMap((t) => t.employeeIds))];
   const unionSelfTransportIds = [...new Set(trips.flatMap((t) => t.selfTransportIds ?? []))];
@@ -1579,6 +1638,7 @@ async function computeApprovedDayTotals(trips: StoredTrip[]) {
     objects: mergedObjects,
     selfTransportIds: unionSelfTransportIds,
     excludedKm: totalExcludedKm,
+    foremanTgId,
   });
   return { mergedObjects, unionEmployeeIds, unionSelfTransportIds, totalKm, totalExcludedKm, combined };
 }
@@ -1743,7 +1803,7 @@ roadTimesheetRouter.post("/pending/approve", async (req, res) => {
   // approved -- just without the breakdown.
   let accountingExported = false;
   try {
-    const totals = await computeApprovedDayTotals(pendingTrips);
+    const totals = await computeApprovedDayTotals(pendingTrips, foremanTgId);
     accountingExported = (await exportApprovedDayToAccounting(date, foremanTgId, pendingTrips, totals)).ok;
     await sendTelegramMessage(foremanTgId, buildApprovalReport(date, totals));
   } catch (e) {
