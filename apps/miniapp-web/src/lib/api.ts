@@ -143,6 +143,8 @@ async function upload<T>(path: string, file: File | Blob, fieldName: string): Pr
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body: unknown) => request<T>(path, { method: "POST", body: JSON.stringify(body) }),
+  put: <T>(path: string, body: unknown) => request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
+  del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
   upload: <T>(path: string, file: File | Blob, fieldName = "photo") => upload<T>(path, file, fieldName),
 };
 
@@ -165,3 +167,35 @@ export type LogisticDirection = { id: string; name: string; tariff: number; disc
 export type SalaryRow = { employeeId: string; employeeName: string; hours: number; coefTotal: number; points: number; pay: number };
 export type SalaryPack = { objectId: string; objectName: string; objectTotal: number; sumPoints: number; companyPay: number; rows: SalaryRow[] };
 export type Me = { tgId: number; pib: string; role: "ADMIN" | "BRIGADIER" };
+
+// --- Trip plans ------------------------------------------------------------
+// A trip set up in advance. Lives on the server (not in localStorage as it
+// once did) because other brigadiers have to see that a car or a person is
+// already spoken for -- see packages/core/src/schema.ts:tripPlans.
+export type PlanWork = { workId: string; workName: string; unit?: string | null };
+export type PlanObject = { objectId: string; objectName: string; works: PlanWork[] };
+export type TripPlan = {
+  id: string;
+  foremanTgId: number;
+  foremanName: string;
+  createdByName: string;
+  /** An admin planned this FOR the foreman, rather than the foreman planning it. */
+  assignedByAdmin: boolean;
+  carId: string;
+  carName: string;
+  employeeIds: string[];
+  employeeNames: string[];
+  objects: PlanObject[];
+  note: string;
+  createdAt: string;
+  /** The caller's own plan -- the only kind with action buttons. */
+  mine: boolean;
+};
+export type PlanInput = {
+  foremanTgId?: number;
+  carId: string;
+  employeeIds: string[];
+  objects: PlanObject[];
+  note?: string;
+};
+export type Foreman = { tgId: number; name: string };

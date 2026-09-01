@@ -13,6 +13,7 @@ import { logisticsRouter } from "./routes/logistics.js";
 import { materialsRouter } from "./routes/materials.js";
 import { statsRouter } from "./routes/stats.js";
 import { roadTimesheetRouter } from "./routes/roadTimesheet.js";
+import { tripPlansRouter } from "./routes/tripPlans.js";
 
 // Telegram IDs are stored as bigint; make them JSON-serializable as strings.
 (BigInt.prototype as any).toJSON = function (this: bigint) {
@@ -126,6 +127,7 @@ apiRouter.use("/logistics", logisticsRouter);
 apiRouter.use("/materials", materialsRouter);
 apiRouter.use("/stats", statsRouter);
 apiRouter.use("/road-timesheet", roadTimesheetRouter);
+apiRouter.use("/trip-plans", tripPlansRouter);
 app.use("/api", apiRouter);
 
 // Serve the built mini-app frontend (apps/miniapp-web/dist) from the same

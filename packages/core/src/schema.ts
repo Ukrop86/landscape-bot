@@ -298,3 +298,42 @@ export const syncCursors = pgTable("sync_cursors", {
   lastRow: integer("last_row").notNull().default(0),
   updatedAt: timestamp("updated_at", { mode: "date" }).notNull().defaultNow(),
 });
+
+/**
+ * A trip set up in advance and parked for later.
+ *
+ * Lives ONLY here, not in Sheets: a plan is an intention the crew acts on
+ * tomorrow morning, never something the accountant reads, and a sheet would
+ * mean two-way sync for data with a lifetime of one night. (It is therefore
+ * cleared by /internal/reset-working-data, which is fine -- a wiped plan costs
+ * five minutes of re-picking, not money.)
+ *
+ * It moved off the phone's localStorage because a plan has to be visible to
+ * OTHER brigadiers: the whole point of the badge in the car and people pickers
+ * is that somebody else already spoke for that bus.
+ *
+ * Deliberately has no date. The owner's call: plans are for "the next trip",
+ * not for a calendar day, so they simply sit until used or removed.
+ */
+export const tripPlans = pgTable(
+  "trip_plans",
+  {
+    id: text("id").primaryKey(),
+    // Whose plan it is -- the brigadier who will drive it, which is not
+    // necessarily whoever typed it in (an admin can plan for someone).
+    foremanTgId: bigint("foreman_tg_id", { mode: "bigint" }).notNull(),
+    createdByTgId: bigint("created_by_tg_id", { mode: "bigint" }).notNull(),
+    createdByName: text("created_by_name").notNull().default(""),
+    // True when an admin planned this FOR the foreman: the plan then carries a
+    // visible "запланував адміністратор" mark instead of passing as their own.
+    assignedByAdmin: boolean("assigned_by_admin").notNull().default(false),
+    carId: text("car_id").notNull().default(""),
+    employeeIds: text("employee_ids").notNull().default("[]"), // JSON array
+    objects: text("objects").notNull().default("[]"), // JSON: [{objectId, objectName, works: [...]}]
+    note: text("note").notNull().default(""),
+    status: text("status").notNull().default("АКТИВНИЙ"), // АКТИВНИЙ | ВИКОРИСТАНИЙ
+    createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [index("trip_plans_foreman_idx").on(t.foremanTgId), index("trip_plans_status_idx").on(t.status)],
+);

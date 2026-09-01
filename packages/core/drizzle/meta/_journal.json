@@ -43,6 +43,13 @@
       "when": 1785824161701,
       "tag": "0005_add_work_subcategory",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788264722094,
+      "tag": "0006_trip_plans",
+      "breakpoints": true
     }
   ]
 }

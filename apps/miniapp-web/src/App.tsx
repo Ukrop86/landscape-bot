@@ -39,6 +39,10 @@ export default function App() {
         if (deepLink && m.role === "ADMIN") {
           setApprovalFocus(deepLink);
           setScreen("approval");
+        } else if (new URLSearchParams(window.location.search).get("openPlans")) {
+          // From the "вам заплановано виїзд" notification: land on the road
+          // timesheet index, where the planned trips are listed.
+          setScreen("roadTimesheet");
         }
         // Deep-link params only matter for this one initial open -- strip them
         // so navigating back to the menu and reopening "Затвердження" later
@@ -66,7 +70,12 @@ export default function App() {
       {screen === "logistics" && <Logistics onBack={goMenu} onSaved={showSavedToast} />}
       {screen === "materials" && <Materials onBack={goMenu} onSaved={showSavedToast} />}
       {screen === "roadTimesheet" && (
-        <RoadTimesheet onBack={goMenu} onSaved={showSavedToast} onOpenRetro={() => setScreen("roadTimesheetRetro")} />
+        <RoadTimesheet
+          onBack={goMenu}
+          onSaved={showSavedToast}
+          onOpenRetro={() => setScreen("roadTimesheetRetro")}
+          isAdmin={me?.role === "ADMIN"}
+        />
       )}
       {screen === "roadTimesheetRetro" && <RetroEntry onBack={() => setScreen("roadTimesheet")} onSaved={showSavedToast} />}
       {screen === "stats" && <Stats onBack={goMenu} isAdmin={me?.role === "ADMIN"} />}

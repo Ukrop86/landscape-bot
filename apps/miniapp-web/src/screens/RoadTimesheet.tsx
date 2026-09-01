@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPack } from "../lib/api";
+import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPack, type TripPlan, type PlanObject, type Foreman } from "../lib/api";
 import { useClearErrorOnSuccess } from "../lib/useClearErrorOnSuccess";
 import { todayISO } from "../lib/date";
 import { askDialog, confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
@@ -7,7 +7,6 @@ import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameI
 import { groupWorks } from "../lib/works";
 import { works as nWorks, people as nPeople, objects as nObjects } from "../lib/plural";
 import { saveDraft, loadDraft, clearDraft } from "../lib/draft";
-import { saveTripPlan, loadTripPlan, clearTripPlan, type TripPlan } from "../lib/tripPlan";
 import { BackRow } from "../components/BackRow";
 import { MainButton } from "../components/MainButton";
 import { NumericKeypad } from "../components/NumericKeypad";
@@ -27,6 +26,7 @@ import { fmtHours, MIN_PAID_HOURS } from "../lib/hours";
 // report), and resubmitting just overwrites it. Only an admin-approved day
 // locks, with a "request edit" escape hatch.
 type Step =
+  | "INDEX"
   | "HUB"
   | "PICK_CAR"
   | "ODO_START"
@@ -205,9 +205,12 @@ type DraftShape = {
   // without this, an interrupted edit (app killed before resubmitting) would
   // resume as if it were a brand-new trip and create a duplicate on save.
   editingTripSeq: number | null;
-  // Without this a plan reopened after the app was killed would come back
-  // looking exactly like a half-built day.
+  // Without these a plan reopened after the app was killed would come back
+  // looking exactly like a half-built day -- and, worse, saving it would
+  // create a second plan instead of updating the one being edited.
   planEditing?: boolean;
+  editingPlanId?: string | null;
+  planForemanTgId?: number | null;
 };
 
 // Autosaved drafts can predate a schema change (e.g. the old singular
@@ -291,8 +294,20 @@ function fmtHMS(ms: number) {
   return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":");
 }
 
-export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => void; onSaved: () => void; onOpenRetro: () => void }) {
-  const [step, setStep] = useState<Step>("HUB");
+export function RoadTimesheet({
+  onBack,
+  onSaved,
+  onOpenRetro,
+  isAdmin = false,
+}: {
+  onBack: () => void;
+  onSaved: () => void;
+  onOpenRetro: () => void;
+  isAdmin?: boolean;
+}) {
+  // INDEX, not HUB: the hub is the builder for ONE trip, and landing straight
+  // in it hid both the day's other trips and the planned ones.
+  const [step, setStep] = useState<Step>("INDEX");
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -380,13 +395,20 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // rather than guessing at the first unvisited object in the list.
   const [headingToObjectId, setHeadingToObjectId] = useState<string>("");
   const [arrivedPickedExpanded, setArrivedPickedExpanded] = useState(true);
-  const [tripPlan, setTripPlan] = useState<TripPlan | null>(() => loadTripPlan());
+  // Plans now come from the server, so a plan made by one brigadier is visible
+  // to the rest (that is what the pickers' "already planned" badge reads).
+  const [tripPlans, setTripPlans] = useState<TripPlan[]>([]);
+  const [foremen, setForemen] = useState<Foreman[]>([]);
+  // null while creating a plan, the plan's id while editing an existing one.
+  const [editingPlanId, setEditingPlanId] = useState<string | null>(null);
+  // Admin only: whose plan this is. Empty means "mine".
+  const [planForemanTgId, setPlanForemanTgId] = useState<number | null>(null);
+  const [expandedPlanId, setExpandedPlanId] = useState<string | null>(null);
   // A parked plan is edited by loading it back into the ordinary pickers --
   // there is no second builder. This flag is what tells the day apart from the
   // plan while that is happening: no reservations are taken, and "Запланувати"
   // saves back over the plan instead of making another one.
   const [planEditing, setPlanEditing] = useState(false);
-  const [planExpanded, setPlanExpanded] = useState(false);
   // Which object the car is parked at, if any. Not the same as "this screen
   // is open on an object": the foreman can switch the screen to another
   // object to fix its works while the car stays where it is.
@@ -551,8 +573,15 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       setCoefs(draft.coefs ?? {});
       setEditingTripSeq(draft.editingTripSeq ?? null);
       setPlanEditing(!!draft.planEditing);
+      setEditingPlanId(draft.editingPlanId ?? null);
+      setPlanForemanTgId(draft.planForemanTgId ?? null);
       setInProgressResumeStep(draft.step);
-      setStep(draft.step);
+      // A trip that has DEPARTED resumes exactly where it was -- the foreman
+      // reopening the app between two objects wants the object screen, not a
+      // menu. A setup that never left the yard goes to the index instead, so
+      // the day's other trips and the planned ones are not hidden behind it;
+      // "▶️ Продовжити" there returns to this very step.
+      setStep(draft.tripStartedAt ? draft.step : "INDEX");
       setRestoredBanner(true);
       draftRestoredRef.current = true;
     } else if (draft) {
@@ -602,10 +631,9 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
           return;
         }
 
-        // Land on DONE regardless of approval -- an approved trip earlier
-        // today must not block starting another one (see the DONE screen's
-        // pending/approved split below).
-        setStep("DONE");
+        // Stay on the index: it lists today's trips as cards, so forcing the
+        // day summary here would skip past the planned trips and the "new
+        // trip" button the foreman came for.
       })
       .catch(() => setDayStatus({ hasSubmission: false, approved: false, returned: false, returnReason: null, eventId: null, editRequested: false }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -637,6 +665,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
       coefs,
       editingTripSeq,
       planEditing,
+      editingPlanId,
+      planForemanTgId,
     });
   }, [
     date,
@@ -662,6 +692,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     coefs,
     editingTripSeq,
     planEditing,
+    editingPlanId,
+    planForemanTgId,
   ]);
 
   function employeeName(id: string) {
@@ -708,6 +740,35 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // Returns false on a 409 conflict (car/person taken by another foreman in
   // the meantime) so callers can stop the wizard from advancing instead of
   // just showing the error text underneath a screen the user already left.
+  /** Everyone's active plans -- ours to act on, the rest to warn about. */
+  async function refreshPlans() {
+    try {
+      const res = await api.get<{ plans: TripPlan[] }>("/api/trip-plans");
+      setTripPlans(res.plans);
+    } catch {
+      // A plan list that fails to load must not block the day.
+    }
+  }
+
+  useEffect(() => {
+    refreshPlans();
+    if (isAdmin) {
+      api
+        .get<{ foremen: Foreman[] }>("/api/trip-plans/foremen")
+        .then((r) => setForemen(r.foremen))
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin]);
+
+  /** Who has already planned this car / person, for the picker badges. */
+  const plannedCarBy = new Map<string, string>();
+  const plannedEmployeeBy = new Map<string, string>();
+  for (const p of tripPlans) {
+    if (p.carId && !plannedCarBy.has(p.carId)) plannedCarBy.set(p.carId, p.foremanName);
+    for (const id of p.employeeIds) if (!plannedEmployeeBy.has(id)) plannedEmployeeBy.set(id, p.foremanName);
+  }
+
   async function reserveIfPossible(): Promise<boolean> {
     // A plan is an intention, not a claim (see lib/tripPlan.ts). Editing one
     // must not hold today's bus or crew for a trip that has not started.
@@ -788,6 +849,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     setEditingTripSeq(null);
     setInProgressResumeStep(null);
     setPlanEditing(false);
+    setEditingPlanId(null);
+    setPlanForemanTgId(null);
     setStep("HUB");
   }
 
@@ -812,84 +875,101 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     haptic("success");
   }
 
-  /**
-   * Copies the setup on screen into the next trip's plan.
-   *
-   * There is no separate planning mode: setting up a trip is the same work
-   * whether it is for now or for tomorrow, so the foreman builds it with the
-   * pickers they already know and then says "this is for next time".
-   *
-   * It NEVER touches the day. It used to clear the screen and release the car
-   * and people whenever the trip had not departed yet, on the assumption that
-   * such a setup could only have been a scratch pad for the plan. That
-   * assumption was wrong in the obvious case: a foreman who is half way
-   * through building today's trip, steps out to plan tomorrow's, and comes
-   * back to an empty screen. One button now does one thing; releasing the car
-   * and people is what "🗑 Скинути поїздку" is for, and it sits in the back
-   * row of every step.
-   */
-  async function saveAsPlan() {
-    if (!carId && !employeeIds.length && !plans.length) return;
-    const confirmed = await confirmDialog(
-      "Зберегти цей склад як план на наступний виїзд?\n\n" +
-        "Авто, люди, обʼєкти й роботи буде скопійовано в план. Поточна поїздка залишиться без змін.",
-    );
-    if (!confirmed) return;
-    saveTripPlan({
-      carId,
-      employeeIds,
-      objects: plans.map((p) => ({
-        objectId: p.objectId,
-        objectName: p.objectName,
-        works: p.works.map((w) => ({ workId: w.workId, workName: w.workName, unit: w.unit, volume: "" })),
-      })),
-    });
-    setTripPlan(loadTripPlan());
-    logChange(planEditing ? "Змінено план на наступний виїзд" : "Збережено план на наступний виїзд");
-    haptic("success");
-    // The setup on screen existed only to edit the plan -- put the day back
-    // the way it was found.
-    if (planEditing) await releaseAndClearDay();
+  /** The builder's current contents, in the shape the plan endpoint stores. */
+  function currentPlanObjects(): PlanObject[] {
+    return plans.map((p) => ({
+      objectId: p.objectId,
+      objectName: p.objectName,
+      works: p.works.map((w) => ({ workId: w.workId, workName: w.workName, unit: w.unit })),
+    }));
   }
 
   /**
-   * Opens the parked plan in the ordinary pickers so it can be changed.
+   * Writes the setup on screen back as a plan (new one, or the one being
+   * edited) and leaves plan mode.
    *
-   * Only from an empty day: the plan and the day share one set of builder
-   * state, and loading the plan over a half-built trip would destroy it. That
-   * is also when a plan actually gets revised -- in the evening, before
-   * anything has started.
+   * Planning reuses the trip builder rather than growing a second set of
+   * pickers -- picking a car and a crew is the same work whether it is for now
+   * or for tomorrow. What plan mode changes is that nothing is reserved and
+   * that saving goes to /api/trip-plans instead of the day.
    */
-  async function startPlanEdit() {
-    if (!tripPlan) return;
-    if (carId || employeeIds.length || plans.length) {
-      setError("Спочатку завершіть або скиньте поточну поїздку — план редагується на порожньому дні.");
+  async function savePlan() {
+    if (!carId && !employeeIds.length && !plans.length) {
+      setError("Порожній план — оберіть авто, людей або обʼєкт.");
       return;
     }
-    applyTripPlan();
+    const body = {
+      carId,
+      employeeIds,
+      objects: currentPlanObjects(),
+      ...(isAdmin && planForemanTgId ? { foremanTgId: planForemanTgId } : {}),
+    };
+    try {
+      if (editingPlanId) await api.put(`/api/trip-plans/${editingPlanId}`, body);
+      else await api.post("/api/trip-plans", body);
+    } catch (e) {
+      setError((e as Error).message);
+      return;
+    }
+    await refreshPlans();
+    haptic("success");
+    // The builder only held the plan -- give the day back the way it was.
+    await releaseAndClearDay();
+    setStep("INDEX");
+  }
+
+  /**
+   * Opens the planner: the ordinary pickers, with nothing reserved.
+   *
+   * Only from an empty day, because the plan and the day share one set of
+   * builder state and loading a plan over a half-built trip would destroy it.
+   */
+  function openPlanner(plan: TripPlan | null) {
+    if (carId || employeeIds.length || plans.length) {
+      setError("Спочатку завершіть або скиньте поточну поїздку — планувати можна на порожньому дні.");
+      return;
+    }
+    setEditingPlanId(plan?.id ?? null);
+    setPlanForemanTgId(plan && isAdmin ? plan.foremanTgId : null);
+    if (plan) applyPlanToBuilder(plan, { withOdometer: false });
     setPlanEditing(true);
     setStep("HUB");
+    haptic("selection");
   }
 
   async function cancelPlanEdit() {
     if (!(await confirmDialog("Вийти без збереження? Зміни в плані буде втрачено, сам план лишиться як був."))) return;
     await releaseAndClearDay();
+    setStep("INDEX");
   }
 
-  /** Pulls a saved plan into the day, odometer included. */
-  function applyTripPlan() {
-    if (!tripPlan) return;
-    setCarId(tripPlan.carId);
-    // The reading the car came back with last time is what this day starts
-    // from -- the whole point of planning is not typing it again at 7am.
-    const last = lastOdometer[tripPlan.carId];
-    setOdoStart(last !== undefined ? String(last) : "");
-    setEmployeeIds(tripPlan.employeeIds);
+  async function deletePlan(plan: TripPlan) {
+    if (!(await confirmDialog(`Прибрати запланований виїзд?\n\n${plan.carName || "без авто"} · ${nObjects(plan.objects.length)}`))) return;
+    try {
+      await api.del(`/api/trip-plans/${plan.id}`);
+    } catch (e) {
+      setError((e as Error).message);
+      return;
+    }
+    await refreshPlans();
+    haptic("success");
+  }
+
+  /** Loads a plan into the builder. Shared by "use it now" and "edit it". */
+  function applyPlanToBuilder(plan: TripPlan, opts: { withOdometer: boolean }) {
+    setCarId(plan.carId);
+    if (opts.withOdometer) {
+      // The reading the car came back with last time is what this day starts
+      // from -- the whole point of planning is not typing it again at 7am.
+      const last = lastOdometer[plan.carId];
+      setOdoStart(last !== undefined ? String(last) : "");
+    }
+    setEmployeeIds(plan.employeeIds);
     setPlans(
-      tripPlan.objects.map((o) => ({
+      plan.objects.map((o) => ({
         objectId: o.objectId,
         objectName: o.objectName,
-        works: o.works.map((w) => ({ ...w, volume: "" })),
+        works: o.works.map((w) => ({ workId: w.workId, workName: w.workName, unit: w.unit ?? "шт", volume: "" })),
         assignedEmployeeIds: [],
         here: [],
         sessions: [],
@@ -898,8 +978,25 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
         photoUrls: [],
       })),
     );
+  }
+
+  /** Turns a planned trip into today's trip and retires the plan. */
+  async function usePlan(plan: TripPlan) {
+    if (carId || employeeIds.length || plans.length) {
+      setError("Спочатку завершіть або скиньте поточну поїздку.");
+      return;
+    }
+    applyPlanToBuilder(plan, { withOdometer: true });
+    try {
+      await api.post(`/api/trip-plans/${plan.id}/use`, {});
+    } catch {
+      // The plan is already in the builder; failing to retire it server-side
+      // is a stale badge, not a lost trip.
+    }
+    await refreshPlans();
     logChange("Застосовано заплановане на наступний виїзд");
     haptic("success");
+    setStep("HUB");
   }
 
   function objectsToPlans(objects: SubmittedObject[]): ObjPlan[] {
@@ -1452,39 +1549,41 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   }
 
   /**
-   * The parked plan, as a card you can act on.
+   * One planned trip, as a card.
    *
-   * It used to be a grey hint line on a day that already had something in it:
-   * you could read the one-line summary and delete it, and that was all. A
-   * plan made the night before is exactly the thing a foreman wants to open
-   * and correct in the morning, so it is the same card in both places --
-   * "Використати" only where a day is empty enough to take it.
+   * Everyone's plans are listed, not just the caller's: seeing that another
+   * brigade already spoke for the bus is the point. Only `mine` plans get the
+   * "use it" button -- somebody else's is information, not a thing to press.
    */
-  function renderPlanCard(canApply: boolean) {
-    if (!tripPlan) return null;
-    const plan = tripPlan;
+  function renderPlanCard(plan: TripPlan) {
+    const expanded = expandedPlanId === plan.id;
     return (
-      <div className="suggestion-card">
+      <div key={plan.id} className="suggestion-card">
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span className="setup-icon accent-teal" style={{ width: 34, height: 34, fontSize: 16 }}>
             📋
           </span>
-          <div className="cell-title">{canApply ? "Є заплановане на цей виїзд" : "План на наступний виїзд"}</div>
+          <div className="cell-title" style={{ flex: 1 }}>{plan.carName || "без авто"}</div>
+          {!plan.mine && <span className="badge">{shortName(plan.foremanName)}</span>}
         </div>
         <div className="hint" style={{ marginTop: 6 }}>
-          {cars.find((c) => c.id === plan.carId)?.name ?? "без авто"} · {nPeople(plan.employeeIds.length)} ·{" "}
-          {nObjects(plan.objects.length)}
+          {nPeople(plan.employeeIds.length)} · {nObjects(plan.objects.length)}
         </div>
+        {plan.assignedByAdmin && (
+          <div className="hint" style={{ marginTop: 4, color: "#a35c00" }}>
+            👤 Запланував адміністратор · {plan.createdByName}
+          </div>
+        )}
         <div style={{ marginTop: 6 }}>
-          <button className="chip chip-sm" onClick={() => setPlanExpanded((v) => !v)}>
-            {planExpanded ? "▾ Сховати деталі" : "▸ Показати деталі"}
+          <button className="chip chip-sm" onClick={() => setExpandedPlanId(expanded ? null : plan.id)}>
+            {expanded ? "▾ Сховати деталі" : "▸ Показати деталі"}
           </button>
         </div>
-        {planExpanded && (
+        {expanded && (
           <div style={{ marginTop: 10 }}>
             <div className="hint" style={{ fontWeight: 600 }}>👥 Люди</div>
             <ul className="bullets">
-              {plan.employeeIds.length ? plan.employeeIds.map((id) => <li key={id}>{employeeName(id)}</li>) : <li>—</li>}
+              {plan.employeeNames.length ? plan.employeeNames.map((n) => <li key={n}>{n}</li>) : <li>—</li>}
             </ul>
             <div className="hint" style={{ fontWeight: 600, marginTop: 14 }}>📍 Обʼєкти та роботи</div>
             {plan.objects.length ? (
@@ -1501,32 +1600,31 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             )}
           </div>
         )}
-        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-          <button
-            className="chip"
-            onClick={async () => {
-              if (!(await confirmDialog("Прибрати заплановане?"))) return;
-              clearTripPlan();
-              setTripPlan(null);
-            }}
-          >
-            🗑 Прибрати
-          </button>
-          <button className="chip" onClick={startPlanEdit}>
-            ✏️ Змінити
-          </button>
-          {canApply && (
-            <button className="chip selected" onClick={applyTripPlan}>
-              Використати заплановане
-            </button>
-          )}
-        </div>
+        {(plan.mine || isAdmin) && (
+          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            <button className="chip" onClick={() => deletePlan(plan)}>🗑 Прибрати</button>
+            <button className="chip" onClick={() => openPlanner(plan)}>✏️ Змінити</button>
+            {plan.mine && (
+              <button className="chip selected" onClick={() => usePlan(plan)}>▶️ Використати</button>
+            )}
+          </div>
+        )}
       </div>
     );
   }
 
-  /** The photo strip, shared by the object screen and the day summary. */
+  /**
+   * The photo strip, shared by the object screen and the day summary.
+   *
+   * TEMPORARILY DISABLED at the owner's request (Google Drive uploads are not
+   * settled yet). The whole feature is one `return null` away from coming
+   * back: nothing else was removed, and photoUrls still travels to the server,
+   * just always empty.
+   */
+  const PHOTOS_ENABLED = false;
+
   function renderObjectPhotos(plan: ObjPlan) {
+    if (!PHOTOS_ENABLED) return null;
     return (
       <div className="list" style={{ marginBottom: 8 }}>
         <div className="cell" style={{ cursor: "default", display: "block" }}>
@@ -2418,6 +2516,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   }
 
   const backTargets: Partial<Record<Step, Step>> = {
+    HUB: "INDEX",
+    DONE: "INDEX",
     PICK_CAR: "HUB",
     ODO_START: "PICK_CAR",
     PICK_PEOPLE: "HUB",
@@ -2531,7 +2631,9 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
   // trip cards is the front screen -- HUB is only the builder for the leg
   // being assembled, and dropping the foreman there looked like the day had
   // been wiped.
-  const goHub = () => setStep(submittedTrips.length ? "DONE" : "HUB");
+  // "До табеля" means the index -- the day's trips, the builder and the plans
+  // -- not the builder for whichever trip happens to be half-made.
+  const goHub = () => setStep("INDEX");
 
   // "Скинути поїздку" rides in the back row so it is in the same spot on every
   // step -- the foreman asked to be able to drop a trip at any moment, not
@@ -2630,14 +2732,103 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
     );
   }
 
+  const hasBuilderContent = !!carId || employeeIds.length > 0 || plans.length > 0;
+
+  /**
+   * The road timesheet's front door.
+   *
+   * The hub used to be it, but the hub builds ONE trip -- landing there hid
+   * the day's other trips behind a back button and buried the planned ones at
+   * the bottom of a form. Three things belong on a front door: what is running
+   * today, a way to start another, and what is planned next.
+   */
+  if (step === "INDEX") {
+    const myIndexPlans = tripPlans.filter((p) => p.mine);
+    const otherIndexPlans = tripPlans.filter((p) => !p.mine);
+    return (
+      <div>
+        <BackRow onBack={onBack} onHome={onBack} onReset={hasTripInProgress ? resetTrip : undefined} />
+        <div className="header">
+          <h1>🚗 Дорожній табель</h1>
+          <div className="hint">{date}</div>
+        </div>
+
+        {error && <div className="empty-state">⚠️ {error}</div>}
+
+        {dayStatus?.returned && (
+          <div className="empty-state" style={{ textAlign: "left" }}>
+            🔴 <b>Звіт повернено на доопрацювання.</b>
+            {dayStatus.returnReason ? ` Причина: ${dayStatus.returnReason}.` : ""} Відкрийте поїздку нижче, виправте і надішліть
+            повторно.
+          </div>
+        )}
+
+        <div className="section-title">Поточні поїздки</div>
+        {submittedTrips.length === 0 && !hasBuilderContent && <div className="empty-state">Сьогодні поїздок ще немає.</div>}
+        {submittedTrips.map((trip) => renderTripCard(trip, trip.status !== "ЗАТВЕРДЖЕНО"))}
+        {hasBuilderContent && editingTripSeq === null && !planEditing && (
+          <div className="list" style={{ marginTop: 8 }}>
+            <button className="cell" onClick={() => setStep(inProgressResumeStep ?? "HUB")}>
+              <span className="cell-title">🚧 {cars.find((c) => c.id === carId)?.name ?? "Нова поїздка"}</span>
+              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <span className="badge warn">в процесі</span>
+                <span className="cell-sub">▶️ Продовжити</span>
+              </span>
+            </button>
+          </div>
+        )}
+        {submittedTrips.length > 0 && (
+          <div style={{ padding: "8px 16px 0" }}>
+            <button className="chip" onClick={() => setStep("DONE")}>📊 Підсумок дня та нарахування</button>
+          </div>
+        )}
+
+        <div style={{ padding: "12px 16px" }}>
+          <button className="bulk-select-btn" onClick={startNewTrip}>
+            ➕ Створити нову поїздку
+          </button>
+        </div>
+
+        <div className="section-title">Заплановані виїзди</div>
+        {myIndexPlans.length === 0 && otherIndexPlans.length === 0 && (
+          <div className="empty-state">Нічого не заплановано.</div>
+        )}
+        {myIndexPlans.map(renderPlanCard)}
+        {otherIndexPlans.length > 0 && (
+          <>
+            <div className="hint" style={{ padding: "4px 16px 0" }}>Заплановано іншими бригадами</div>
+            {otherIndexPlans.map(renderPlanCard)}
+          </>
+        )}
+        <div style={{ padding: "8px 16px 24px" }}>
+          <button className="bulk-select-btn" onClick={() => openPlanner(null)}>
+            📋 Запланувати виїзд
+          </button>
+        </div>
+
+        <div className="list">
+          <button className="cell" onClick={onOpenRetro}>
+            <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <span className="setup-icon accent-teal">🗓</span>
+              <span className="cell-title">Внести день заднім числом</span>
+            </span>
+            <span className="cell-sub">без таймерів ›</span>
+          </button>
+        </div>
+
+        <MainButton text="🏠 До меню" onClick={onBack} />
+      </div>
+    );
+  }
+
   const allObjectsPlanned = plans.length > 0 && plans.every((p) => p.works.length > 0);
   const readyToDepart = !!carId && !!odoStart && employeeIds.length > 0 && allObjectsPlanned;
   const readinessScore = [!!carId && !!odoStart, employeeIds.length > 0, plans.length > 0, allObjectsPlanned].filter(Boolean).length;
   const dayIsEmpty = !carId && !employeeIds.length && !plans.length;
-  // A saved plan outranks "repeat the last trip": it was made deliberately,
-  // for this very trip, while the repeat card is only a guess from history.
-  const showPlanSuggestion = !!tripPlan && dayIsEmpty;
-  const showCopySuggestion = !!lastTrip && dayIsEmpty && !showPlanSuggestion;
+  // "Repeat the last trip" is only a guess from history, so it stands down
+  // whenever a plan -- made deliberately, for this very trip -- exists, and
+  // never appears while a plan is being written.
+  const showCopySuggestion = !!lastTrip && dayIsEmpty && !tripPlans.some((p) => p.mine) && !planEditing;
 
   // The dictionary order means nothing to a foreman: on nearly every day they
   // take the same car as last time, and a car another brigade already holds is
@@ -2725,17 +2916,39 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               built -- same pickers, same car, same people. */}
           {planEditing && (
             <div className="empty-state" style={{ textAlign: "left" }}>
-              ✏️ <b>Редагуєте план на наступний виїзд.</b> Міняйте авто, людей, обʼєкти й роботи звичайними кнопками нижче, потім
-              «Зберегти зміни в плані». Авто й люди при цьому не бронюються.
-              <div style={{ marginTop: 8 }}>
-                <button className="chip" onClick={cancelPlanEdit}>
-                  Скасувати редагування
-                </button>
+              📋 <b>{editingPlanId ? "Редагуєте запланований виїзд." : "Плануєте наступний виїзд."}</b> Оберіть авто, людей, обʼєкти
+              й роботи кнопками нижче, потім «{editingPlanId ? "Зберегти зміни" : "Зберегти план"}». Авто й люди при цьому{" "}
+              <b>не бронюються</b> — їх можна планувати, навіть якщо зараз вони в дорозі.
+              {isAdmin && (
+                <div style={{ marginTop: 10 }}>
+                  <div className="hint" style={{ fontWeight: 600 }}>Кому плануєте</div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+                    <button
+                      className={`chip ${planForemanTgId === null ? "selected" : ""}`}
+                      onClick={() => setPlanForemanTgId(null)}
+                    >
+                      Собі
+                    </button>
+                    {foremen.map((f) => (
+                      <button
+                        key={f.tgId}
+                        className={`chip ${planForemanTgId === f.tgId ? "selected" : ""}`}
+                        onClick={() => setPlanForemanTgId(f.tgId)}
+                      >
+                        {shortName(f.name)}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="hint" style={{ marginTop: 6 }}>
+                    Бригадиру прийде повідомлення в Telegram.
+                  </div>
+                </div>
+              )}
+              <div style={{ marginTop: 10 }}>
+                <button className="chip" onClick={cancelPlanEdit}>Скасувати</button>
               </div>
             </div>
           )}
-
-          {showPlanSuggestion && tripPlan && renderPlanCard(true)}
 
           {showCopySuggestion && lastTrip && (
             <div className="suggestion-card">
@@ -2832,13 +3045,15 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               already been worked can't be re-lived with timers, so it gets a
               flat form where hours are typed in instead of measured. */}
           <div className="list">
-            <button className="cell" onClick={saveAsPlan} disabled={!carId && !employeeIds.length && !plans.length}>
-              <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <span className="setup-icon accent-teal">📋</span>
-                <span className="cell-title">{planEditing ? "Зберегти зміни в плані" : "Запланувати наступний виїзд"}</span>
-              </span>
-              <span className="cell-sub">{planEditing ? "перезаписати план ›" : "копія цього складу ›"}</span>
-            </button>
+            {planEditing && (
+              <button className="cell" onClick={savePlan} disabled={!carId && !employeeIds.length && !plans.length}>
+                <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <span className="setup-icon accent-teal">💾</span>
+                  <span className="cell-title">{editingPlanId ? "Зберегти зміни" : "Зберегти план"}</span>
+                </span>
+                <span className="cell-sub">і назад до табеля ›</span>
+              </button>
+            )}
             <button className="cell" onClick={onOpenRetro}>
               <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <span className="setup-icon accent-teal">🗓</span>
@@ -2847,10 +3062,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               <span className="cell-sub">без таймерів ›</span>
             </button>
           </div>
-          {/* The card above only offers itself on an empty day; on a day that
-              already has something in it the plan still has to be readable and
-              editable, just without the "use it now" button. */}
-          {tripPlan && !showPlanSuggestion && !planEditing && renderPlanCard(false)}
 
           {tripStartedAt && (
             <>
@@ -2917,7 +3128,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
           <div className="step-badge">🚙 АВТО</div>
           <div className="list">
             {carsInPickOrder.map((c) => {
-              const takenBy = takenCars.get(c.id);
+              // In plan mode a car that is out on the road right now is still a
+              // perfectly good choice for the next trip, so the lock does not
+              // apply -- see openPlanner.
+              const takenBy = planEditing ? undefined : takenCars.get(c.id);
+              const plannedBy = plannedCarBy.get(c.id);
               return (
                 <button
                   key={c.id}
@@ -2942,6 +3157,11 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                   </span>
                   {takenBy ? (
                     <span className="badge warn">🔒 {surnameInitial(takenBy)}</span>
+                  ) : plannedBy ? (
+                    // Not a lock: somebody planned it, which is a heads-up, not
+                    // a claim. Two brigades may well plan the same bus and sort
+                    // it out between themselves.
+                    <span className="badge">📋 {surnameInitial(plannedBy)}</span>
                   ) : c.id === lastTripCarId ? (
                     <span className="badge">минулого разу</span>
                   ) : null}
@@ -2992,20 +3212,18 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
             </div>
           )}
           <NumericKeypad value={odoStart} onChange={setOdoStart} decimal={false} />
-          <div className="field">
-            {odoStartPhoto ? (
-              <div className="badge ok">📷 Фото додано</div>
-            ) : (
-              <>
-                <PhotoButton
-                  text="📷 Зняти спідометр"
-                  disabled={uploadingPhoto}
-                  onPick={(file) => uploadPhoto(file, "start")}
-                />
-                <div className="hint" style={{ marginTop: 6 }}>Не обовʼязково</div>
-              </>
-            )}
-          </div>
+          {PHOTOS_ENABLED && (
+            <div className="field">
+              {odoStartPhoto ? (
+                <div className="badge ok">📷 Фото додано</div>
+              ) : (
+                <>
+                  <PhotoButton text="📷 Зняти спідометр" disabled={uploadingPhoto} onPick={(file) => uploadPhoto(file, "start")} />
+                  <div className="hint" style={{ marginTop: 6 }}>Не обовʼязково</div>
+                </>
+              )}
+            </div>
+          )}
           <MainButton
             text={uploadingPhoto ? "Завантаження…" : "Зберегти"}
             onClick={async () => {
@@ -3152,7 +3370,8 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                           {[...g.members]
                             .sort((a, b) => (busyEmployees.has(a.id) ? 1 : 0) - (busyEmployees.has(b.id) ? 1 : 0))
                             .map((emp) => {
-                            const busyBy = busyEmployees.get(emp.id);
+                            const busyBy = planEditing ? undefined : busyEmployees.get(emp.id);
+                            const plannedBy = plannedEmployeeBy.get(emp.id);
                             const checked = employeeIds.includes(emp.id);
                             return (
                               <button
@@ -3166,7 +3385,14 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                                   <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
                                   {shortName(emp.name)}
                                 </span>
-                                {busyBy ? <span className="badge warn">🔒 {surnameInitial(busyBy)}</span> : <span className={roleTagClass(employeeRole(emp))}>{employeeRole(emp)}</span>}
+                                <span style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                                  {plannedBy && !busyBy && <span className="badge">📋 {surnameInitial(plannedBy)}</span>}
+                                  {busyBy ? (
+                                    <span className="badge warn">🔒 {surnameInitial(busyBy)}</span>
+                                  ) : (
+                                    <span className={roleTagClass(employeeRole(emp))}>{employeeRole(emp)}</span>
+                                  )}
+                                </span>
                               </button>
                             );
                           })}
@@ -5174,7 +5400,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
               <div className="badge ok">📷 Фото додано</div>
             ) : (
               <>
-                <PhotoButton text="📷 Зняти спідометр" disabled={uploadingPhoto} onPick={(file) => uploadPhoto(file, "end")} />
+                {PHOTOS_ENABLED && <PhotoButton text="📷 Зняти спідометр" disabled={uploadingPhoto} onPick={(file) => uploadPhoto(file, "end")} />}
                 <div className="hint" style={{ marginTop: 6 }}>Не обовʼязково</div>
               </>
             )}
@@ -5303,7 +5529,6 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
                       <span style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
                         <span className="badge">👤 {peopleHere.length}</span>
                         <span className={`badge ${objectHours > 0 ? "" : "warn"}`}>⏱ {fmtHours(objectHours)}</span>
-                        {p.photoUrls.length > 0 && <span className="badge">📷 {p.photoUrls.length}</span>}
                         {p.works.length > 0 && (
                           <span className={`badge ${unfilled === 0 ? "ok" : "warn"}`}>
                             {unfilled === 0 ? "✅ обсяги є" : `🟡 ${unfilled} без обсягу`}

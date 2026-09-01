@@ -252,7 +252,7 @@ export function Approval({
                             {pack && <span className="badge ok">{pack.objectTotal} грн</span>}
                           </div>
 
-                          {(o.photoUrls ?? []).length > 0 && (
+                          {false && (o.photoUrls ?? []).length > 0 && (
                             <div className="picked-panel" style={{ marginTop: 8 }}>
                               {(o.photoUrls ?? []).map((url, i) => (
                                 <span key={url} className="picked-item">
