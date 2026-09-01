@@ -37,11 +37,16 @@ function normalizeBody(body: PlanBody) {
 }
 
 /**
- * GET /api/trip-plans — every ACTIVE plan, whoever it belongs to.
+ * GET /api/trip-plans — the caller's own plans, plus who is spoken for.
  *
- * Deliberately not filtered to the caller: the pickers mark a car or a person
- * that somebody else has already planned for, and that warning only works if
- * every foreman can see every plan. `mine` says which ones are actionable.
+ * Two different needs, deliberately answered by two different fields:
+ *
+ * - `plans` is a WORK LIST, so it is private. A brigadier sees the plans that
+ *   are theirs to drive (their own, and the ones an admin assigned them) and
+ *   nothing else; an admin sees all of them, because managing them is the job.
+ * - `plannedResources` is a CONFLICT CHECK across every active plan, carrying
+ *   only ids and a name. The pickers need to know a bus or a person is already
+ *   claimed, and that must work without showing anyone else's work list.
  */
 tripPlansRouter.get("/", async (req, res) => {
   const rows = await db.select().from(schema.tripPlans).where(eq(schema.tripPlans.status, "АКТИВНИЙ"));
@@ -54,7 +59,9 @@ tripPlansRouter.get("/", async (req, res) => {
   const carById = new Map(cars.map((c) => [c.id, c.name]));
   const employeeById = new Map(employees.map((e) => [e.id, e.name]));
 
-  const plans = rows
+  const visible = req.user!.role === "ADMIN" ? rows : rows.filter((r) => Number(r.foremanTgId) === req.user!.tgId);
+
+  const plans = visible
     .map((r) => {
       const employeeIds = JSON.parse(r.employeeIds || "[]") as string[];
       return {
@@ -75,7 +82,20 @@ tripPlansRouter.get("/", async (req, res) => {
     })
     .sort((a, b) => (a.mine === b.mine ? b.createdAt.localeCompare(a.createdAt) : a.mine ? -1 : 1));
 
-  res.json({ plans });
+  // Every active plan, ids only -- enough to grey out a claimed car or person
+  // in the pickers, not enough to read anybody's plan.
+  const plannedResources = {
+    cars: rows.filter((r) => r.carId).map((r) => ({ planId: r.id, carId: r.carId, foremanName: nameByTgId.get(String(r.foremanTgId)) ?? "" })),
+    employees: rows.flatMap((r) =>
+      (JSON.parse(r.employeeIds || "[]") as string[]).map((employeeId) => ({
+        planId: r.id,
+        employeeId,
+        foremanName: nameByTgId.get(String(r.foremanTgId)) ?? "",
+      })),
+    ),
+  };
+
+  res.json({ plans, plannedResources });
 });
 
 /**

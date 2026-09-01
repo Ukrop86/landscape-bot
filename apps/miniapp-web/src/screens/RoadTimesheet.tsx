@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPack, type TripPlan, type PlanObject, type Foreman } from "../lib/api";
+import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPack, type TripPlan, type PlanObject, type Foreman, type PlannedResources } from "../lib/api";
 import { useClearErrorOnSuccess } from "../lib/useClearErrorOnSuccess";
 import { todayISO } from "../lib/date";
 import { askDialog, confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
@@ -443,6 +443,7 @@ export function RoadTimesheet({
   // The day set aside while the planner is using the pickers. Non-null only in
   // plan mode; putting it back is what "exit the planner" means.
   const [dayStash, setDayStash] = useState<BuilderSnapshot | null>(null);
+  const [plannedResources, setPlannedResources] = useState<PlannedResources>({ cars: [], employees: [] });
   // A parked plan is edited by loading it back into the ordinary pickers --
   // there is no second builder. This flag is what tells the day apart from the
   // plan while that is happening: no reservations are taken, and "Запланувати"
@@ -812,11 +813,12 @@ export function RoadTimesheet({
   // Returns false on a 409 conflict (car/person taken by another foreman in
   // the meantime) so callers can stop the wizard from advancing instead of
   // just showing the error text underneath a screen the user already left.
-  /** Everyone's active plans -- ours to act on, the rest to warn about. */
+  /** Our own plans, plus the ids that any plan has already claimed. */
   async function refreshPlans() {
     try {
-      const res = await api.get<{ plans: TripPlan[] }>("/api/trip-plans");
+      const res = await api.get<{ plans: TripPlan[]; plannedResources: PlannedResources }>("/api/trip-plans");
       setTripPlans(res.plans);
+      setPlannedResources(res.plannedResources ?? { cars: [], employees: [] });
     } catch {
       // A plan list that fails to load must not block the day.
     }
@@ -836,15 +838,20 @@ export function RoadTimesheet({
   /**
    * Who has already planned this car / person.
    *
-   * The plan being edited is skipped, or its own crew would lock itself out
-   * the moment you reopened it.
+   * Built from plannedResources (every active plan, ids only), NOT from the
+   * plan list -- that one is private to its owner, while a conflict has to be
+   * visible to everybody. The plan being edited is skipped, or its own crew
+   * would lock itself out the moment you reopened it.
    */
   const plannedCarBy = new Map<string, string>();
   const plannedEmployeeBy = new Map<string, string>();
-  for (const p of tripPlans) {
-    if (p.id === editingPlanId) continue;
-    if (p.carId && !plannedCarBy.has(p.carId)) plannedCarBy.set(p.carId, p.foremanName);
-    for (const id of p.employeeIds) if (!plannedEmployeeBy.has(id)) plannedEmployeeBy.set(id, p.foremanName);
+  for (const c of plannedResources.cars) {
+    if (c.planId === editingPlanId || plannedCarBy.has(c.carId)) continue;
+    plannedCarBy.set(c.carId, c.foremanName);
+  }
+  for (const e of plannedResources.employees) {
+    if (e.planId === editingPlanId || plannedEmployeeBy.has(e.employeeId)) continue;
+    plannedEmployeeBy.set(e.employeeId, e.foremanName);
   }
 
   async function reserveIfPossible(): Promise<boolean> {
@@ -2955,6 +2962,8 @@ export function RoadTimesheet({
    * today, a way to start another, and what is planned next.
    */
   if (step === "INDEX") {
+    // The server already filtered: a brigadier gets only their own, an admin
+    // gets all. `mine` still separates the admin's own from what they assigned.
     const myIndexPlans = tripPlans.filter((p) => p.mine);
     const otherIndexPlans = tripPlans.filter((p) => !p.mine);
     return (
@@ -3008,7 +3017,7 @@ export function RoadTimesheet({
         {myIndexPlans.map(renderPlanCard)}
         {otherIndexPlans.length > 0 && (
           <>
-            <div className="hint" style={{ padding: "4px 16px 0" }}>Заплановано іншими бригадами</div>
+            <div className="hint" style={{ padding: "4px 16px 0" }}>Призначено бригадирам</div>
             {otherIndexPlans.map(renderPlanCard)}
           </>
         )}

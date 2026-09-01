@@ -199,3 +199,12 @@ export type PlanInput = {
   note?: string;
 };
 export type Foreman = { tgId: number; name: string };
+/**
+ * Who is already spoken for by SOME active plan -- ids and a name, nothing
+ * else. Kept separate from the plan list so the pickers can warn about a
+ * conflict without anyone reading another brigade's plans.
+ */
+export type PlannedResources = {
+  cars: { planId: string; carId: string; foremanName: string }[];
+  employees: { planId: string; employeeId: string; foremanName: string }[];
+};
