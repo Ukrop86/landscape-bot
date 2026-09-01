@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type Employee, type SalaryPack } from "../lib/api";
+import { useClearErrorOnSuccess } from "../lib/useClearErrorOnSuccess";
 import { confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, shortName } from "../lib/employee";
 import { BackRow } from "../components/BackRow";
@@ -48,6 +49,7 @@ export function Approval({
   const [data, setData] = useState<PendingResponse | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [error, setError] = useState<string | null>(null);
+  useClearErrorOnSuccess(setError);
   const [loading, setLoading] = useState(false);
   const [expandedKey, setExpandedKey] = useState<string | null>(focusDate && focusForeman ? `${focusDate}|${focusForeman}` : null);
   const [returningKey, setReturningKey] = useState<string | null>(null);

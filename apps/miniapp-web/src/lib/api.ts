@@ -29,6 +29,39 @@ export function subscribeSyncStatus(cb: (s: SyncStatus) => void) {
   };
 }
 
+// A screen's error banner has no way of knowing the trouble has passed: it is
+// set from one rejected call and then sits there. A foreman who hit a restart
+// mid-day kept staring at a red line long after the server was back. Any
+// request that succeeds says so here, and screens clear the banner.
+const okListeners = new Set<() => void>();
+
+export function subscribeApiOk(cb: () => void) {
+  okListeners.add(cb);
+  return () => {
+    okListeners.delete(cb);
+  };
+}
+
+function notifyOk() {
+  okListeners.forEach((l) => l());
+}
+
+/**
+ * Turns an HTTP status into something a foreman can act on.
+ *
+ * A bare "Request failed: 502" is what Railway's edge returns while the
+ * container is restarting -- there is no JSON body to take a message from, and
+ * the number means nothing to the person holding the phone.
+ */
+function messageForStatus(status: number): string {
+  if (status === 502 || status === 503 || status === 504) {
+    return "Сервер перезапускається. Зачекайте кілька секунд і спробуйте ще раз — дані не втрачено.";
+  }
+  if (status === 401 || status === 403) return "Немає доступу. Закрийте застосунок повністю і відкрийте знову.";
+  if (status === 413) return "Файл завеликий.";
+  return `Помилка сервера (${status}). Спробуйте ще раз.`;
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -55,10 +88,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `Request failed: ${res.status}`);
+          throw new Error(body.error || messageForStatus(res.status));
         }
 
-        return (await res.json()) as T;
+        const data = (await res.json()) as T;
+        notifyOk();
+        return data;
       } catch (e) {
         lastErr = e;
         // A real HTTP/server error (thrown above) shouldn't be retried --
@@ -90,10 +125,12 @@ async function upload<T>(path: string, file: File | Blob, fieldName: string): Pr
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || `Upload failed: ${res.status}`);
+      throw new Error(body.error || messageForStatus(res.status));
     }
 
-    return await res.json();
+    const data = await res.json();
+    notifyOk();
+    return data;
   } catch (e) {
     if (e instanceof TypeError) setSyncStatus("offline");
     throw e;

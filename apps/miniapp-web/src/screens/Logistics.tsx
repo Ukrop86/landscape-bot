@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type Employee, type LogisticDirection } from "../lib/api";
+import { useClearErrorOnSuccess } from "../lib/useClearErrorOnSuccess";
 import { todayISO } from "../lib/date";
 import { haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, initials, roleAccent, groupByBrigade, shortName, roleTagClass } from "../lib/employee";
@@ -38,6 +39,7 @@ export function Logistics({ onBack, onSaved }: { onBack: () => void; onSaved: ()
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useClearErrorOnSuccess(setError);
 
   useEffect(() => {
     api.get<LogisticDirection[]>("/api/dictionaries/logistics").then(setDirections).catch((e) => setError(e.message));

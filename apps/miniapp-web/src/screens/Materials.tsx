@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type Material, type WorkObject } from "../lib/api";
+import { useClearErrorOnSuccess } from "../lib/useClearErrorOnSuccess";
 import { todayISO } from "../lib/date";
 import { haptic, useTelegramBackButton } from "../lib/telegram";
 import { BackRow } from "../components/BackRow";
@@ -25,6 +26,7 @@ export function Materials({ onBack, onSaved }: { onBack: () => void; onSaved: ()
   const [selectedExpanded, setSelectedExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useClearErrorOnSuccess(setError);
 
   const [stage, setStage] = useState<Stage>("type");
   const [history, setHistory] = useState<Stage[]>([]);

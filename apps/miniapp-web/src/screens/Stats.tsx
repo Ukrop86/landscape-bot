@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { useClearErrorOnSuccess } from "../lib/useClearErrorOnSuccess";
 import { todayISO } from "../lib/date";
 import { fmtHours } from "../lib/hours";
 import { useTelegramBackButton } from "../lib/telegram";
@@ -57,6 +58,7 @@ export function Stats({ onBack, isAdmin }: { onBack: () => void; isAdmin?: boole
   const [to, setTo] = useState(() => todayISO());
   const [data, setData] = useState<StatsRangeResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useClearErrorOnSuccess(setError);
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<Tab>("objects");
   const [expandedId, setExpandedId] = useState<string | null>(null);

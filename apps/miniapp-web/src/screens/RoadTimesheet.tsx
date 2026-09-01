@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPack } from "../lib/api";
+import { useClearErrorOnSuccess } from "../lib/useClearErrorOnSuccess";
 import { todayISO } from "../lib/date";
 import { askDialog, confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial, roleTagClass, roleRank, type EmployeeRole } from "../lib/employee";
@@ -454,6 +455,7 @@ export function RoadTimesheet({ onBack, onSaved, onOpenRetro }: { onBack: () => 
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useClearErrorOnSuccess(setError);
   const [preview, setPreview] = useState<PayrollPreview | null>(null);
   const [submittedTrips, setSubmittedTrips] = useState<SubmittedTrip[]>([]);
   const [dayCombined, setDayCombined] = useState<DayCombined | null>(null);
