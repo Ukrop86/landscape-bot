@@ -5678,6 +5678,20 @@ export function RoadTimesheet({
               back into the step that owns it. It used to be four full-width
               sections with a "редагувати" chip each, which pushed the actual
               day -- the objects -- below the fold. */}
+          {/* The 20% for running the day is always owed to somebody. The server
+              falls back to the foreman when no brigadier rode along, matching
+              КОРИСТУВАЧІ.ПІБ against the ПРАЦІВНИКИ dictionary -- the sheets
+              share no id, so the name is the only bridge and it CAN miss. When
+              it does the money goes to the company, and that must never happen
+              quietly: this is the one screen where it is still fixable. */}
+          {preview && preview.brigadierEmployeeIds.length === 0 && (
+            <div className="empty-state" style={{ textAlign: "left", color: "#d70015" }}>
+              ⚠️ <b>Не вдалось визначити, кому нарахувати 20% за ведення дня</b> — вони підуть фірмі. Причина: ваш ПІБ у аркуші
+              КОРИСТУВАЧІ не збігається з жодним рядком у ПРАЦІВНИКИ. Покажіть це адміністратору — виправляється одним
+              редагуванням аркуша.
+            </div>
+          )}
+
           <div className="section-title">Поїздка</div>
           <div className="list">
             <div className="cell">

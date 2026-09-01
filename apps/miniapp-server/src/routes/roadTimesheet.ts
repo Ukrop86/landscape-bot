@@ -204,6 +204,12 @@ async function computePayroll(params: {
   if (!brigadierEmployeeIds.length && foremanTgId) {
     const fallback = await resolveForemanEmployeeId(foremanTgId, employeeRows);
     if (fallback) brigadierEmployeeIds = [fallback];
+    else {
+      // Loud on purpose: this silently moves 20% of every object's fund to the
+      // company, and the only fix is editing ПІБ in КОРИСТУВАЧІ to match
+      // ПРАЦІВНИКИ. The foreman sees it on the review screen too.
+      console.warn(`[payroll] no brigadier and no employee row for foremanTgId=${foremanTgId} — 20% goes to the company`);
+    }
   }
   const seniorEmployeeIds = pickSeniorsFromRiders(employeeIds ?? [], employeeById);
   const roleIds = [...new Set([...brigadierEmployeeIds, ...seniorEmployeeIds].filter(Boolean))];
