@@ -7,7 +7,11 @@ export function getGoogleAuth() {
   return new google.auth.JWT({
     email: config.google.clientEmail,
     key,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    // Drive is here because the same JWT signs the photo uploads in drive.ts.
+    // Without it every upload came back 403 ACCESS_TOKEN_SCOPE_INSUFFICIENT --
+    // and since the odometer photo is optional, nobody noticed until object
+    // photos made it a normal part of the day.
+    scopes: ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"],
   });
 }
 

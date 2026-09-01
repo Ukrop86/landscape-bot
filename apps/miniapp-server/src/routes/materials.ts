@@ -1,8 +1,8 @@
-import { Router } from "express";
+import { asyncRouter } from "../asyncRouter.js";
 import { db, schema, writeMaterialMoves } from "@landscape/core";
 import { and, eq } from "drizzle-orm";
 
-export const materialsRouter = Router();
+export const materialsRouter = asyncRouter();
 
 type MaterialItemInput = { materialId: string; materialName: string; unit: string; qty: number };
 

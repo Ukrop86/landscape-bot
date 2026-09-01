@@ -1,8 +1,8 @@
-import { Router } from "express";
+import { asyncRouter } from "../asyncRouter.js";
 import { db, schema } from "@landscape/core";
 import { and, eq, gte, lte, sql } from "drizzle-orm";
 
-export const statsRouter = Router();
+export const statsRouter = asyncRouter();
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 

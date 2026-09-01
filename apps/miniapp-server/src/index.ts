@@ -141,6 +141,21 @@ if (fs.existsSync(webDist)) {
   console.warn(`[miniapp-server] no built frontend found at ${webDist} (run "npm run build -w apps/miniapp-web")`);
 }
 
+// Express 4 hands a rejected promise from an async route to nobody, and Node
+// then treats the unhandled rejection as a fatal error. That is how one failed
+// Google Drive upload took the whole mini-app offline for every foreman. These
+// two nets keep a single bad request a single bad request.
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error("[miniapp-server] unhandled route error", err);
+  if (!res.headersSent) res.status(500).json({ error: "Внутрішня помилка сервера" });
+});
+
+process.on("unhandledRejection", (reason) => {
+  // Deliberately does NOT exit: the request that caused it is already lost,
+  // but the day every other brigade is running does not have to be.
+  console.error("[miniapp-server] unhandled rejection", reason);
+});
+
 async function main() {
   await runMigrations();
 

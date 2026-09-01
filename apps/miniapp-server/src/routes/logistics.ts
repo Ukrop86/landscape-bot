@@ -1,8 +1,8 @@
-import { Router } from "express";
+import { asyncRouter } from "../asyncRouter.js";
 import { db, schema, writeEvent, makeEventId } from "@landscape/core";
 import { and, eq, inArray } from "drizzle-orm";
 
-export const logisticsRouter = Router();
+export const logisticsRouter = asyncRouter();
 
 type LogisticsItemInput = {
   logisticId: string;

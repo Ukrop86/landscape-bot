@@ -1,4 +1,5 @@
-import { Router, type Response } from "express";
+import { asyncRouter } from "../asyncRouter.js";
+import { type Response } from "express";
 import multer from "multer";
 import {
   db,
@@ -51,23 +52,32 @@ function clampCoef(value: number | undefined): number {
   return Number.isFinite(value) ? Math.min(2, Math.max(0.1, value as number)) : 1;
 }
 
-export const roadTimesheetRouter = Router();
+export const roadTimesheetRouter = asyncRouter();
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 /**
- * POST /api/road-timesheet/photo — uploads one odometer photo to Drive,
- * used by the ODO_START / ODO_END steps. Returns a viewable URL that gets
- * stored alongside the odometer row, same as the bot's `odoStartPhotoFileId`.
+ * POST /api/road-timesheet/photo — uploads one photo to Drive (the odometer at
+ * ODO_START / ODO_END, or the finished work at an object). Returns a viewable
+ * URL that travels with the row it belongs to.
+ *
+ * The try/catch is not decoration: Express 4 does not catch a rejected promise
+ * from an async handler, so a Drive 403 here used to take the whole server
+ * down and every foreman with it.
  */
 roadTimesheetRouter.post("/photo", upload.single("photo"), async (req, res) => {
   if (!req.file) {
     res.status(400).json({ error: "photo file is required" });
     return;
   }
-  const fileName = `odo_${req.user!.tgId}_${Date.now()}.jpg`;
-  const url = await uploadPhotoFromBuffer(fileName, req.file.buffer);
-  res.json({ url });
+  const fileName = `photo_${req.user!.tgId}_${Date.now()}.jpg`;
+  try {
+    const url = await uploadPhotoFromBuffer(fileName, req.file.buffer);
+    res.json({ url });
+  } catch (e) {
+    console.error("[photo] Drive upload failed", e);
+    res.status(502).json({ error: "Не вдалося завантажити фото в Google Drive. Спробуйте ще раз або пропустіть — це не обовʼязково." });
+  }
 });
 
 // A work session: an employee was dropped at an object and (usually) later picked back up.

@@ -1,8 +1,8 @@
-import { Router } from "express";
+import { asyncRouter } from "../asyncRouter.js";
 import { db, schema } from "@landscape/core";
 import { eq } from "drizzle-orm";
 
-export const dictionariesRouter = Router();
+export const dictionariesRouter = asyncRouter();
 
 dictionariesRouter.get("/employees", async (_req, res) => {
   const rows = await db.select().from(schema.employees).where(eq(schema.employees.active, true));
