@@ -75,8 +75,18 @@ roadTimesheetRouter.post("/photo", upload.single("photo"), async (req, res) => {
     const url = await uploadPhotoFromBuffer(fileName, req.file.buffer);
     res.json({ url });
   } catch (e) {
-    console.error("[photo] Drive upload failed", e);
-    res.status(502).json({ error: "Не вдалося завантажити фото в Google Drive. Спробуйте ще раз або пропустіть — це не обовʼязково." });
+    // A 403 here is a setup problem, not a hiccup: either the JWT lacks the
+    // Drive scope or the GOOGLE_FOLDER_ID folder is not shared with the
+    // service account. Telling the foreman to "try again" would be a lie, and
+    // the one line in the log is what makes it fixable without a stack dump.
+    const status = (e as { code?: number; status?: number })?.code ?? (e as { status?: number })?.status;
+    console.error(`[photo] Drive upload failed (status ${status ?? "?"}): ${(e as Error)?.message}`);
+    res.status(502).json({
+      error:
+        status === 403
+          ? "Google Drive не приймає фото: сервісний акаунт не має доступу до папки. Це налаштування — покажіть це повідомлення адміністратору. День можна вести далі, фото не обовʼязкове."
+          : "Не вдалося завантажити фото в Google Drive. Спробуйте ще раз або пропустіть — це не обовʼязково.",
+    });
   }
 });
 
