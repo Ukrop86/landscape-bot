@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPack, type TripPlan, type PlanObject, type Foreman, type PlannedResources } from "../lib/api";
 import { useClearErrorOnSuccess } from "../lib/useClearErrorOnSuccess";
 import { todayISO } from "../lib/date";
-import { askDialog, confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
+import { alertDialog, askDialog, confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial, roleTagClass, roleRank, type EmployeeRole } from "../lib/employee";
 import { groupWorks } from "../lib/works";
 import { works as nWorks, people as nPeople, objects as nObjects } from "../lib/plural";
@@ -2227,6 +2227,23 @@ export function RoadTimesheet({
     );
   }
 
+  /**
+   * Would sending these people off on their own leave the bus with no driver?
+   *
+   * True only when the trip actually has a car, nobody is aboard it, and this
+   * object would be emptied -- so there is no one left anywhere to drive it
+   * back. A crew that came entirely by their own transport (no car on the
+   * trip) is unaffected.
+   */
+  function strandsTheBus(objectId: string, leavingIds: string[]): boolean {
+    if (!carId) return false;
+    if (onboard.length > 0) return false;
+    const emptiedHere = planFor(objectId).here.filter((id) => !leavingIds.includes(id)).length === 0;
+    if (!emptiedHere) return false;
+    // Somebody still standing at another object could be collected and drive.
+    return !plans.some((p) => p.objectId !== objectId && p.here.length > 0);
+  }
+
   // Finishes the selected people's open sessions and removes them from the
   // object. Their physical destination is explicit: either the bus, or
   // `nowhere` when a self-transport employee leaves the object on their own.
@@ -2241,6 +2258,17 @@ export function RoadTimesheet({
     const plan = planFor(objectId);
     const ids = employeeIdsToMove.filter((id) => plan.here.includes(id));
     if (!ids.length) return false;
+    // Somebody has to drive the bus home. Sending the last person off on their
+    // own leaves it parked at the object with nobody in it -- and the app then
+    // jumped straight to the closing odometer, as if the day were over.
+    if (destination === "own_transport" && strandsTheBus(objectId, ids)) {
+      await alertDialog(
+        `Хтось має сісти за кермо: у бусі не залишиться жодної людини.\n\n` +
+          `Заберіть принаймні одного в бус («🚐 У бус»), а решту можна зняти.`,
+      );
+      haptic("error");
+      return false;
+    }
     if (!(await confirmUnstartedPickup(objectId, ids))) return false;
     if (destination === "onboard" && pauseForBus) pauseDrivingSegment();
 
@@ -4772,7 +4800,12 @@ export function RoadTimesheet({
                           🚐 Посадити всіх у бус ({plan.here.length})
                         </button>
                       )}
-                      <button className="chip" onClick={() => leaveObjectOnOwn(plan.objectId, plan.here)}>
+                      <button
+                        className="chip"
+                        onClick={() => leaveObjectOnOwn(plan.objectId, plan.here)}
+                        disabled={strandsTheBus(plan.objectId, plan.here)}
+                        title={strandsTheBus(plan.objectId, plan.here) ? "Хтось має сісти за кермо — заберіть когось у бус" : ""}
+                      >
                         🚶 Зняти всіх з обʼєкта ({plan.here.length})
                       </button>
                     </div>

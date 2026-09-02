@@ -36,6 +36,7 @@ interface TelegramWebApp {
     selectionChanged(): void;
   };
   showConfirm?(message: string, callback: (confirmed: boolean) => void): void;
+  showAlert?(message: string, callback?: () => void): void;
   showPopup?(
     params: { title?: string; message: string; buttons?: Array<{ id?: string; type?: "default" | "ok" | "close" | "cancel" | "destructive"; text?: string }> },
     callback?: (buttonId: string) => void,
@@ -75,6 +76,26 @@ export function confirmDialog(message: string): Promise<boolean> {
     return new Promise((resolve) => webApp.showConfirm!(message, resolve));
   }
   return Promise.resolve(window.confirm(message));
+}
+
+/**
+ * A statement, not a question: something is not allowed and here is why.
+ *
+ * Kept apart from confirmDialog on purpose -- offering OK/Cancel for a rule
+ * the app will not bend either way reads as a choice that does not exist.
+ */
+export function alertDialog(message: string): Promise<void> {
+  const webApp = getWebApp();
+  if (webApp?.showAlert) {
+    return new Promise((resolve) => webApp.showAlert!(message, () => resolve()));
+  }
+  if (webApp?.showPopup) {
+    return new Promise((resolve) =>
+      webApp.showPopup!({ message, buttons: [{ id: "ok", type: "default", text: "Зрозуміло" }] }, () => resolve()),
+    );
+  }
+  window.alert(message);
+  return Promise.resolve();
 }
 
 /**
