@@ -3,9 +3,10 @@ import { upsertBatch } from "./upsert.js";
 import * as sheets from "./mappers.js";
 
 /**
- * One full sync cycle: Sheets -> DB. Google Sheets is always the source
- * of truth; this only mirrors it into Postgres for fast reads from the
- * mini-app. Never writes back to Sheets from here.
+ * One full sync cycle: Sheets -> DB, dictionaries only. Google Sheets is the
+ * source of truth for everything a human fills in by hand -- people, objects,
+ * works, cars, materials, settings -- and this mirrors it into Postgres for
+ * fast reads from the mini-app. Never writes back to Sheets from here.
  */
 export async function runSyncCycle() {
   const startedAt = Date.now();
@@ -66,85 +67,10 @@ export async function runSyncCycle() {
 
   await upsertBatch(schema.settings, await sheets.readSettings(), schema.settings.key, ["value", "comment"]);
 
-  await upsertBatch(schema.events, await sheets.readEvents(), schema.events.eventId, [
-    "status",
-    "refEventId",
-    "chatId",
-    "ts",
-    "date",
-    "foremanTgId",
-    "type",
-    "objectId",
-    "carId",
-    "employeeIds",
-    "payload",
-    "msgId",
-  ]);
-
-  await upsertBatch(
-    schema.odometerDays,
-    await sheets.readOdometerDays(),
-    [schema.odometerDays.date, schema.odometerDays.carId],
-    ["foremanTgId", "startValue", "startPhoto", "endValue", "endPhoto", "kmDay", "tripClass"],
-  );
-
-  await upsertBatch(
-    schema.allowances,
-    await sheets.readAllowances(),
-    [schema.allowances.date, schema.allowances.foremanTgId, schema.allowances.type, schema.allowances.employeeId, schema.allowances.objectId],
-    ["employeeName", "amount", "meta", "dayStatus"],
-  );
-
-  await upsertBatch(
-    schema.dayStatuses,
-    await sheets.readDayStatuses(),
-    [schema.dayStatuses.date, schema.dayStatuses.objectId, schema.dayStatuses.foremanTgId],
-    [
-      "status",
-      "hasTimesheet",
-      "hasReports",
-      "hasReportsVolumeOk",
-      "hasRoad",
-      "hasOdoStart",
-      "hasOdoEnd",
-      "hasOdoStartPhoto",
-      "hasOdoEndPhoto",
-      "hasLogistics",
-      "hasMaterials",
-      "returnReason",
-      "approvedBy",
-      "approvedAt",
-    ],
-  );
-
-  await upsertBatch(schema.materialMoves, await sheets.readMaterialMoves(), schema.materialMoves.moveId, [
-    "time",
-    "date",
-    "objectId",
-    "foremanTgId",
-    "materialId",
-    "materialName",
-    "qty",
-    "unit",
-    "moveType",
-    "purpose",
-    "photos",
-    "payload",
-    "dayStatus",
-  ]);
-
-  await upsertBatch(schema.toolMoves, await sheets.readToolMoves(), schema.toolMoves.moveId, [
-    "time",
-    "date",
-    "foremanTgId",
-    "toolId",
-    "toolName",
-    "qty",
-    "moveType",
-    "purpose",
-    "photos",
-    "payload",
-  ]);
+  // Working data (events, odometer, allowances, day statuses, material and
+  // tool moves) is NOT read back from Sheets any more: the app is the only
+  // thing that produces it and it now lives in Postgres alone. Reading those
+  // tabs here was also what made a cleared sheet reappear ~45s later.
 
   const ms = Date.now() - startedAt;
   console.log(`[SYNC] cycle complete in ${ms}ms`);

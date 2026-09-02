@@ -22,8 +22,6 @@ import {
   config,
   buildAccountingRows,
   writeAccountingReportForDay,
-  sheetsClient,
-  sheetNames,
   type LockedTx,
 } from "@landscape/core";
 import { and, eq, inArray, desc, lt, gte } from "drizzle-orm";
@@ -2058,7 +2056,6 @@ roadTimesheetRouter.post("/pending/delete", async (req, res) => {
     return;
   }
   const tgId = BigInt(foremanTgId);
-  const foremanStr = String(foremanTgId);
 
   // ТАБЕЛЬ carries no foreman column, so the day's own events say which
   // objects and people were this foreman's -- without that, deleting by date
@@ -2087,44 +2084,9 @@ roadTimesheetRouter.post("/pending/delete", async (req, res) => {
     }
   }
 
-  const { SHEET_NAMES, EVENTS_HEADERS, REPORTS_HEADERS, TIMESHEET_HEADERS, ALLOWANCES_HEADERS, DAY_STATUS_HEADERS, ODOMETER_HEADERS } =
-    sheetNames;
-  const cell = (row: any[], map: Record<string, number>, header: string) => String(sheetsClient.getCell(row, map, header) ?? "").trim();
-  const byDateAndForeman = (dateHeader: string, foremanHeader: string) => (row: any[], map: Record<string, number>) =>
-    cell(row, map, dateHeader) === date && cell(row, map, foremanHeader) === foremanStr;
-
-  let removedFromSheets = 0;
-  try {
-    removedFromSheets += await sheetsClient.deleteRowsWhere(SHEET_NAMES.events, byDateAndForeman(EVENTS_HEADERS.date, EVENTS_HEADERS.foremanTgId));
-    removedFromSheets += await sheetsClient.deleteRowsWhere(
-      SHEET_NAMES.reports,
-      byDateAndForeman(REPORTS_HEADERS.date, REPORTS_HEADERS.foremanTgId),
-    );
-    removedFromSheets += await sheetsClient.deleteRowsWhere(
-      SHEET_NAMES.allowances,
-      byDateAndForeman(ALLOWANCES_HEADERS.date, ALLOWANCES_HEADERS.foremanTgId),
-    );
-    removedFromSheets += await sheetsClient.deleteRowsWhere(
-      SHEET_NAMES.dayStatus,
-      byDateAndForeman(DAY_STATUS_HEADERS.date, DAY_STATUS_HEADERS.foremanTgId),
-    );
-    removedFromSheets += await sheetsClient.deleteRowsWhere(
-      SHEET_NAMES.odometerDay,
-      byDateAndForeman(ODOMETER_HEADERS.date, ODOMETER_HEADERS.foremanTgId),
-    );
-    removedFromSheets += await sheetsClient.deleteRowsWhere(SHEET_NAMES.timesheet, (row, map) => {
-      if (cell(row, map, TIMESHEET_HEADERS.date) !== date) return false;
-      const objectId = cell(row, map, TIMESHEET_HEADERS.objectId);
-      const employeeId = cell(row, map, TIMESHEET_HEADERS.employeeId);
-      return objectIds.has(objectId) && employeeIds.has(employeeId);
-    });
-  } catch (e) {
-    // Stop before touching Postgres: half-deleted is worse than not deleted,
-    // and with the sheet intact the sync would restore whatever we removed.
-    res.status(502).json({ error: `Не вдалось видалити з Google Sheets: ${(e as Error).message}` });
-    return;
-  }
-
+  // Working data lives in Postgres alone now, so deleting a day is a plain
+  // set of DELETEs. It used to have to clear the Google Sheets rows first --
+  // otherwise the next sync cycle put the day straight back ~45s later.
   await db.delete(schema.events).where(and(eq(schema.events.date, date), eq(schema.events.foremanTgId, tgId)));
   await db.delete(schema.reports).where(and(eq(schema.reports.date, date), eq(schema.reports.foremanTgId, tgId)));
   await db.delete(schema.allowances).where(and(eq(schema.allowances.date, date), eq(schema.allowances.foremanTgId, tgId)));
@@ -2147,7 +2109,7 @@ roadTimesheetRouter.post("/pending/delete", async (req, res) => {
     `🗑 *Звіт видалено адміністратором*\n📅 Дата: ${date}\n\nЯкщо це помилка — зверніться до адміністратора. День можна внести заново.`,
   ).catch(() => {});
 
-  res.json({ ok: true, removedFromSheets });
+  res.json({ ok: true });
 });
 
 /**

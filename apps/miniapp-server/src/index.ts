@@ -13,7 +13,6 @@ import {
   db,
   schema,
   sheetsClient,
-  sheetNames,
   ACCOUNTING_SHEET,
   ACCOUNTING_META_SHEET,
 } from "@landscape/core";
@@ -122,35 +121,21 @@ const DATED_WORKING_TABLES = [
 ] as const;
 
 /**
- * The tabs the PROGRAM writes, as opposed to the dictionaries a human keeps.
+ * The only tabs the PROGRAM still writes. Everything else in the spreadsheet
+ * is either a dictionary a human keeps, or gone: raw working data (ЖУРНАЛ_ПОДІЙ,
+ * ЗВІТИ, ТАБЕЛЬ, ОДОМЕТР_ДЕНЬ, ДОПЛАТИ, СТАТУС_ДНЯ, ЗАКРИТТЯ, МАТЕРІАЛИ_РУХ,
+ * ІНСТРУМЕНТ_РУХ) now lives in Postgres alone.
  *
- * Order matters when wiping: six of these are read back by runSyncCycle, so
- * Postgres must be cleared AFTER the sheets or the next cycle (~45s) puts them
- * straight back. БУХЗВІТ_META holds the export's idempotency keys -- leaving it
- * behind would make a re-approved day silently skip its export.
+ * БУХЗВІТ_META holds the export's idempotency keys -- leaving it behind would
+ * make a re-approved day silently skip its export, so it always goes with
+ * БУХЗВІТ.
  */
-const WORKING_DATA_SHEETS = [
-  sheetNames.SHEET_NAMES.events,
-  sheetNames.SHEET_NAMES.reports,
-  sheetNames.SHEET_NAMES.timesheet,
-  sheetNames.SHEET_NAMES.odometerDay,
-  sheetNames.SHEET_NAMES.allowances,
-  sheetNames.SHEET_NAMES.dayStatus,
-  sheetNames.SHEET_NAMES.closures,
-  sheetNames.SHEET_NAMES.materialsMove,
-  sheetNames.SHEET_NAMES.toolsMove,
-  ACCOUNTING_SHEET,
-  ACCOUNTING_META_SHEET,
-] as const;
+const WORKING_DATA_SHEETS = [ACCOUNTING_SHEET, ACCOUNTING_META_SHEET] as const;
 
 // Full reset of a test run's accumulated data, so real-world testing can
-// start from a clean slate without hand-writing SQL each time.
-//
-// Clear the matching Google Sheets tabs FIRST -- ЖУРНАЛ_ПОДІЙ, ОДОМЕТР_ДЕНЬ,
-// ДОПЛАТИ, СТАТУС_ДНЯ, МАТЕРІАЛИ_РУХ and ІНСТРУМЕНТ_РУХ are all read back by
-// runSyncCycle, so clearing Postgres alone would just have the next sync
-// cycle (~45s later) put those six straight back. ЗВІТИ and ТАБЕЛЬ aren't
-// synced, so those two stay cleared either way.
+// start from a clean slate without hand-writing SQL each time. Working data
+// is Postgres-only, so this now empties the tables and nothing else; use
+// /internal/reset-all when БУХЗВІТ should go too.
 app.post("/internal/reset-working-data", requireBotToken, async (_req, res) => {
   try {
     const countQuery = WORKING_DATA_TABLES.map((t) => `SELECT '${t}' AS "table", count(*)::int AS rows FROM ${t}`).join(" UNION ALL ");
@@ -174,16 +159,15 @@ app.post("/internal/reset-working-data", requireBotToken, async (_req, res) => {
  * ЛОГІСТИКА, МАТЕРІАЛИ, ІНСТРУМЕНТИ, НАЛАШТУВАННЯ are maintained by hand and
  * are the input, not the output.
  *
- * Sheets go first and Postgres only if every one of them succeeded. Half a
- * wipe is worse than none: clearing Postgres alone lets the sync restore it,
- * and clearing some sheets while the database still holds the day leaves the
- * two disagreeing about what happened.
+ * БУХЗВІТ goes first and Postgres only if it succeeded. Half a wipe is worse
+ * than none: an emptied database with the accountant's report still listing
+ * the day leaves the two disagreeing about what happened.
  */
 app.post("/internal/reset-all", requireBotToken, async (req, res) => {
-  // Optional surgical mode: keep one day, delete the rest. Every working sheet
-  // carries a ДАТА column (БУХЗВІТ spells it "Дата", and БУХЗВІТ_META encodes
-  // it inside its key as MINIAPP|<date>|<foreman>|...), so one date is the one
-  // thing that can be matched consistently everywhere.
+  // Optional surgical mode: keep one day, delete the rest. БУХЗВІТ carries a
+  // "Дата" column and БУХЗВІТ_META encodes the date inside its key as
+  // MINIAPP|<date>|<foreman>|..., so one date is the one thing that can be
+  // matched consistently in both.
   const body = (req.body ?? {}) as { keepDate?: string; deleteUntil?: string };
   const isDate = (v: unknown) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.trim());
   const keepDate = isDate(body.keepDate) ? String(body.keepDate).trim() : "";
@@ -209,13 +193,12 @@ app.post("/internal/reset-all", requireBotToken, async (req, res) => {
         sheetsCleared[name] = await sheetsClient.clearSheetData(name);
         continue;
       }
-      const dateHeader = name === ACCOUNTING_SHEET ? "Дата" : "ДАТА";
       sheetsCleared[name] = await sheetsClient.deleteRowsWhere(name, (row, map) => {
         // БУХЗВІТ_META has no date column -- its key is MINIAPP|<date>|<foreman>|…
         const rowDate =
           name === ACCOUNTING_META_SHEET
             ? String(row?.[0] ?? "").split("|")[1] ?? ""
-            : String(sheetsClient.getCell(row, map, dateHeader) ?? "").trim();
+            : String(sheetsClient.getCell(row, map, "Дата") ?? "").trim();
         return rowMatches(rowDate);
       });
     }
@@ -236,17 +219,12 @@ app.post("/internal/reset-all", requireBotToken, async (req, res) => {
       for (const t of DATED_WORKING_TABLES) {
         await db.execute(sql.raw(`DELETE FROM ${t} WHERE date <= '${cutoff}'`));
       }
-      // Row numbers in the sheets just shifted, so the reader has to start over.
-      await db.execute(sql.raw("TRUNCATE TABLE sync_cursors"));
     } else if (keepDate) {
-      // Everything except that one day. sync_cursors is emptied either way --
-      // it only records how far the sheet reader got, and re-reading is
-      // harmless. trip_plans is deliberately LEFT ALONE: plans are not trips,
-      // and deleting more than asked cannot be undone.
+      // Everything except that one day. trip_plans is deliberately LEFT ALONE:
+      // plans are not trips, and deleting more than asked cannot be undone.
       for (const t of DATED_WORKING_TABLES) {
         await db.execute(sql.raw(`DELETE FROM ${t} WHERE date <> '${keepDate.replace(/'/g, "''")}'`));
       }
-      await db.execute(sql.raw("TRUNCATE TABLE sync_cursors"));
     } else {
       // TRUNCATE rather than DELETE: it also resets the serial id sequences.
       await db.execute(sql.raw(`TRUNCATE TABLE ${WORKING_DATA_TABLES.join(", ")} RESTART IDENTITY`));
