@@ -4206,7 +4206,15 @@ export function RoadTimesheet({
           </div>
           <div className="hint" style={{ textAlign: "center" }}>лише час у дорозі — на об'єктах не рахується</div>
           {!nextUnvisited && (
-            <div className="hint" style={{ textAlign: "center" }}>Усі обʼєкти відвідано — час повертатись на базу</div>
+            <div className="hint" style={{ textAlign: "center" }}>
+              Усі обʼєкти відвідано — час повертатись на базу
+              {(() => {
+                // On the way back the crew is usually still on site: saying so
+                // here stops "повертаємось" from reading as "the day is over".
+                const left = plans.reduce((a, p) => a + p.here.length, 0);
+                return left > 0 ? ` · на обʼєктах ще ${nPeople(left)} — заберіть їх` : "";
+              })()}
+            </div>
           )}
           {nextUnvisited && headingTo && (
             <div className="hint" style={{ textAlign: "center" }}>
@@ -5306,7 +5314,27 @@ export function RoadTimesheet({
                     // off. If nobody's left to pick up anywhere, skip
                     // straight to the final odometer.
                     if (atObjectReturnStep === "DRIVE" && !nextUnvisited) {
-                      setStep(plans.some((p) => p.here.length > 0) ? "RETURN_PICKUP" : "RETURN");
+                      // The label says "завершити роботи", but this button only
+                      // switches the route to the return leg -- the crew stays
+                      // on site to be collected on the way back. A foreman read
+                      // that as "the day is over", saw "ПОВЕРНЕННЯ НА БАЗУ" with
+                      // a running clock while five people were still digging,
+                      // and asked who was supposed to be driving. So say it out
+                      // loud before switching.
+                      const stillOut = plans.filter((p) => p.here.length > 0);
+                      if (stillOut.length) {
+                        const lines = stillOut.map((p) => `• ${p.objectName} — ${nPeople(p.here.length)}`).join("\n");
+                        const ok = await askDialog(
+                          `На обʼєктах ще залишаються люди:\n${lines}\n\n` +
+                            `Їх треба забрати по дорозі — на екрані повернення в кожного обʼєкта буде «Посадити в бус». ` +
+                            `Роботи в них зупиняться саме тоді.`,
+                          "Так",
+                          "Ні",
+                          "Роботи завершені, повертаємось?",
+                        );
+                        if (!ok) return;
+                      }
+                      setStep(stillOut.length ? "RETURN_PICKUP" : "RETURN");
                       return;
                     }
                     setStep(atObjectReturnStep);
