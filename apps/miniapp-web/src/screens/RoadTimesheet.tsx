@@ -663,31 +663,50 @@ export function RoadTimesheet({
   // than calls scattered through the flow, and fire-and-forget: a failed
   // report is a stale admin screen, never a broken day.
   const atObjectPlan = atObjectId ? plans.find((p) => p.objectId === atObjectId) : null;
-  const worksRunningHere = !!atObjectPlan && atObjectPlan.sessions.some((x) => !x.endedAt);
   const headingName = headingToObjectId ? (plans.find((p) => p.objectId === headingToObjectId)?.objectName ?? "") : "";
+  // Standing at an object is not one screen. The foreman opens the works
+  // list, the volumes, the object's plan -- all without going anywhere. Those
+  // steps used to fall through to the DRIVING default, so an afternoon of
+  // filling in works stamped "в дорозі" and "почали роботи" alternately every
+  // few seconds and buried the real checkpoints.
+  const atObjectSteps: Step[] = ["AT_OBJECT", "PLAN", "PLAN_WORKS", "PLAN_VOLUMES"];
+  const standingAtObject = !!atObjectId && atObjectSteps.includes(step);
+  // Work running anywhere beats whatever screen is open: it is a fact about
+  // the brigade, not about the phone.
+  const workingPlan = plans.find((p) => p.sessions.some((x) => !x.endedAt));
   const progressState = !tripStartedAt
     ? ""
-    : step === "AT_OBJECT" && atObjectPlan
-      ? worksRunningHere
-        ? "WORKING"
-        : "AT_OBJECT"
-      : step === "RETURN" || step === "RETURN_PICKUP"
-        ? "RETURNING"
-        : step === "REVIEW"
-          ? "AT_BASE"
-          : "DRIVING";
-  const progressObject = step === "AT_OBJECT" ? (atObjectPlan?.objectName ?? "") : headingName;
+    : step === "RETURN" || step === "RETURN_PICKUP"
+      ? "RETURNING"
+      : step === "REVIEW"
+        ? "AT_BASE"
+        : workingPlan
+          ? "WORKING"
+          : standingAtObject
+            ? "AT_OBJECT"
+            : "DRIVING";
+  const progressObject = workingPlan
+    ? workingPlan.objectName
+    : standingAtObject
+      ? (atObjectPlan?.objectName ?? "")
+      : headingName;
 
   useEffect(() => {
     if (!progressState || planEditing || editingTripSeq !== null) return;
-    api
-      .post("/api/road-timesheet/progress", {
-        date,
-        state: progressState,
-        objectName: progressObject,
-        peopleCount: employeeIds.length,
-      })
-      .catch(() => {});
+    // Report only what held still for a few seconds. Tapping through screens
+    // passes through states nobody needs a dot for, and the admin's timeline
+    // is meant to read as "where the brigade is", not as a tap log.
+    const t = setTimeout(() => {
+      api
+        .post("/api/road-timesheet/progress", {
+          date,
+          state: progressState,
+          objectName: progressObject,
+          peopleCount: employeeIds.length,
+        })
+        .catch(() => {});
+    }, 5000);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date, progressState, progressObject, planEditing, editingTripSeq]);
 
