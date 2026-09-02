@@ -6,6 +6,7 @@ import { useTelegramBackButton } from "../lib/telegram";
 import { BackRow } from "../components/BackRow";
 import { shortName } from "../lib/employee";
 
+type Progress = { state: string; objectName: string; updatedAt: string };
 type ActiveTrip = {
   carId: string;
   carName: string;
@@ -13,6 +14,8 @@ type ActiveTrip = {
   foremanName: string;
   since: string;
   people: string[];
+  /** null until the phone reports in -- an older build, or no signal yet. */
+  progress: Progress | null;
 };
 type SubmittedTrip = { tripSeq: number; status: string; submittedAt: string; objects: string[]; km: number };
 type SubmittedDay = {
@@ -31,6 +34,31 @@ function outFor(sinceIso: string, now: number): string {
   const time = started.toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" });
   if (mins < 60) return `з ${time} · ${mins} хв`;
   return `з ${time} · ${Math.floor(mins / 60)} год ${mins % 60} хв`;
+}
+
+/** The reported state, as a badge: what they are doing, not just that they left. */
+function stateBadge(p: Progress | null): { text: string; cls: string } {
+  if (!p) return { text: "🚗 виїхали", cls: "" };
+  switch (p.state) {
+    case "WORKING":
+      return { text: `🛠 працюють${p.objectName ? ` · ${p.objectName}` : ""}`, cls: "ok" };
+    case "AT_OBJECT":
+      return { text: `📍 на обʼєкті${p.objectName ? ` · ${p.objectName}` : ""}`, cls: "" };
+    case "RETURNING":
+      return { text: "↩️ повертаються", cls: "warn" };
+    case "AT_BASE":
+      return { text: "🏁 на базі, здають звіт", cls: "warn" };
+    default:
+      return { text: `🚗 в дорозі${p.objectName ? ` → ${p.objectName}` : ""}`, cls: "" };
+  }
+}
+
+/** How long ago the phone last reported -- stale has to look stale. */
+function reportedAgo(iso: string, now: number): string {
+  const mins = Math.max(0, Math.round((now - new Date(iso).getTime()) / 60000));
+  if (mins < 2) return "щойно";
+  if (mins < 60) return `${mins} хв тому`;
+  return `${Math.floor(mins / 60)} год тому`;
 }
 
 /**
@@ -106,7 +134,15 @@ export function AdminOverview({ onBack }: { onBack: () => void }) {
                 <div key={t.carId} className="cell" style={{ cursor: "default", display: "block" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
                     <span className="cell-title">🚙 {t.carName}</span>
-                    <span className="badge warn">{outFor(t.since, now)}</span>
+                    <span className="cell-sub">{outFor(t.since, now)}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 6 }}>
+                    <span className={`badge ${stateBadge(t.progress).cls}`}>{stateBadge(t.progress).text}</span>
+                    {t.progress ? (
+                      <span className="hint">{reportedAgo(t.progress.updatedAt, now)}</span>
+                    ) : (
+                      <span className="hint">стан не надходив</span>
+                    )}
                   </div>
                   <div className="hint" style={{ marginTop: 4 }}>
                     👤 {shortName(t.foremanName)}

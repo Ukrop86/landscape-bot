@@ -1295,6 +1295,46 @@ roadTimesheetRouter.get("/people-status", async (req, res) => {
 });
 
 /**
+ * POST /api/road-timesheet/progress — the foreman's phone reporting where the
+ * brigade is, so an admin can watch a day that has not been submitted yet.
+ *
+ * Fire-and-forget by design: the client never waits on it and never shows its
+ * failure. Nothing is computed from this row -- it is a display, and a phone
+ * out of signal must make the admin's screen stale, never the day wrong.
+ */
+roadTimesheetRouter.post("/progress", async (req, res) => {
+  const { date, state, objectName, peopleCount } = req.body as {
+    date?: string;
+    state?: string;
+    objectName?: string;
+    peopleCount?: number;
+  };
+  const allowed = ["DRIVING", "AT_OBJECT", "WORKING", "RETURNING", "AT_BASE"];
+  if (!date || !state || !allowed.includes(state)) {
+    res.status(400).json({ error: "date and a known state are required" });
+    return;
+  }
+  const foremanTgId = req.user!.tgId;
+  const row = {
+    id: `${date}:${foremanTgId}`,
+    date,
+    foremanTgId: BigInt(foremanTgId),
+    state,
+    objectName: String(objectName ?? "").slice(0, 200),
+    peopleCount: Number.isFinite(peopleCount) ? Number(peopleCount) : 0,
+    updatedAt: new Date(),
+  };
+  await db
+    .insert(schema.tripProgress)
+    .values(row)
+    .onConflictDoUpdate({
+      target: schema.tripProgress.id,
+      set: { state: row.state, objectName: row.objectName, peopleCount: row.peopleCount, updatedAt: row.updatedAt },
+    });
+  res.json({ ok: true });
+});
+
+/**
  * GET /api/road-timesheet/admin/overview?date=YYYY-MM-DD — admin-only.
  *
  * What every brigade is doing today, in one call. The foreman-facing screens
@@ -1310,12 +1350,14 @@ roadTimesheetRouter.get("/admin/overview", async (req, res) => {
   if (blockNonAdmin(req, res)) return;
   const date = String(req.query.date || "") || new Date().toISOString().slice(0, 10);
 
-  const [dayEvents, users, cars, employees] = await Promise.all([
+  const [dayEvents, users, cars, employees, progressRows] = await Promise.all([
     db.select().from(schema.events).where(eq(schema.events.date, date)),
     db.select().from(schema.users),
     db.select().from(schema.cars),
     db.select().from(schema.employees),
+    db.select().from(schema.tripProgress).where(eq(schema.tripProgress.date, date)),
   ]);
+  const progressByForeman = new Map(progressRows.map((r) => [String(r.foremanTgId), r]));
   const nameByTgId = new Map(users.map((u) => [String(u.tgId), u.pib]));
   const carById = new Map(cars.map((c) => [c.id, c.name]));
   const employeeById = new Map(employees.map((e) => [e.id, e.name]));
@@ -1361,6 +1403,12 @@ roadTimesheetRouter.get("/admin/overview", async (req, res) => {
       foremanName: foremanName(v.foremanTgId),
       since: v.ts.toISOString(),
       people: heldPeopleByForeman.get(v.foremanTgId) ?? [],
+      // What the phone last reported. Absent until the foreman's app has sent
+      // anything (an older build, or no signal since departure).
+      progress: (() => {
+        const p = progressByForeman.get(v.foremanTgId);
+        return p ? { state: p.state, objectName: p.objectName, updatedAt: p.updatedAt.toISOString() } : null;
+      })(),
     }))
     .sort((a, b) => a.since.localeCompare(b.since));
 

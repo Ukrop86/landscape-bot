@@ -337,3 +337,28 @@ export const tripPlans = pgTable(
   },
   (t) => [index("trip_plans_foreman_idx").on(t.foremanTgId), index("trip_plans_status_idx").on(t.status)],
 );
+
+/**
+ * Where a brigade is right now, as reported by the foreman's phone.
+ *
+ * The server learns nothing about a day until it is SUBMITTED -- the driving
+ * timer, the object they are standing at and the running work sessions all
+ * live in the phone's draft. So an admin watching the day could see that a car
+ * had been taken and nothing more.
+ *
+ * One row per foreman per date, overwritten on every transition. It is a
+ * REPORT, not a source of truth: nothing is computed from it and payroll never
+ * reads it, so a phone out of signal only makes the admin's screen stale, never
+ * the day wrong. `updatedAt` is shown so stale is visible as stale.
+ */
+export const tripProgress = pgTable("trip_progress", {
+  // `${date}:${foremanTgId}` -- one live state per foreman per day.
+  id: text("id").primaryKey(),
+  date: text("date").notNull(),
+  foremanTgId: bigint("foreman_tg_id", { mode: "bigint" }).notNull(),
+  // DRIVING | AT_OBJECT | WORKING | RETURNING | AT_BASE
+  state: text("state").notNull(),
+  objectName: text("object_name").notNull().default(""),
+  peopleCount: integer("people_count").notNull().default(0),
+  updatedAt: timestamp("updated_at", { mode: "date" }).notNull().defaultNow(),
+});

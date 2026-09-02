@@ -50,6 +50,13 @@
       "when": 1788264722094,
       "tag": "0006_trip_plans",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788331931311,
+      "tag": "0007_trip_progress",
+      "breakpoints": true
     }
   ]
 }

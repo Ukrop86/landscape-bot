@@ -657,6 +657,40 @@ export function RoadTimesheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Tells the server roughly where the brigade is, so an admin can watch a day
+  // that has not been submitted yet -- until RTS_SAVE the server knows only
+  // that a car was taken. One effect on the transitions that matter rather
+  // than calls scattered through the flow, and fire-and-forget: a failed
+  // report is a stale admin screen, never a broken day.
+  const atObjectPlan = atObjectId ? plans.find((p) => p.objectId === atObjectId) : null;
+  const worksRunningHere = !!atObjectPlan && atObjectPlan.sessions.some((x) => !x.endedAt);
+  const headingName = headingToObjectId ? (plans.find((p) => p.objectId === headingToObjectId)?.objectName ?? "") : "";
+  const progressState = !tripStartedAt
+    ? ""
+    : step === "AT_OBJECT" && atObjectPlan
+      ? worksRunningHere
+        ? "WORKING"
+        : "AT_OBJECT"
+      : step === "RETURN" || step === "RETURN_PICKUP"
+        ? "RETURNING"
+        : step === "REVIEW"
+          ? "AT_BASE"
+          : "DRIVING";
+  const progressObject = step === "AT_OBJECT" ? (atObjectPlan?.objectName ?? "") : headingName;
+
+  useEffect(() => {
+    if (!progressState || planEditing || editingTripSeq !== null) return;
+    api
+      .post("/api/road-timesheet/progress", {
+        date,
+        state: progressState,
+        objectName: progressObject,
+        peopleCount: employeeIds.length,
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date, progressState, progressObject, planEditing, editingTripSeq]);
+
   // Keeps "resume where I left off" pointed at wherever the user ACTUALLY is,
   // not frozen at whatever step a draft happened to restore to on mount --
   // the day-status effect below can force step to "DONE" asynchronously
