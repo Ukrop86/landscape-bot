@@ -240,11 +240,13 @@ POST /internal/sync-now             # негайний цикл Sheets → Postg
 POST /internal/reset-odometer       # чистить odometer_days (показники біля авто)
 POST /internal/reset-working-data   # чистить робочі таблиці Postgres, довідники не чіпає
 POST /internal/reset-all            # ★ повне обнулення: спершу АРКУШІ, потім Postgres
+#   {"keepDate":"2026-09-02"}         лишити лише цей день
+#   {"deleteUntil":"2026-08-31"}      видалити все по цю дату включно
 ```
 
 `reset-working-data` = events, reports, timesheet_entries, odometer_days,
 allowances, day_statuses, closures, material_moves, tool_moves, sync_cursors,
-trip_plans. **Спершу очистити відповідні аркуші**, інакше синк поверне їх
+trip_plans, trip_progress. **Спершу очистити відповідні аркуші**, інакше синк поверне їх
 за ~45с.
 
 **`reset-all` робить це сам і в правильному порядку.** Чистить аркуші, які
