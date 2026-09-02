@@ -5,6 +5,7 @@ import { Menu, type Screen } from "./screens/Menu";
 import { Logistics } from "./screens/Logistics";
 import { Materials } from "./screens/Materials";
 import { Stats } from "./screens/Stats";
+import { AdminOverview } from "./screens/AdminOverview";
 import { RoadTimesheet } from "./screens/RoadTimesheet";
 import { RetroEntry } from "./screens/RetroEntry";
 import { Approval } from "./screens/Approval";
@@ -79,6 +80,7 @@ export default function App() {
       )}
       {screen === "roadTimesheetRetro" && <RetroEntry onBack={() => setScreen("roadTimesheet")} onSaved={showSavedToast} />}
       {screen === "stats" && <Stats onBack={goMenu} isAdmin={me?.role === "ADMIN"} />}
+      {screen === "adminOverview" && <AdminOverview onBack={goMenu} />}
       {screen === "tools" && <ComingSoon title="🧰 Інструменти" onBack={goMenu} />}
       {screen === "approval" && (
         <Approval

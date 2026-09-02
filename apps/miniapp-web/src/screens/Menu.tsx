@@ -3,7 +3,16 @@
 // separate part of the app), but it lives as its own top-level screen so only
 // one of the two is ever mounted, keeping a single owner of Telegram's back
 // button at any time.
-export type Screen = "menu" | "logistics" | "roadTimesheet" | "roadTimesheetRetro" | "materials" | "stats" | "tools" | "approval";
+export type Screen =
+  | "menu"
+  | "logistics"
+  | "roadTimesheet"
+  | "roadTimesheetRetro"
+  | "materials"
+  | "stats"
+  | "tools"
+  | "approval"
+  | "adminOverview";
 
 type Accent = "blue" | "green" | "orange" | "purple" | "teal" | "gray";
 
@@ -14,6 +23,7 @@ const ITEMS: { screen: Screen; icon: string; title: string; ready: boolean; acce
   { screen: "stats", icon: "📊", title: "Статистика", ready: true, accent: "purple" },
   { screen: "tools", icon: "🧰", title: "Інструменти", ready: false, accent: "teal" },
   { screen: "approval", icon: "✅", title: "Затвердження", ready: false, accent: "gray" },
+  { screen: "adminOverview", icon: "🚚", title: "Поточні поїздки", ready: true, accent: "blue" },
 ];
 
 // A bit of warmth on the one screen every user sees every single time --
@@ -39,7 +49,9 @@ export function Menu({
   // "Затвердження" is admin-only real functionality -- hidden for brigadiers
   // entirely (a "Скоро" tile that never turns real for them would just be
   // noise), shown as ready for admins instead of the static placeholder.
-  const items = ITEMS.filter((item) => item.screen !== "approval" || isAdmin).map((item) =>
+  // Both admin-only: approving days and watching them happen are the two
+  // things only an admin does.
+  const items = ITEMS.filter((item) => (item.screen !== "approval" && item.screen !== "adminOverview") || isAdmin).map((item) =>
     item.screen === "approval" ? { ...item, ready: true } : item,
   );
   return (

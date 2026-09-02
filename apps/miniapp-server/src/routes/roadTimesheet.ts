@@ -1295,6 +1295,124 @@ roadTimesheetRouter.get("/people-status", async (req, res) => {
 });
 
 /**
+ * GET /api/road-timesheet/admin/overview?date=YYYY-MM-DD — admin-only.
+ *
+ * What every brigade is doing today, in one call. The foreman-facing screens
+ * are all scoped to the caller (car-status and people-status even skip the
+ * caller's own reservations, because their job is to warn about OTHER people),
+ * so an admin had no way to see the day at all short of reading the sheets.
+ *
+ * Two halves, because they answer different questions:
+ * - `active`: cars reserved and not yet returned -- who is out RIGHT NOW.
+ * - `submitted`: days already sent, with their status -- what is done.
+ */
+roadTimesheetRouter.get("/admin/overview", async (req, res) => {
+  if (blockNonAdmin(req, res)) return;
+  const date = String(req.query.date || "") || new Date().toISOString().slice(0, 10);
+
+  const [dayEvents, users, cars, employees] = await Promise.all([
+    db.select().from(schema.events).where(eq(schema.events.date, date)),
+    db.select().from(schema.users),
+    db.select().from(schema.cars),
+    db.select().from(schema.employees),
+  ]);
+  const nameByTgId = new Map(users.map((u) => [String(u.tgId), u.pib]));
+  const carById = new Map(cars.map((c) => [c.id, c.name]));
+  const employeeById = new Map(employees.map((e) => [e.id, e.name]));
+  const foremanName = (tgId: unknown) => nameByTgId.get(String(tgId)) ?? `Бригадир ${tgId}`;
+
+  // Latest event per car decides whether it is still out (same rule as
+  // car-status, minus the "skip my own" filter -- an admin wants all of them).
+  const latestByCar = new Map<string, { type: string; ts: Date; foremanTgId: string }>();
+  for (const e of dayEvents) {
+    if (!e.carId || !["RTS_RESERVE_CAR", ...CAR_RELEASE_TYPES].includes(e.type)) continue;
+    const cur = latestByCar.get(e.carId);
+    if (!cur || e.ts > cur.ts) latestByCar.set(e.carId, { type: e.type, ts: e.ts, foremanTgId: String(e.foremanTgId) });
+  }
+  const latestByEmployee = new Map<string, { type: string; ts: Date; foremanTgId: string }>();
+  for (const e of dayEvents) {
+    if (!["RTS_RESERVE_PEOPLE", ...PEOPLE_RELEASE_TYPES].includes(e.type)) continue;
+    let ids: string[] = [];
+    try {
+      ids = JSON.parse(e.employeeIds ?? "[]");
+    } catch {
+      ids = [];
+    }
+    for (const id of ids) {
+      const cur = latestByEmployee.get(id);
+      if (!cur || e.ts > cur.ts) latestByEmployee.set(id, { type: e.type, ts: e.ts, foremanTgId: String(e.foremanTgId) });
+    }
+  }
+
+  const heldPeopleByForeman = new Map<string, string[]>();
+  for (const [employeeId, v] of latestByEmployee) {
+    if (PEOPLE_RELEASE_TYPES.includes(v.type)) continue;
+    const list = heldPeopleByForeman.get(v.foremanTgId) ?? [];
+    list.push(employeeById.get(employeeId) ?? employeeId);
+    heldPeopleByForeman.set(v.foremanTgId, list);
+  }
+
+  const active = [...latestByCar.entries()]
+    .filter(([, v]) => !CAR_RELEASE_TYPES.includes(v.type))
+    .map(([carId, v]) => ({
+      carId,
+      carName: carById.get(carId) ?? carId,
+      foremanTgId: Number(v.foremanTgId),
+      foremanName: foremanName(v.foremanTgId),
+      since: v.ts.toISOString(),
+      people: heldPeopleByForeman.get(v.foremanTgId) ?? [],
+    }))
+    .sort((a, b) => a.since.localeCompare(b.since));
+
+  // Submitted days, newest first, with the status of the LAST event per trip
+  // (a resubmission adds an event, it does not rewrite the old one).
+  const byForeman = new Map<string, { tgId: string; trips: Map<number, { status: string; ts: Date; objects: string[]; km: number }> }>();
+  for (const e of dayEvents) {
+    if (e.type !== "RTS_SAVE") continue;
+    let payload: { tripSeq?: number; objects?: Array<{ objectName?: string }>; km?: number } = {};
+    try {
+      payload = JSON.parse(e.payload ?? "{}");
+    } catch {
+      payload = {};
+    }
+    const key = String(e.foremanTgId);
+    const entry = byForeman.get(key) ?? { tgId: key, trips: new Map() };
+    const seq = Number(payload.tripSeq ?? 1);
+    const prev = entry.trips.get(seq);
+    if (!prev || e.ts > prev.ts) {
+      entry.trips.set(seq, {
+        status: e.status,
+        ts: e.ts,
+        objects: (payload.objects ?? []).map((o) => String(o.objectName ?? "")).filter(Boolean),
+        km: Number(payload.km ?? 0),
+      });
+    }
+    byForeman.set(key, entry);
+  }
+
+  const submitted = [...byForeman.values()]
+    .map((f) => {
+      const trips = [...f.trips.entries()].map(([tripSeq, t]) => ({
+        tripSeq,
+        status: t.status,
+        submittedAt: t.ts.toISOString(),
+        objects: t.objects,
+        km: Math.round(t.km * 100) / 100,
+      }));
+      return {
+        foremanTgId: Number(f.tgId),
+        foremanName: foremanName(f.tgId),
+        trips: trips.sort((a, b) => a.tripSeq - b.tripSeq),
+        km: Math.round(trips.reduce((a, t) => a + t.km, 0) * 100) / 100,
+        allApproved: trips.length > 0 && trips.every((t) => t.status === "ЗАТВЕРДЖЕНО"),
+      };
+    })
+    .sort((a, b) => a.foremanName.localeCompare(b.foremanName));
+
+  res.json({ date, active, submitted });
+});
+
+/**
  * GET /api/road-timesheet/day-status?date=YYYY-MM-DD — has this foreman
  * submitted (RTS_SAVE) a road timesheet for this date, and has an admin
  * already approved it (status "ЗАТВЕРДЖЕНО" on the event, set by the admin
