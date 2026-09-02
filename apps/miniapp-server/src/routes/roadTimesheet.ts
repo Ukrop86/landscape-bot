@@ -266,9 +266,14 @@ async function computePayroll(params: {
 
   const salaryPacks = buildSalaryPacksWithRoles({ objects: payrollObjectInputs, brigadierEmployeeIds, seniorEmployeeIds });
 
+  // An EMPTY cell in НАЛАШТУВАННЯ is not a setting, it is a missing setting.
+  // Number("") is 0 and passes Number.isFinite, so a blank ROAD_ALLOWANCE_*
+  // used to silently zero the whole day's travel allowance -- no error, no
+  // row in БУХЗВІТ, just nobody paid. A deliberate "0" is still honoured.
+  const allowanceSetting = String(settingRows[0]?.value ?? "").trim();
   const roadAllowanceTotal =
-    settingRows.length && Number.isFinite(Number(settingRows[0].value))
-      ? Number(settingRows[0].value)
+    allowanceSetting !== "" && Number.isFinite(Number(allowanceSetting))
+      ? Number(allowanceSetting)
       : DEFAULT_ROAD_ALLOWANCE_BY_CLASS[tripClass];
   // Anyone who showed up under their own transport (see /reserve and the
   // AT_OBJECT "Приїхали самі" action) rides free of the travel allowance --
