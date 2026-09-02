@@ -2245,13 +2245,29 @@ export function RoadTimesheet({
     if (destination === "onboard" && pauseForBus) pauseDrivingSegment();
 
     const now = new Date().toISOString();
+    const nowMs = Date.now();
     moveEmployeesTo(ids, destination === "onboard" ? { kind: "onboard" } : { kind: "nowhere" });
     setPlans((prev) =>
-      prev.map((p) =>
-        p.objectId !== objectId
-          ? p
-          : { ...p, sessions: p.sessions.map((s) => (ids.includes(s.employeeId) && !s.endedAt ? { ...s, endedAt: now } : s)) },
-      ),
+      prev.map((p) => {
+        if (p.objectId !== objectId) return p;
+        const sessions = p.sessions.map((s) => (ids.includes(s.employeeId) && !s.endedAt ? { ...s, endedAt: now } : s));
+        // Taking the LAST person off has to stop the object's own work timers
+        // too. They are stopped by finishShift, and finishShift lives behind
+        // the "Роботи тривають" card, which disappears the moment nobody is
+        // clocked in -- so an emptied object kept its works running with no
+        // control left to stop them.
+        const nobodyLeftHere = p.here.filter((id) => !ids.includes(id)).length === 0;
+        const stillClockedIn = sessions.some((x) => !x.endedAt);
+        const works =
+          nobodyLeftHere && !stillClockedIn
+            ? p.works.map((w) =>
+                w.workStartedAt
+                  ? { ...w, workStartedAt: null, workAccumulatedMs: (w.workAccumulatedMs ?? 0) + (nowMs - new Date(w.workStartedAt).getTime()) }
+                  : w,
+              )
+            : p.works;
+        return { ...p, sessions, works };
+      }),
     );
     haptic("light");
     const names = ids.map(employeeName).join(", ");
