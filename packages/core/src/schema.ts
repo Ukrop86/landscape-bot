@@ -339,20 +339,24 @@ export const tripPlans = pgTable(
 );
 
 /**
- * Where a brigade is right now, as reported by the foreman's phone.
+ * The checkpoints of a brigade's day, as reported by the foreman's phone.
  *
  * The server learns nothing about a day until it is SUBMITTED -- the driving
  * timer, the object they are standing at and the running work sessions all
  * live in the phone's draft. So an admin watching the day could see that a car
  * had been taken and nothing more.
  *
- * One row per foreman per date, overwritten on every transition. It is a
- * REPORT, not a source of truth: nothing is computed from it and payroll never
- * reads it, so a phone out of signal only makes the admin's screen stale, never
- * the day wrong. `updatedAt` is shown so stale is visible as stale.
+ * APPEND-ONLY: one row per transition, so the admin reads a timeline (left at
+ * 07:38, reached the object at 08:10, started work at 08:15) rather than a
+ * single "where are they now" that says nothing about how the day went. The
+ * writer skips a repeat of the last state, or simply reopening the app would
+ * stamp a duplicate point.
+ *
+ * It is a REPORT, not a source of truth: nothing is computed from it and
+ * payroll never reads it, so a phone out of signal leaves the admin's timeline
+ * short, never the day wrong.
  */
 export const tripProgress = pgTable("trip_progress", {
-  // `${date}:${foremanTgId}` -- one live state per foreman per day.
   id: text("id").primaryKey(),
   date: text("date").notNull(),
   foremanTgId: bigint("foreman_tg_id", { mode: "bigint" }).notNull(),

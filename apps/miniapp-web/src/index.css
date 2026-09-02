@@ -1189,3 +1189,51 @@ body {
   color: #7d3cad;
   font-weight: 700;
 }
+
+/* The admin's read of a day in progress: one line per checkpoint, times in a
+   fixed-width column on the left so they line up and the eye runs down them. */
+.trip-timeline {
+  margin: 8px 0 0;
+  padding-left: 2px;
+  border-left: 2px solid rgba(0, 122, 255, 0.18);
+}
+
+.trip-point {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 3px 0 3px 10px;
+  position: relative;
+}
+
+.trip-point::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tg-link);
+  opacity: 0.35;
+}
+
+/* The last point is where they are now, so it gets the solid dot. */
+.trip-point:last-child::before {
+  opacity: 1;
+}
+
+.trip-time {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--tg-hint);
+  min-width: 42px;
+}
+
+.trip-label {
+  font-size: 14px;
+}
+
+.trip-point:last-child .trip-label {
+  font-weight: 600;
+}

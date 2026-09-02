@@ -1,6 +1,7 @@
 import { asyncRouter } from "../asyncRouter.js";
 import { type Response } from "express";
 import multer from "multer";
+import { randomUUID } from "node:crypto";
 import {
   db,
   schema,
@@ -1315,22 +1316,31 @@ roadTimesheetRouter.post("/progress", async (req, res) => {
     return;
   }
   const foremanTgId = req.user!.tgId;
-  const row = {
-    id: `${date}:${foremanTgId}`,
+  const cleanObject = String(objectName ?? "").slice(0, 200);
+
+  // Append, but never twice in a row for the same thing: the client reports on
+  // mount as well as on transitions, so reopening the app would otherwise
+  // stamp "started work" again an hour after they started.
+  const [last] = await db
+    .select()
+    .from(schema.tripProgress)
+    .where(and(eq(schema.tripProgress.date, date), eq(schema.tripProgress.foremanTgId, BigInt(foremanTgId))))
+    .orderBy(desc(schema.tripProgress.updatedAt))
+    .limit(1);
+  if (last && last.state === state && last.objectName === cleanObject) {
+    res.json({ ok: true, skipped: true });
+    return;
+  }
+
+  await db.insert(schema.tripProgress).values({
+    id: randomUUID(),
     date,
     foremanTgId: BigInt(foremanTgId),
     state,
-    objectName: String(objectName ?? "").slice(0, 200),
+    objectName: cleanObject,
     peopleCount: Number.isFinite(peopleCount) ? Number(peopleCount) : 0,
     updatedAt: new Date(),
-  };
-  await db
-    .insert(schema.tripProgress)
-    .values(row)
-    .onConflictDoUpdate({
-      target: schema.tripProgress.id,
-      set: { state: row.state, objectName: row.objectName, peopleCount: row.peopleCount, updatedAt: row.updatedAt },
-    });
+  });
   res.json({ ok: true });
 });
 
@@ -1357,7 +1367,14 @@ roadTimesheetRouter.get("/admin/overview", async (req, res) => {
     db.select().from(schema.employees),
     db.select().from(schema.tripProgress).where(eq(schema.tripProgress.date, date)),
   ]);
-  const progressByForeman = new Map(progressRows.map((r) => [String(r.foremanTgId), r]));
+  // Oldest first: the card reads top-to-bottom as the day happened.
+  const timelineByForeman = new Map<string, Array<{ state: string; objectName: string; at: string }>>();
+  for (const r of [...progressRows].sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())) {
+    const key = String(r.foremanTgId);
+    const list = timelineByForeman.get(key) ?? [];
+    list.push({ state: r.state, objectName: r.objectName, at: r.updatedAt.toISOString() });
+    timelineByForeman.set(key, list);
+  }
   const nameByTgId = new Map(users.map((u) => [String(u.tgId), u.pib]));
   const carById = new Map(cars.map((c) => [c.id, c.name]));
   const employeeById = new Map(employees.map((e) => [e.id, e.name]));
@@ -1403,12 +1420,9 @@ roadTimesheetRouter.get("/admin/overview", async (req, res) => {
       foremanName: foremanName(v.foremanTgId),
       since: v.ts.toISOString(),
       people: heldPeopleByForeman.get(v.foremanTgId) ?? [],
-      // What the phone last reported. Absent until the foreman's app has sent
-      // anything (an older build, or no signal since departure).
-      progress: (() => {
-        const p = progressByForeman.get(v.foremanTgId);
-        return p ? { state: p.state, objectName: p.objectName, updatedAt: p.updatedAt.toISOString() } : null;
-      })(),
+      // The day's checkpoints, oldest first. Empty until the foreman's app has
+      // reported anything (an older build, or no signal since departure).
+      timeline: timelineByForeman.get(v.foremanTgId) ?? [],
     }))
     .sort((a, b) => a.since.localeCompare(b.since));
 

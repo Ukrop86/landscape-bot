@@ -6,7 +6,7 @@ import { useTelegramBackButton } from "../lib/telegram";
 import { BackRow } from "../components/BackRow";
 import { shortName } from "../lib/employee";
 
-type Progress = { state: string; objectName: string; updatedAt: string };
+type Checkpoint = { state: string; objectName: string; at: string };
 type ActiveTrip = {
   carId: string;
   carName: string;
@@ -14,8 +14,8 @@ type ActiveTrip = {
   foremanName: string;
   since: string;
   people: string[];
-  /** null until the phone reports in -- an older build, or no signal yet. */
-  progress: Progress | null;
+  /** Empty until the phone reports in -- an older build, or no signal yet. */
+  timeline: Checkpoint[];
 };
 type SubmittedTrip = { tripSeq: number; status: string; submittedAt: string; objects: string[]; km: number };
 type SubmittedDay = {
@@ -27,38 +27,24 @@ type SubmittedDay = {
 };
 type Overview = { date: string; active: ActiveTrip[]; submitted: SubmittedDay[] };
 
-/** "о 08:14 · 3 год 12 хв" -- when they left and how long they have been out. */
-function outFor(sinceIso: string, now: number): string {
-  const started = new Date(sinceIso);
-  const mins = Math.max(0, Math.round((now - started.getTime()) / 60000));
-  const time = started.toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" });
-  if (mins < 60) return `з ${time} · ${mins} хв`;
-  return `з ${time} · ${Math.floor(mins / 60)} год ${mins % 60} хв`;
+function clock(iso: string): string {
+  return new Date(iso).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" });
 }
 
-/** The reported state, as a badge: what they are doing, not just that they left. */
-function stateBadge(p: Progress | null): { text: string; cls: string } {
-  if (!p) return { text: "🚗 виїхали", cls: "" };
-  switch (p.state) {
+/** One checkpoint, as the admin reads it: what happened, not what state a machine is in. */
+function checkpointLabel(c: Checkpoint): string {
+  switch (c.state) {
     case "WORKING":
-      return { text: `🛠 працюють${p.objectName ? ` · ${p.objectName}` : ""}`, cls: "ok" };
+      return `🛠 почали роботи${c.objectName ? ` · ${c.objectName}` : ""}`;
     case "AT_OBJECT":
-      return { text: `📍 на обʼєкті${p.objectName ? ` · ${p.objectName}` : ""}`, cls: "" };
+      return `📍 прибули${c.objectName ? ` · ${c.objectName}` : ""}`;
     case "RETURNING":
-      return { text: "↩️ повертаються", cls: "warn" };
+      return "↩️ повертаються";
     case "AT_BASE":
-      return { text: "🏁 на базі, здають звіт", cls: "warn" };
+      return "🏁 на базі";
     default:
-      return { text: `🚗 в дорозі${p.objectName ? ` → ${p.objectName}` : ""}`, cls: "" };
+      return `🚗 в дорозі${c.objectName ? ` → ${c.objectName}` : ""}`;
   }
-}
-
-/** How long ago the phone last reported -- stale has to look stale. */
-function reportedAgo(iso: string, now: number): string {
-  const mins = Math.max(0, Math.round((now - new Date(iso).getTime()) / 60000));
-  if (mins < 2) return "щойно";
-  if (mins < 60) return `${mins} хв тому`;
-  return `${Math.floor(mins / 60)} год тому`;
 }
 
 /**
@@ -134,19 +120,27 @@ export function AdminOverview({ onBack }: { onBack: () => void }) {
                 <div key={t.carId} className="cell" style={{ cursor: "default", display: "block" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
                     <span className="cell-title">🚙 {t.carName}</span>
-                    <span className="cell-sub">{outFor(t.since, now)}</span>
+                    <span className="cell-sub">👤 {shortName(t.foremanName)}</span>
                   </div>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 6 }}>
-                    <span className={`badge ${stateBadge(t.progress).cls}`}>{stateBadge(t.progress).text}</span>
-                    {t.progress ? (
-                      <span className="hint">{reportedAgo(t.progress.updatedAt, now)}</span>
-                    ) : (
-                      <span className="hint">стан не надходив</span>
-                    )}
+
+                  {/* The day as it happened, top to bottom. The departure comes
+                      from the car reservation, so there is always at least one
+                      point even before the phone has reported anything. */}
+                  <div className="trip-timeline">
+                    <div className="trip-point">
+                      <span className="trip-time">{clock(t.since)}</span>
+                      <span className="trip-label">🚗 виїхали</span>
+                    </div>
+                    {t.timeline.map((c, i) => (
+                      <div key={`${c.at}-${i}`} className="trip-point">
+                        <span className="trip-time">{clock(c.at)}</span>
+                        <span className="trip-label">{checkpointLabel(c)}</span>
+                      </div>
+                    ))}
                   </div>
-                  <div className="hint" style={{ marginTop: 4 }}>
-                    👤 {shortName(t.foremanName)}
-                    {t.people.length > 0 && ` · ${t.people.length} у бригаді`}
+
+                  <div className="hint" style={{ marginTop: 6 }}>
+                    {t.people.length > 0 ? `${t.people.length} у бригаді` : "бригада не вказана"}
                   </div>
                   {t.people.length > 0 && (
                     <ul className="bullets">
