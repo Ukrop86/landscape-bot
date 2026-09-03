@@ -1,1 +1,10 @@
 
+{
+  "permissions": {
+    "allow": [
+      "Bash(node scripts/db-tunnel.mjs:*)",
+      "Bash(psql:*)",
+      "Bash(pg_dump:*)"
+    ]
+  }
+}
