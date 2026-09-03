@@ -27,6 +27,23 @@ type SubmittedDay = {
 };
 type Overview = { date: string; active: ActiveTrip[]; submitted: SubmittedDay[] };
 
+/**
+ * Незданий день, як його бачить сервер. До появи дзеркала його не було видно
+ * взагалі: бригада, яка ще не відправила звіт, зникала з екрана — і з «у
+ * дорозі», і зі «зданих». Саме через це один день пів дня шукали.
+ */
+type Draft = {
+  foremanTgId: string;
+  foremanName: string;
+  date: string;
+  step: string;
+  carName: string;
+  people: string[];
+  objectNames: string;
+  tripStartedAt: string | null;
+  updatedAt: string;
+};
+
 function clock(iso: string): string {
   return new Date(iso).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" });
 }
@@ -58,6 +75,7 @@ function checkpointLabel(c: Checkpoint): string {
 export function AdminOverview({ onBack }: { onBack: () => void }) {
   const [date, setDate] = useState(() => todayISO());
   const [data, setData] = useState<Overview | null>(null);
+  const [drafts, setDrafts] = useState<Draft[]>([]);
   const [error, setError] = useState<string | null>(null);
   useClearErrorOnSuccess(setError);
   const [now, setNow] = useState(Date.now());
@@ -79,6 +97,19 @@ export function AdminOverview({ onBack }: { onBack: () => void }) {
       cancelled = true;
     };
   }, [date, now]);
+
+  // Незавершені дні не привʼязані до обраної дати: питання «хто ще не здав»
+  // не про календар, а про те, що прямо зараз висить.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .get<{ drafts: Draft[] }>("/api/drafts/all")
+      .then((d) => !cancelled && setDrafts(d.drafts))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [now]);
 
   const shiftDay = (delta: number) => {
     const d = new Date(`${date}T12:00:00`);
@@ -152,6 +183,34 @@ export function AdminOverview({ onBack }: { onBack: () => void }) {
                 </div>
               ))}
             </div>
+          )}
+
+          <div className="section-title">Незавершені дні</div>
+          {drafts.length === 0 ? (
+            <div className="empty-state">Незавершених немає.</div>
+          ) : (
+            drafts.map((d) => (
+              <div key={d.foremanTgId} className="list" style={{ marginTop: 8 }}>
+                <div className="cell" style={{ cursor: "default" }}>
+                  <span className="cell-title">👤 {shortName(d.foremanName)}</span>
+                  <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    {/* Дата чернетки, і окремо -- коли вона не сьогоднішня.
+                        Саме ця розбіжність і відправила цілий робочий день
+                        учорашнім числом, нікому нічого не сказавши. */}
+                    {d.date !== data.date && <span className="badge warn">дата {d.date}</span>}
+                    <span className="cell-sub">{clock(d.updatedAt)}</span>
+                  </span>
+                </div>
+                <div className="cell" style={{ cursor: "default", display: "block" }}>
+                  <div className="cell-sub">
+                    {d.carName ? `🚙 ${d.carName}` : "авто не обрано"} · {d.step || "—"}
+                    {d.tripStartedAt ? ` · виїхали ${clock(d.tripStartedAt)}` : " · ще не виїхали"}
+                  </div>
+                  {!!d.objectNames && <div className="cell-sub">📍 {d.objectNames}</div>}
+                  {d.people.length > 0 && <div className="cell-sub">👥 {d.people.map(shortName).join(", ")}</div>}
+                </div>
+              </div>
+            ))
           )}
 
           <div className="section-title">Здані за цей день</div>

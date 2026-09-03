@@ -427,3 +427,36 @@ export const uiActions = pgTable(
   },
   (t) => [index("ui_actions_ts_idx").on(t.ts), index("ui_actions_tg_idx").on(t.tgId)],
 );
+
+/**
+ * Дзеркало незданого дня: те, що прямо зараз лежить у чернетці на телефоні.
+ *
+ * До цього сервер не знав про день НІЧОГО, доки той не був відправлений —
+ * таймери, обʼєкти й години жили тільки в localStorage. Один день на цьому й
+ * поламався: чернетка тримала вчорашню дату, на екрані адміна бригада то
+ * зʼявлялась, то зникала, а перевірити було нічим — даних просто не існувало
+ * поза телефоном.
+ *
+ * Телефон лишається робочою копією: він працює без звʼязку, і саме він
+ * вирішує, що правда. Сюди він шле знімок після кожної зміни, з відставанням
+ * у кілька секунд. Тобто це ДЗЕРКАЛО, а не джерело: сервер з нього нічого не
+ * рахує, зарплату як і раніше визначає RTS_SAVE.
+ *
+ * Один рядок на бригадира: конструктор у застосунку один, тож і незавершений
+ * день у людини рівно один.
+ */
+export const dayDrafts = pgTable("day_drafts", {
+  foremanTgId: bigint("foreman_tg_id", { mode: "bigint" }).primaryKey(),
+  // Дата, яку тримає сама чернетка. Може НЕ збігатися з сьогоднішньою — саме
+  // так і виглядав той зламаний день, тож її видно окремою колонкою.
+  date: text("date").notNull().default(""),
+  step: text("step").notNull().default(""),
+  carId: text("car_id").notNull().default(""),
+  employeeIds: text("employee_ids").notNull().default("[]"),
+  objectNames: text("object_names").notNull().default(""),
+  tripStartedAt: timestamp("trip_started_at", { mode: "date" }),
+  // Уся чернетка як є. Потрібна, щоб відновити день на новому телефоні, а не
+  // лише подивитись на нього.
+  payload: text("payload").notNull(),
+  updatedAt: timestamp("updated_at", { mode: "date" }).notNull().defaultNow(),
+});

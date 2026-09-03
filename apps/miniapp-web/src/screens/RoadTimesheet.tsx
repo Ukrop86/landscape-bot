@@ -3,6 +3,7 @@ import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPa
 import { useClearErrorOnSuccess } from "../lib/useClearErrorOnSuccess";
 import { todayISO } from "../lib/date";
 import { setTrackContext, track } from "../lib/track";
+import { mirrorDraft, clearMirroredDraft, fetchMirroredDraft } from "../lib/draftMirror";
 import { alertDialog, askDialog, confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial, roleTagClass, roleRank, type EmployeeRole } from "../lib/employee";
 import { groupWorks } from "../lib/works";
@@ -668,8 +669,48 @@ export function RoadTimesheet({
       setStep(draft.planEditing || draft.tripStartedAt ? draft.step : "INDEX");
       setRestoredBanner(true);
       draftRestoredRef.current = true;
-    } else if (draft) {
-      clearDraft();
+    } else {
+      if (draft) clearDraft();
+      // На телефоні порожньо. Якщо сервер тримає дзеркало -- пропонуємо
+      // підняти: новий телефон, почищений кеш, перевстановлений Telegram. До
+      // цього такий день не відновлювався нізвідки, бо не існував поза одним
+      // пристроєм.
+      fetchMirroredDraft<DraftShape>().then(async (mirrored) => {
+        if (!mirrored || draftRestoredRef.current) return;
+        const d = mirrored.payload;
+        const hasWork = !!d.carId || d.employeeIds.length > 0 || d.plans.length > 0;
+        if (!hasWork) return;
+        const when = new Date(mirrored.updatedAt).toLocaleString("uk-UA", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" });
+        if (!(await confirmDialog(`На цьому телефоні незавершеного дня немає, але на сервері є — від ${when} (${d.date}).\n\nВідновити його?`))) return;
+        restoreBuilder({
+          carId: d.carId,
+          odoStart: d.odoStart,
+          odoStartPhoto: d.odoStartPhoto,
+          odoEnd: d.odoEnd,
+          odoEndPhoto: d.odoEndPhoto,
+          employeeIds: d.employeeIds,
+          selfTransportIds: d.selfTransportIds ?? [],
+          errands: d.errands ?? [],
+          plans: d.plans,
+          onboard: d.onboard,
+          tripStartedAt: d.tripStartedAt,
+          drivingAccumulatedMs: d.drivingAccumulatedMs,
+          drivingSegmentStartedAt: d.drivingSegmentStartedAt,
+          atObjectId: d.atObjectId,
+          headingToObjectId: d.headingToObjectId ?? "",
+          carAtObjectId: d.carAtObjectId ?? "",
+          atObjectReturnStep: d.atObjectReturnStep,
+          planObjectId: d.planObjectId,
+          coefs: d.coefs,
+          editingTripSeq: d.editingTripSeq,
+          changeLog: [],
+          step: d.step,
+        });
+        setDate(d.date);
+        setStep(d.tripStartedAt ? d.step : "INDEX");
+        draftRestoredRef.current = true;
+        logChange("День відновлено з сервера");
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -788,7 +829,7 @@ export function RoadTimesheet({
 
   useEffect(() => {
     if (step === "DONE") return;
-    saveDraft<DraftShape>({
+    const snapshot: DraftShape = {
       date,
       step,
       carId,
@@ -815,6 +856,19 @@ export function RoadTimesheet({
       editingPlanId,
       planForemanTgId,
       dayStash,
+    };
+    saveDraft<DraftShape>(snapshot);
+    // Те саме -- на сервер, із затримкою і фоном. Телефон лишається робочою
+    // копією; це дзеркало, щоб незданий день не існував лише на одному
+    // пристрої, як було з днем, що поїхав учорашньою датою.
+    mirrorDraft({
+      date,
+      step,
+      carId,
+      employeeIds,
+      objectNames: plans.map((p) => p.objectName),
+      tripStartedAt,
+      payload: snapshot,
     });
   }, [
     date,
@@ -1076,6 +1130,7 @@ export function RoadTimesheet({
       }
     }
     clearDraft();
+    clearMirroredDraft();
     setCarId("");
     setOdoStart("");
     setOdoStartPhoto(null);
@@ -2837,6 +2892,8 @@ export function RoadTimesheet({
       setSubmittedTrips((prev) => [...prev.filter((t) => t.tripSeq !== res.tripSeq), savedTrip].sort((a, b) => a.tripSeq - b.tripSeq));
       setStep("DONE");
       clearDraft();
+      // День уже в базі як RTS_SAVE -- дзеркало більше нічого не додає.
+      clearMirroredDraft();
       setDayStatus((prev) => (prev ? { ...prev, hasSubmission: true, eventId: res.eventId } : prev));
       logChange("Звіт відправлено");
       haptic("success");
