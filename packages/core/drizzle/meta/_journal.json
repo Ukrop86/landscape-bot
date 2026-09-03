@@ -85,6 +85,13 @@
       "when": 1788433500000,
       "tag": "0011_move_active_reservations",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788435000000,
+      "tag": "0012_move_albina_trip",
+      "breakpoints": true
     }
   ]
 }
