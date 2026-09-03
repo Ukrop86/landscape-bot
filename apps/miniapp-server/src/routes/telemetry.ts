@@ -54,6 +54,17 @@ telemetryRouter.post("/", async (req, res) => {
     })
     .filter((r) => r.kind);
 
+  // У лог — кожну подію окремим рядком, і це головний спосіб їх читати.
+  // Логи Railway відкриті і власнику, і тому, хто розбирає проблему, тоді як
+  // таблиця потребує SQL, а файл на контейнері зникає при кожному деплої.
+  // Пишемо ДО вставки: якщо база впаде, слід має лишитись саме тому, що
+  // дивитись у журнал будуть тоді, коли щось пішло не так.
+  for (const r of rows) {
+    console.log(
+      `[UI] ${r.ts.toISOString()} | ${r.pib || r.tgId} | ${r.screen}${r.step ? `/${r.step}` : ""} | ${r.kind} | ${r.label}${r.detail ? ` | ${r.detail}` : ""}`,
+    );
+  }
+
   try {
     if (rows.length) await db.insert(schema.uiActions).values(rows).onConflictDoNothing();
     res.json({ ok: true, saved: rows.length });
