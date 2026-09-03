@@ -5820,6 +5820,33 @@ export function RoadTimesheet({
       {step === "REVIEW" && !retroReplaceObjectId && (
         <>
           <div className="step-badge">ПІДСУМОК ДНЯ</div>
+          {/* The date this day will be filed under, surfaced only when it is
+              NOT today -- and it can differ without anyone touching it. The
+              draft on the phone keeps the date it was created with, so an
+              evening spent opening a trip an admin had just planned put the
+              whole of the next day onto the day before.
+              That is worse than a wrong label: a second day filed under an
+              earlier date overwrites that date's odometer row (keyed by
+              date+car), and the first day's mileage is gone for good.
+              This is the last screen before it becomes a fact. */}
+          {date !== todayISO() && (
+            <div className="empty-state" style={{ textAlign: "left", color: "#d70015" }}>
+              ⚠️ <b>День буде записано як {date}</b> — це не сьогодні ({todayISO()}).
+              <div style={{ marginTop: 8 }}>
+                <button
+                  className="back-btn"
+                  onClick={() => {
+                    setDate(todayISO());
+                    logChange(`Дату дня виправлено на ${todayISO()}`);
+                    haptic("success");
+                  }}
+                >
+                  Виправити на {todayISO()}
+                </button>
+              </div>
+              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>Якщо ви справді вносите минулий день — лишіть як є.</div>
+            </div>
+          )}
           {/* One compact block: the numbers of the trip, each with its own way
               back into the step that owns it. It used to be four full-width
               sections with a "редагувати" chip each, which pushed the actual
