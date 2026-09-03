@@ -1,6 +1,7 @@
 import { asyncRouter } from "../asyncRouter.js";
 import { db, schema } from "@landscape/core";
 import { and, desc, eq, gte, lte } from "drizzle-orm";
+import { queueUiLogRows } from "../uiLogSheet.js";
 
 /**
  * Журнал дій у застосунку. ТИМЧАСОВЕ, на час обкатки.
@@ -54,16 +55,26 @@ telemetryRouter.post("/", async (req, res) => {
     })
     .filter((r) => r.kind);
 
-  // У лог — кожну подію окремим рядком, і це головний спосіб їх читати.
-  // Логи Railway відкриті і власнику, і тому, хто розбирає проблему, тоді як
-  // таблиця потребує SQL, а файл на контейнері зникає при кожному деплої.
-  // Пишемо ДО вставки: якщо база впаде, слід має лишитись саме тому, що
-  // дивитись у журнал будуть тоді, коли щось пішло не так.
+  // Три місця, і кожне для свого читача: вкладка ЖУРНАЛ_UI — для власника,
+  // логи — для того, хто розбирає проблему віддалено, таблиця — щоб можна було
+  // спитати базу запитом. Пишемо в лог ДО вставки: якщо впала саме база, слід
+  // має лишитись, бо в журнал дивляться саме тоді.
   for (const r of rows) {
     console.log(
       `[UI] ${r.ts.toISOString()} | ${r.pib || r.tgId} | ${r.screen}${r.step ? `/${r.step}` : ""} | ${r.kind} | ${r.label}${r.detail ? ` | ${r.detail}` : ""}`,
     );
   }
+  queueUiLogRows(
+    rows.map((r) => ({
+      ts: r.ts,
+      who: r.pib || String(r.tgId),
+      screen: r.screen,
+      step: r.step,
+      kind: r.kind,
+      label: r.label,
+      detail: r.detail,
+    })),
+  );
 
   try {
     if (rows.length) await db.insert(schema.uiActions).values(rows).onConflictDoNothing();
