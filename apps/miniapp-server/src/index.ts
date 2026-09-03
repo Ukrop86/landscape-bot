@@ -25,6 +25,7 @@ import { statsRouter } from "./routes/stats.js";
 import { roadTimesheetRouter } from "./routes/roadTimesheet.js";
 import { tripPlansRouter } from "./routes/tripPlans.js";
 import { telemetryRouter } from "./routes/telemetry.js";
+import { pruneUiLogs } from "./uiLogFile.js";
 
 // Telegram IDs are stored as bigint; make them JSON-serializable as strings.
 (BigInt.prototype as any).toJSON = function (this: bigint) {
@@ -327,6 +328,10 @@ async function main() {
   importAccountingKeysFromSheet().catch((e) =>
     console.error(`[accounting] key import skipped: ${(e as Error).message}`),
   );
+
+  // Журнал дій: прибрати файли, старші за місяць, щоб волюм не заповнився
+  // мовчки. Тимчасове, разом з рештою журналу.
+  pruneUiLogs();
 
   const port = Number(process.env.PORT || 3001);
   app.listen(port, () => {

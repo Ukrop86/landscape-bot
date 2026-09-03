@@ -1,7 +1,7 @@
 import { asyncRouter } from "../asyncRouter.js";
 import { db, schema } from "@landscape/core";
 import { and, desc, eq, gte, lte } from "drizzle-orm";
-import { queueUiLogRows } from "../uiLogSheet.js";
+import { appendUiLog } from "../uiLogFile.js";
 
 /**
  * Журнал дій у застосунку. ТИМЧАСОВЕ, на час обкатки.
@@ -55,16 +55,12 @@ telemetryRouter.post("/", async (req, res) => {
     })
     .filter((r) => r.kind);
 
-  // Три місця, і кожне для свого читача: вкладка ЖУРНАЛ_UI — для власника,
-  // логи — для того, хто розбирає проблему віддалено, таблиця — щоб можна було
-  // спитати базу запитом. Пишемо в лог ДО вставки: якщо впала саме база, слід
-  // має лишитись, бо в журнал дивляться саме тоді.
-  for (const r of rows) {
-    console.log(
-      `[UI] ${r.ts.toISOString()} | ${r.pib || r.tgId} | ${r.screen}${r.step ? `/${r.step}` : ""} | ${r.kind} | ${r.label}${r.detail ? ` | ${r.detail}` : ""}`,
-    );
-  }
-  queueUiLogRows(
+  // Файл на волюмі — головний спосіб читати журнал: рядок на подію, grep і
+  // tail. Дублюємо в логи Railway, щоб проблему можна було розбирати
+  // віддалено, і в таблицю, якщо колись знадобиться вибірка запитом.
+  // Файл і лог заповнюються ДО вставки: якщо впала саме база, слід має
+  // лишитись — бо в журнал дивляться рівно тоді.
+  appendUiLog(
     rows.map((r) => ({
       ts: r.ts,
       who: r.pib || String(r.tgId),
@@ -75,6 +71,11 @@ telemetryRouter.post("/", async (req, res) => {
       detail: r.detail,
     })),
   );
+  for (const r of rows) {
+    console.log(
+      `[UI] ${r.ts.toISOString()} | ${r.pib || r.tgId} | ${r.screen}${r.step ? `/${r.step}` : ""} | ${r.kind} | ${r.label}${r.detail ? ` | ${r.detail}` : ""}`,
+    );
+  }
 
   try {
     if (rows.length) await db.insert(schema.uiActions).values(rows).onConflictDoNothing();
