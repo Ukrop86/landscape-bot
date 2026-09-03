@@ -73,7 +73,7 @@ telemetryRouter.post("/", async (req, res) => {
   );
   for (const r of rows) {
     console.log(
-      `[UI] ${r.ts.toISOString()} | ${r.pib || r.tgId} | ${r.screen}${r.step ? `/${r.step}` : ""} | ${r.kind} | ${r.label}${r.detail ? ` | ${r.detail}` : ""}`,
+      `[UI] ${r.ts.toISOString()} | ${r.pib || r.tgId} | ${r.screen}${r.step ? ` · ${r.step}` : ""} | ${r.kind} | ${r.label}${r.detail ? ` | ${r.detail}` : ""}`,
     );
   }
 

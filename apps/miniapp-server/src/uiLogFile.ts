@@ -42,6 +42,14 @@ function kyivParts(ts: Date) {
   return { date: full.slice(0, 10), time: full.slice(11, 19) };
 }
 
+/** Той самий переклад, що й для екранів: журнал читає людина. */
+const KIND_NAMES: Record<string, string> = {
+  click: "клік  ",
+  screen: "екран ",
+  step: "дія   ",
+  error: "ПОМИЛКА",
+};
+
 export type UiLogRow = {
   ts: Date;
   who: string;
@@ -64,7 +72,9 @@ export function appendUiLog(rows: UiLogRow[]) {
   const byDay = new Map<string, string[]>();
   for (const r of rows) {
     const { date, time } = kyivParts(r.ts);
-    const line = [time, r.who, r.screen + (r.step ? `/${r.step}` : ""), r.kind, r.label, r.detail ?? ""].join(" | ");
+    const line = [time, r.who, r.screen + (r.step ? ` · ${r.step}` : ""), KIND_NAMES[r.kind] ?? r.kind, r.label, r.detail ?? ""]
+      .join(" | ")
+      .replace(/ \| $/, "");
     const list = byDay.get(date) ?? [];
     list.push(line);
     byDay.set(date, list);
