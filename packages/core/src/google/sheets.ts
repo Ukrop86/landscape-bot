@@ -66,6 +66,19 @@ export function buildRowByHeaders(headers: string[], map: Record<string, number>
 /** Creates the tab with a header row if it doesn't exist yet -- lets a writer
  * target a brand-new report tab (e.g. an accounting export) without a manual
  * setup step in the spreadsheet first. */
+/**
+ * Whether a tab exists, WITHOUT creating it. ensureSheet would happily bring
+ * a deliberately deleted tab back to life, which is the opposite of what a
+ * one-time "read it if it is still there" migration wants.
+ */
+export async function sheetExists(sheetName: string): Promise<boolean> {
+  const sheets = getSheetsClient();
+  const meta = await withSheetsRetry("spreadsheet metadata", () =>
+    sheets.spreadsheets.get({ spreadsheetId: config.sheetId, fields: "sheets.properties.title" }),
+  );
+  return (meta.data.sheets ?? []).some((s) => s.properties?.title === sheetName);
+}
+
 export async function ensureSheet(sheetName: string, headers: readonly string[]) {
   const sheets = getSheetsClient();
 

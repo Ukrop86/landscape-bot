@@ -57,6 +57,13 @@
       "when": 1788331931311,
       "tag": "0007_trip_progress",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788422820462,
+      "tag": "0008_accounting_exports",
+      "breakpoints": true
     }
   ]
 }

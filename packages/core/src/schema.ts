@@ -366,3 +366,26 @@ export const tripProgress = pgTable("trip_progress", {
   peopleCount: integer("people_count").notNull().default(0),
   updatedAt: timestamp("updated_at", { mode: "date" }).notNull().defaultNow(),
 });
+
+/**
+ * One row per day exported to БУХЗВІТ -- the idempotency keys that used to
+ * live in the БУХЗВІТ_META sheet.
+ *
+ * The key identifies THIS state of a day's submission (date + foreman + the
+ * trips' own eventIds), not just date+foreman: a day can be approved,
+ * returned, resubmitted and approved again, and the corrected numbers must
+ * reach the accountant instead of being skipped as "already done".
+ *
+ * This is the only thing standing between the accountant and a double-paid
+ * day, so it must never be casually cleared -- see the note on reset-all.
+ * The date/foreman columns are not used for matching; they are here so a
+ * human (or a future "revoke approval") can find a day's export without
+ * parsing the key.
+ */
+export const accountingExports = pgTable("accounting_exports", {
+  key: text("key").primaryKey(),
+  date: text("date").notNull().default(""),
+  foremanTgId: bigint("foreman_tg_id", { mode: "bigint" }),
+  rowsCount: integer("rows_count").notNull().default(0),
+  createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
+});
