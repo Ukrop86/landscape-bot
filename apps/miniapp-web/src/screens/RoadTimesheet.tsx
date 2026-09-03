@@ -603,7 +603,17 @@ export function RoadTimesheet({
         (stash?.plans.length ?? 0) > 0 ||
         !!stash?.tripStartedAt);
     if (draft && hasContent && draft.step !== "DONE") {
-      if (draft.date !== date) setDate(draft.date);
+      // The draft keeps its own date ONLY once the trip has actually departed.
+      // That is the night-shift case this was written for: left at 23:00, app
+      // reopened at 01:30, still the same unfinished day.
+      //
+      // A draft that never departed has no day of its own. It used to take its
+      // date anyway, and that is how an evening spent picking a car and people
+      // (or opening a plan an admin had just made) put the WHOLE of the next
+      // day's work onto yesterday: the draft lives ~20h, so an 18:00 draft is
+      // still there at 08:00, and everything from then on was stamped with
+      // yesterday. Nothing on screen said so.
+      if (draft.tripStartedAt && draft.date !== date) setDate(draft.date);
       setCarId(draft.carId);
       setOdoStart(draft.odoStart);
       setOdoStartPhoto(draft.odoStartPhoto);
