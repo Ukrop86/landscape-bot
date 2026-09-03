@@ -389,3 +389,41 @@ export const accountingExports = pgTable("accounting_exports", {
   rowsCount: integer("rows_count").notNull().default(0),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
 });
+
+/**
+ * Журнал дій у застосунку: хто, коли, на якому екрані і що натиснув.
+ *
+ * ТИМЧАСОВЕ, на час обкатки. Поставлено рівно тому, що кожне розслідування
+ * впиралося в одне й те саме питання — «а що людина насправді натиснула?» — і
+ * відповіді не було ніде: незданий день живе тільки в телефоні, а сервер бачив
+ * лише підсумок. Тут видно послідовність, а не наслідок.
+ *
+ * APPEND-ONLY і суто діагностичне: нічого з нього не рахується, жоден екран
+ * бригадира на нього не дивиться. Втрачений запис — це прогалина в розслідуванні,
+ * ніколи не помилка в дні. Тому клієнт шле пачками і мовчки ковтає помилки:
+ * телеметрія не має права зламати роботу.
+ *
+ * Чистити разом з рештою робочих даних (WORKING_DATA_TABLES), а перед
+ * продакшном — прибрати цілком.
+ */
+export const uiActions = pgTable(
+  "ui_actions",
+  {
+    id: text("id").primaryKey(),
+    ts: timestamp("ts", { mode: "date" }).notNull(),
+    tgId: bigint("tg_id", { mode: "bigint" }).notNull(),
+    pib: text("pib").notNull().default(""),
+    role: text("role").notNull().default(""),
+    // Екран застосунку: menu / roadTimesheet / approval / ...
+    screen: text("screen").notNull().default(""),
+    // Крок усередині екрана, якщо він є: INDEX / HUB / AT_OBJECT / ...
+    step: text("step").notNull().default(""),
+    // click | screen | step | error
+    kind: text("kind").notNull().default(""),
+    // Видимий підпис кнопки або назва події -- саме те, що людина бачила
+    label: text("label").notNull().default(""),
+    detail: text("detail"),
+    receivedAt: timestamp("received_at", { mode: "date" }).notNull().defaultNow(),
+  },
+  (t) => [index("ui_actions_ts_idx").on(t.ts), index("ui_actions_tg_idx").on(t.tgId)],
+);

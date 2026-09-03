@@ -10,7 +10,9 @@ import { RoadTimesheet } from "./screens/RoadTimesheet";
 import { RetroEntry } from "./screens/RetroEntry";
 import { Approval } from "./screens/Approval";
 import { ComingSoon } from "./screens/ComingSoon";
+import { ActionLog } from "./screens/ActionLog";
 import { SyncStatusPill } from "./components/SyncStatusPill";
+import { startTracking, setTrackContext } from "./lib/track";
 
 // Set by the "📄 Відкрити звіт" button on an admin's Telegram notification
 // (see notifyAdmins in the server) -- opens straight to that report inside
@@ -29,6 +31,16 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [approvalFocus, setApprovalFocus] = useState<{ date: string; foremanTgId: number } | null>(null);
+
+  // Журнал дій. Тимчасово, на час обкатки: один слухач на весь застосунок
+  // замість виклику в кожній кнопці.
+  useEffect(() => {
+    startTracking();
+  }, []);
+
+  useEffect(() => {
+    setTrackContext({ screen });
+  }, [screen]);
 
   useEffect(() => {
     initTelegramApp();
@@ -81,6 +93,7 @@ export default function App() {
       {screen === "roadTimesheetRetro" && <RetroEntry onBack={() => setScreen("roadTimesheet")} onSaved={showSavedToast} />}
       {screen === "stats" && <Stats onBack={goMenu} isAdmin={me?.role === "ADMIN"} />}
       {screen === "adminOverview" && <AdminOverview onBack={goMenu} />}
+      {screen === "actionLog" && <ActionLog onBack={goMenu} />}
       {screen === "tools" && <ComingSoon title="🧰 Інструменти" onBack={goMenu} />}
       {screen === "approval" && (
         <Approval

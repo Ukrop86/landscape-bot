@@ -12,7 +12,8 @@ export type Screen =
   | "stats"
   | "tools"
   | "approval"
-  | "adminOverview";
+  | "adminOverview"
+  | "actionLog";
 
 type Accent = "blue" | "green" | "orange" | "purple" | "teal" | "gray";
 
@@ -24,6 +25,9 @@ const ITEMS: { screen: Screen; icon: string; title: string; ready: boolean; acce
   { screen: "tools", icon: "🧰", title: "Інструменти", ready: false, accent: "teal" },
   { screen: "approval", icon: "✅", title: "Затвердження", ready: false, accent: "gray" },
   { screen: "adminOverview", icon: "🚚", title: "Поточні поїздки", ready: true, accent: "blue" },
+  // Тимчасово, на час обкатки: журнал натискань, щоб розбирати проблеми
+  // за фактами, а не за переказом.
+  { screen: "actionLog", icon: "🧾", title: "Журнал дій", ready: true, accent: "gray" },
 ];
 
 // A bit of warmth on the one screen every user sees every single time --
@@ -51,7 +55,11 @@ export function Menu({
   // noise), shown as ready for admins instead of the static placeholder.
   // Both admin-only: approving days and watching them happen are the two
   // things only an admin does.
-  const items = ITEMS.filter((item) => (item.screen !== "approval" && item.screen !== "adminOverview") || isAdmin).map((item) =>
+  // Журнал дій теж адмінський: бригадиру він нічого не дає, а список чужих
+  // натискань йому бачити нічого.
+  const items = ITEMS.filter(
+    (item) => !["approval", "adminOverview", "actionLog"].includes(item.screen) || isAdmin,
+  ).map((item) =>
     item.screen === "approval" ? { ...item, ready: true } : item,
   );
   return (

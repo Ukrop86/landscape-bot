@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPack, type TripPlan, type PlanObject, type Foreman, type PlannedResources } from "../lib/api";
 import { useClearErrorOnSuccess } from "../lib/useClearErrorOnSuccess";
 import { todayISO } from "../lib/date";
+import { setTrackContext, track } from "../lib/track";
 import { alertDialog, askDialog, confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial, roleTagClass, roleRank, type EmployeeRole } from "../lib/employee";
 import { groupWorks } from "../lib/works";
@@ -707,6 +708,12 @@ export function RoadTimesheet({
       ? (atObjectPlan?.objectName ?? "")
       : headingName;
 
+  // Журнал дій. Тимчасово, на час обкатки: сам крок, на якому людина
+  // перебуває, пояснює натискання краще за будь-який підпис кнопки.
+  useEffect(() => {
+    setTrackContext({ screen: "roadTimesheet", step });
+  }, [step]);
+
   useEffect(() => {
     if (!progressState || planEditing || editingTripSeq !== null) return;
     // Report only what held still for a few seconds. Tapping through screens
@@ -851,6 +858,9 @@ export function RoadTimesheet({
 
   function logChange(label: string) {
     setChangeLog((prev) => [{ ts: Date.now(), label }, ...prev].slice(0, 100));
+    // Той самий запис — і в журнал дій. Це найцінніші рядки в ньому: підпис
+    // кнопки каже, що натиснули, а це — що з дня від того сталося.
+    track("step", label, `date=${date}`);
   }
 
   function pushUndo(label: string, restore: () => void) {
