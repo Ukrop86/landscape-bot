@@ -658,7 +658,13 @@ export function RoadTimesheet({
       // menu. A setup that never left the yard goes to the index instead, so
       // the day's other trips and the planned ones are not hidden behind it;
       // "▶️ Продовжити" there returns to this very step.
-      setStep(draft.tripStartedAt ? draft.step : "INDEX");
+      // A draft saved mid-planning reopens INSIDE the planner. Dropping it on
+      // the index instead left plan mode switched on with no planner on
+      // screen: "створити нову" then refused because the builder held the
+      // plan, and the card that would have led back into it hid itself for
+      // exactly the same reason. Closing the app while planning is enough to
+      // get there -- no handler runs, so nothing turns plan mode off.
+      setStep(draft.planEditing || draft.tripStartedAt ? draft.step : "INDEX");
       setRestoredBanner(true);
       draftRestoredRef.current = true;
     } else if (draft) {
