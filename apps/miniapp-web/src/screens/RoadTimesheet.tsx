@@ -3381,7 +3381,13 @@ export function RoadTimesheet({
               <div className="list">
                 {employeeIds.map((id) => {
                   const atPlan = plans.find((p) => p.here.includes(id));
-                  const label = onboard.includes(id) ? "🚗 в дорозі" : atPlan ? `📍 ${atPlan.objectName}` : "❓";
+                  // Neither in the bus nor at an object is a real state, not a
+                  // glitch: it is where "висаджено по дорозі" and "знято з
+                  // обʼєкта (не в бус)" leave a person. It used to render as a
+                  // bare "❓", which reads like the app lost them -- so say what
+                  // it means. Their hours are already closed and counted; this
+                  // only says nobody is carrying them any more.
+                  const label = onboard.includes(id) ? "🚗 в дорозі" : atPlan ? `📍 ${atPlan.objectName}` : "🏁 поза поїздкою";
                   return (
                     <div key={id} className="cell" style={{ cursor: "default" }}>
                       <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
