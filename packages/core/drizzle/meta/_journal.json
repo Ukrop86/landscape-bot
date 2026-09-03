@@ -64,6 +64,13 @@
       "when": 1788422820462,
       "tag": "0008_accounting_exports",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788430000000,
+      "tag": "0009_trip_progress_stale_date",
+      "breakpoints": true
     }
   ]
 }
