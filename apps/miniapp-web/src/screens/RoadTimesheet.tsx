@@ -3094,14 +3094,37 @@ export function RoadTimesheet({
         <div className="section-title">Поточні поїздки</div>
         {submittedTrips.length === 0 && !hasBuilderContent && <div className="empty-state">Сьогодні поїздок ще немає.</div>}
         {submittedTrips.map((trip) => renderTripCard(trip, trip.status !== "ЗАТВЕРДЖЕНО"))}
-        {hasBuilderContent && editingTripSeq === null && !planEditing && (
+        {/* Whatever the builder is holding, there is ALWAYS a way back into it
+            from here, and always a way to drop it.
+            This card used to hide while a plan or a submitted trip was being
+            edited -- but a restored draft opens on this screen with those
+            flags still set, so "створити нову" refused ("вже є незавершена
+            поїздка") while the trip it was talking about was nowhere on
+            screen and the 🗑 it pointed at lives on another step. A dead end
+            with no way out but clearing the browser data. */}
+        {hasBuilderContent && (
           <div className="list" style={{ marginTop: 8 }}>
-            <button className="cell" onClick={() => setStep(inProgressResumeStep ?? (tripStartedAt ? tripResumeStep : "HUB"))}>
-              <span className="cell-title">🚧 {cars.find((c) => c.id === carId)?.name ?? "Нова поїздка"}</span>
+            <button
+              className="cell"
+              onClick={() =>
+                setStep(
+                  planEditing || editingTripSeq !== null
+                    ? "HUB"
+                    : (inProgressResumeStep ?? (tripStartedAt ? tripResumeStep : "HUB")),
+                )
+              }
+            >
+              <span className="cell-title">
+                {planEditing ? "📋 Незавершений план" : editingTripSeq !== null ? "✏️ Редагування поїздки" : `🚧 ${cars.find((c) => c.id === carId)?.name ?? "Нова поїздка"}`}
+              </span>
               <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <span className="badge warn">в процесі</span>
                 <span className="cell-sub">▶️ Продовжити</span>
               </span>
+            </button>
+            <button className="cell" onClick={resetTrip}>
+              <span className="cell-title" style={{ color: "#d70015" }}>🗑 Скинути незавершене</span>
+              <span className="cell-sub">звільнить авто й людей ›</span>
             </button>
           </div>
         )}
