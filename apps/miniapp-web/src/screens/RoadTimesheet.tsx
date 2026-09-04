@@ -666,7 +666,35 @@ export function RoadTimesheet({
       // plan, and the card that would have led back into it hid itself for
       // exactly the same reason. Closing the app while planning is enough to
       // get there -- no handler runs, so nothing turns plan mode off.
-      setStep(draft.planEditing || draft.tripStartedAt ? draft.step : "INDEX");
+      // Бригада працює, а екран каже «повертаємось». Так буває, бо обʼєкт
+      // вважається відвіданим щойно там висадили людей, і застосунок вирішує,
+      // що маршрут пройдено. Бригадир при цьому нікуди не їде: бус стоїть на
+      // тому ж обʼєкті, де йдуть роботи.
+      //
+      // d56275d виправив це для кнопки «↩️ Повернутися до поїздки», але
+      // перезавантаження відновлює збережений крок як є, тож той самий екран
+      // повертався знову — і виходило, що фікс нічого не змінив.
+      //
+      // Умови навмисно вузькі: бус стоїть на обʼєкті, нікуди не прямує, там
+      // є люди І відкрита робоча сесія. Без сесії це збирання людей по дорозі
+      // на базу — туди повертати не можна.
+      const parkedPlan = draft.carAtObjectId
+        ? (draft.plans ?? []).map(normalizeDraftPlan).find((p) => p.objectId === draft.carAtObjectId)
+        : undefined;
+      const crewWorkingAtCar =
+        !!parkedPlan &&
+        !draft.headingToObjectId &&
+        parkedPlan.here.length > 0 &&
+        parkedPlan.sessions.some((s) => !s.endedAt);
+      const isReturnStep = draft.step === "DRIVE" || draft.step === "RETURN_PICKUP" || draft.step === "RETURN";
+      if (crewWorkingAtCar && isReturnStep) {
+        setAtObjectId(parkedPlan!.objectId);
+        setAtObjectReturnStep("DRIVE");
+        setInProgressResumeStep("AT_OBJECT");
+        setStep("AT_OBJECT");
+      } else {
+        setStep(draft.planEditing || draft.tripStartedAt ? draft.step : "INDEX");
+      }
       setRestoredBanner(true);
       draftRestoredRef.current = true;
     } else {
@@ -2192,8 +2220,18 @@ export function RoadTimesheet({
     });
   }
 
+  // Пускає годинник дороги. НЕ чіпає carAtObjectId: «бус рушив» — це окрема
+  // подія, і вона трапляється рівно в трьох місцях (обрали куди їхати,
+  // «Продовжити рух», «Рушили на базу»). Раніше вона була тут, і будь-який
+  // резюм стирав памʼять про те, що бус стоїть на обʼєкті: бригадир виходив
+  // «‹ Назад» з екрана забирання — і застосунок уже не знав, де машина.
   function resumeDrivingSegment() {
     setDrivingSegmentStartedAt((segStart) => segStart ?? new Date().toISOString());
+  }
+
+  /** Бус рушив: годинник іде, машина більше не стоїть на обʼєкті. */
+  function departFromObject() {
+    resumeDrivingSegment();
     setCarAtObjectId("");
   }
 
@@ -3009,11 +3047,12 @@ export function RoadTimesheet({
         setErrandDriverId(null);
         return;
       }
-      // Same resume rule as the in-screen "✅ Готово" button below -- leaving
-      // via the hardware/Telegram back button must not skip it, or the
-      // driving segment stays paused with no way to resume it once back on
-      // DRIVE (that screen has no manual "resume" control of its own).
-      if (atObjectReturnStep === "DRIVE") resumeDrivingSegment();
+      // Годинник дороги тут НЕ пускаємо. Вихід з екрана обʼєкта — це погляд
+      // на маршрут, а не рушання: бус лишається там, де стояв. Раніше тут був
+      // resume, і бригадир, який просто визирнув з обʼєкта, отримував
+      // «ПОВЕРТАЄМОСЬ» з тікаючим годинником, поки бригада працювала.
+      // Годинник запускає тільки справжній відʼїзд — вибір куди їхати на
+      // цьому ж екрані, «Продовжити рух» або «Рушили на базу».
       setStep(atObjectReturnStep);
       return;
     }
@@ -3024,12 +3063,6 @@ export function RoadTimesheet({
         setShowRoadsideActions(false);
         return;
       }
-    }
-    if (step === "RETURN_PICKUP") {
-      // Mirrors "▶️ Продовжити рух" on this screen -- leaving via the
-      // hardware/Telegram back button after a pickup stop paused the segment
-      // must resume it too, same reasoning as the AT_OBJECT case above.
-      resumeDrivingSegment();
     }
     if (backTargets[step]) {
       setStep(backTargets[step]!);
@@ -4350,7 +4383,7 @@ export function RoadTimesheet({
                 className="cell"
                 onClick={() => {
                   setHeadingToObjectId(p.objectId);
-                  resumeDrivingSegment();
+                  departFromObject();
                   haptic("selection");
                 }}
               >
@@ -5589,7 +5622,7 @@ export function RoadTimesheet({
                         style={{ width: "100%", marginTop: 6, textAlign: "left" }}
                         onClick={() => {
                           setHeadingToObjectId(p.objectId);
-                          resumeDrivingSegment();
+                          departFromObject();
                           haptic("selection");
                         }}
                       >
@@ -5682,7 +5715,7 @@ export function RoadTimesheet({
                     }}
                   />
                 ) : !anyPending && !driving ? (
-                  <MainButton text="▶️ Рушили на базу" onClick={resumeDrivingSegment} />
+                  <MainButton text="▶️ Рушили на базу" onClick={departFromObject} />
                 ) : !anyPending && driving ? (
                   <MainButton
                     text="🏁 Приїхали на базу"
