@@ -475,6 +475,10 @@ export function RoadTimesheet({
   const [moveSelected, setMoveSelected] = useState<string[]>([]);
   const [moveTargetId, setMoveTargetId] = useState<string | null>(null);
   const [showMovePicker, setShowMovePicker] = useState(false);
+  // "walk" -- людина справді відпрацювала тут і пішки перейшла на сусідній
+  // обʼєкт: години лишаються тут, там починається нова робота. "fix" -- її
+  // тут узагалі не було, це виправлення помилки.
+  const [moveMode, setMoveMode] = useState<"walk" | "fix">("walk");
   // Manual hours fallback: if the foreman forgot to start the timer for
   // someone, they can type the worked hours in directly here. showManualHours
   // opens the per-person list; manualHoursEmployeeId + manualHoursBuffer drive
@@ -2757,8 +2761,44 @@ export function RoadTimesheet({
    * At the new object they need no assignment either: the crew's shared works
    * are theirs by being in the crew.
    */
+  /**
+   * Перехід пішки на сусідній обʼєкт. Дві точки на одній території -- звична
+   * річ: відпрацювали на першій, двоє перейшли на другу, бус тим часом повіз
+   * решту далі.
+   *
+   * Це НЕ виправлення помилки: години на першому обʼєкті чесно зароблені й
+   * лишаються там, закріплені роботи теж. На новому обʼєкті людина просто
+   * стоїть -- час їй піде, коли бригадир натисне «Старт».
+   *
+   * Робити це «зняти + прибули самі» було не можна: другий крок ставить
+   * прапорець self-transport і забирає доплату за виїзд у людини, яку насправді
+   * привіз бус.
+   */
+  function walkToObject() {
+    if (!atObjectId || !moveTargetId || !moveSelected.length) return;
+    const fromName = currentAtPlan()?.objectName ?? "";
+    const toName = plans.find((p) => p.objectId === moveTargetId)?.objectName ?? "";
+    const moving = new Set(moveSelected);
+    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    moveEmployeesTo(moveSelected, { kind: "object", objectId: moveTargetId });
+    setPlans((prev) =>
+      prev.map((p) => {
+        if (p.objectId !== atObjectId) return p;
+        const sessions = p.sessions.map((x) => (moving.has(x.employeeId) && !x.endedAt ? { ...x, endedAt: now } : x));
+        return { ...p, sessions, works: stopFinishedWorks(p.works, sessions, nowMs) };
+      }),
+    );
+    haptic("light");
+    logChange(`Пішки ${moveSelected.map(employeeName).join(", ")}: ${fromName} → ${toName}`);
+    setMoveSelected([]);
+    setMoveTargetId(null);
+    setShowMovePicker(false);
+  }
+
   function confirmMove() {
     if (!atObjectId || !moveTargetId || !moveSelected.length) return;
+    if (moveMode === "walk") return walkToObject();
     const fromName = currentAtPlan()?.objectName ?? "";
     const toName = plans.find((p) => p.objectId === moveTargetId)?.objectName ?? "";
     const count = moveSelected.length;
@@ -5138,11 +5178,29 @@ export function RoadTimesheet({
                           onClick={() => {
                             setMoveSelected([]);
                             setMoveTargetId(null);
+                            setMoveMode("walk");
+                            setShowMovePicker(true);
+                          }}
+                          disabled={!plan.here.length || plans.length < 2}
+                        >
+                          <span className="cell-title">🚶 Перевести на інший обʼєкт</span>
+                          <span className="cell-sub">пішки, поруч</span>
+                        </button>
+                      </div>
+                    )}
+                    {carPresent && plans.length > 1 && (
+                      <div className="list">
+                        <button
+                          className="cell"
+                          onClick={() => {
+                            setMoveSelected([]);
+                            setMoveTargetId(null);
+                            setMoveMode("fix");
                             setShowMovePicker(true);
                           }}
                           disabled={!plan.here.length}
                         >
-                          <span className="cell-title">🔄 Перемістити людей</span>
+                          <span className="cell-title">🔄 Не той обʼєкт — виправити</span>
                         </button>
                       </div>
                     )}
@@ -5384,11 +5442,12 @@ export function RoadTimesheet({
                 {showMovePicker && (
                   <>
                     <div className="hint" style={{ padding: "0 16px 8px" }}>
-                      Перенесення = «я помилився обʼєктом». Тут від людини не лишиться нічого, а на новому обʼєкті їй зарахуються ті самі
-                      години й роботи, що й усій тамтешній бригаді — незалежно від того, коли ви це виправили.
+                      {moveMode === "walk"
+                        ? "Відпрацьовані тут години лишаються за людиною. На новому обʼєкті вона просто стоїть — час піде, коли натиснете «Старт». Доплата за виїзд не змінюється."
+                        : "Виправлення = «я помилився обʼєктом». Тут від людини не лишиться нічого, а на новому обʼєкті їй зарахуються ті самі години й роботи, що й усій тамтешній бригаді."}
                     </div>
                     <div className="section-title row">
-                      <span>Кого перенести</span>
+                      <span>{moveMode === "walk" ? "Кого перевести" : "Кого виправити"}</span>
                       <button
                         className="chip chip-sm"
                         onClick={() => setMoveSelected(moveSelected.length === plan.here.length ? [] : [...plan.here])}
@@ -5447,7 +5506,7 @@ export function RoadTimesheet({
                         Скасувати
                       </button>
                       <button className="chip selected" onClick={confirmMove} disabled={!moveSelected.length || !moveTargetId}>
-                        Підтвердити
+                        {moveMode === "walk" ? "Перевести" : "Виправити"}
                       </button>
                     </div>
                   </>
