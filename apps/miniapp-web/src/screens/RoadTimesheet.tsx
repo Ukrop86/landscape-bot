@@ -2553,9 +2553,10 @@ export function RoadTimesheet({
         const newSessions = p.here
           .filter((id) => !open.has(id) && !skipIds.has(id))
           .map((employeeId) => ({ employeeId, startedAt: nowIso }));
-        // "Почати роботи" is the bulk shortcut -- it should also start every
-        // work item's own timer, not just people's, since the per-work
-        // Старт/Стоп buttons only cover starting one at a time otherwise.
+        // "Почати роботи" is the bulk shortcut -- it starts every work item's
+        // own timer too, not just people's. A single work is started instead
+        // through the person it is assigned to (startPersonTimer); there is
+        // no Старт/Стоп of its own beside each work.
         const works = p.works.map((w) => (w.workStartedAt ? w : { ...w, workStartedAt: nowIso }));
         return { ...p, sessions: [...p.sessions, ...newSessions], works };
       }),
@@ -2604,10 +2605,18 @@ export function RoadTimesheet({
     setPlans((prev) =>
       prev.map((p) => {
         if (p.objectId !== objectId) return p;
-        if (p.sessions.some((s) => s.employeeId === employeeId && !s.endedAt)) return p;
-        return { ...p, sessions: [...p.sessions, { employeeId, startedAt }] };
+        const alreadyOpen = p.sessions.some((s) => s.employeeId === employeeId && !s.endedAt);
+        // Разом із людиною пускаємо годинники ЇЇ закріплених робіт: саме їх
+        // вона й почала. Без цього рядок «🛠 окремо: …» стояв без годинника,
+        // а запустити його могла тільки загальна кнопка -- яка вмикає ще й
+        // усю бригаду, чого при закріпленій роботі якраз і не хочуть.
+        const works = p.works.map((w) =>
+          !w.workStartedAt && (w.employeeIds ?? []).includes(employeeId) ? { ...w, workStartedAt: startedAt } : w,
+        );
+        return { ...p, works, sessions: alreadyOpen ? p.sessions : [...p.sessions, { employeeId, startedAt }] };
       }),
     );
+    logChange(`Старт: ${employeeName(employeeId)} на ${planFor(objectId).objectName}`);
     haptic("light");
   }
 
@@ -2620,6 +2629,7 @@ export function RoadTimesheet({
           : { ...p, sessions: p.sessions.map((s) => (s.employeeId === employeeId && !s.endedAt ? { ...s, endedAt: now } : s)) },
       ),
     );
+    logChange(`Стоп: ${employeeName(employeeId)} на ${planFor(objectId).objectName}`);
     haptic("light");
   }
 
@@ -4905,7 +4915,7 @@ export function RoadTimesheet({
                     <div className="section-title">Люди на обʼєкті</div>
                     {!worksRunning && plan.here.length > 0 && (
                       <div className="hint" style={{ padding: "0 16px 6px" }}>
-                        Таймери людей вмикаються після «▶️ Почати роботи».
+                        «▶️ Почати роботи» вмикає всіх одразу. «▶️ Старт» біля людини — тільки її (і її закріплені роботи).
                       </div>
                     )}
                     <div className="list">
@@ -4932,12 +4942,7 @@ export function RoadTimesheet({
                                     ⏹ Стоп
                                   </button>
                                 ) : (
-                                  <button
-                                    className="chip chip-sm"
-                                    onClick={() => startPersonTimer(atObjectId, id)}
-                                    disabled={!worksRunning}
-                                    title={worksRunning ? "" : "Спочатку почніть роботи на обʼєкті"}
-                                  >
+                                  <button className="chip chip-sm" onClick={() => startPersonTimer(atObjectId, id)}>
                                     ▶️ Старт
                                   </button>
                                 )}
