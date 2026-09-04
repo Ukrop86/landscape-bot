@@ -460,6 +460,10 @@ export function RoadTimesheet({
   // Which person's "assign works to just them" panel is open, if any -- the
   // same assignment the work list offers, reached from the person instead.
   const [assigningPersonId, setAssigningPersonId] = useState<string | null>(null);
+  // Чия картка на обʼєкті зараз розгорнута. Згорнуто -- видно імʼя, години і
+  // Старт/Стоп; решта дій ховається, бо їх торкаються раз на день, а місце
+  // на екрані вони їли в кожного.
+  const [expandedPersonId, setExpandedPersonId] = useState<string | null>(null);
   const [atObjectReturnStep, setAtObjectReturnStep] = useState<Step>("DRIVE");
   const [atObjectDetailsExpanded, setAtObjectDetailsExpanded] = useState(false);
   const [volumesReturnStep, setVolumesReturnStep] = useState<Step>("AT_OBJECT");
@@ -4760,6 +4764,7 @@ export function RoadTimesheet({
             const peopleTotal = everSessionIds.size || plan.here.length;
             const peopleActive = openSessions.length;
             const worksTotal = plan.works.length;
+            const worksGoing = plan.works.filter((w) => !!w.workStartedAt).length;
             const shiftOpen = openSessions.length > 0;
             const notStarted = plan.here.filter((id) => !openSessionIds.has(id));
             const earliestOpenStart = openSessions.length
@@ -4787,11 +4792,6 @@ export function RoadTimesheet({
                     Машина стоїть на «{carElsewhereName}». Тут можна правити роботи й людей — маршрут це не рухає.
                   </div>
                 )}
-                {!carPresent && !carElsewhere && (
-                  <div className="hint" style={{ padding: "0 16px 8px" }}>
-                    Машина зараз не тут. Додайте тих, хто приїхав своїм ходом, і почніть їм роботи — тих, хто в машині, висадять, коли вона приїде.
-                  </div>
-                )}
                 <div className="section-title row">
                   <span>📍 {plan.objectName}</span>
                   <span style={{ display: "flex", gap: 6 }}>
@@ -4800,7 +4800,11 @@ export function RoadTimesheet({
                         👤 {peopleActive}/{peopleTotal}
                       </span>
                     )}
-                    {worksTotal > 0 && <span className="badge ok">🛠 {worksTotal}</span>}
+                    {worksTotal > 0 && (
+                      <span className={`badge ${worksGoing === 0 ? "" : worksGoing === worksTotal ? "ok" : "warn"}`}>
+                        🛠 {worksGoing}/{worksTotal}
+                      </span>
+                    )}
                   </span>
                 </div>
 
@@ -4954,12 +4958,21 @@ export function RoadTimesheet({
                         const cameOnOwn = selfTransportIds.includes(id);
                         const ownWorks = plan.works.filter((w) => (w.employeeIds ?? []).includes(id));
                         const picking = assigningPersonId === id;
+                        const open = expandedPersonId === id;
                         return (
                           <div key={id} className="cell" style={{ cursor: "default", display: "block" }}>
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                              <span className="cell-title">
-                                {cameOnOwn ? "🚶" : "🚐"} {shortName(employeeName(id))}
-                              </span>
+                              {/* Імʼя -- і кнопка розгортання: дії під ним потрібні
+                                  раз на день, а місце займали в кожного рядка. */}
+                              <button
+                                className="cell-title person-toggle"
+                                onClick={() => {
+                                  setExpandedPersonId(open ? null : id);
+                                  if (open) setAssigningPersonId(null);
+                                }}
+                              >
+                                {open ? "▾" : "▸"} {cameOnOwn ? "🚶" : "🚐"} {shortName(employeeName(id))}
+                              </button>
                               <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
                                 {elapsed > 0 && <span className="hint">{fmtHMS(elapsed)}</span>}
                                 {running ? (
@@ -4978,24 +4991,26 @@ export function RoadTimesheet({
                                 🛠 окремо: {ownWorks.map((w) => w.workName).join(", ")}
                               </div>
                             )}
-                            <div className="row-actions">
-                              <button
-                                className={`chip chip-sm ${ownWorks.length ? "selected" : ""}`}
-                                onClick={() => setAssigningPersonId(picking ? null : id)}
-                                disabled={!plan.works.length}
-                              >
-                                🛠 Окремі роботи
-                              </button>
-                              {carPresent && (
-                                <button className="chip chip-sm" onClick={() => pickUpOne(plan.objectId, id, false)}>
-                                  🚐 У бус
+                            {open && (
+                              <div className="row-actions">
+                                <button
+                                  className={`chip chip-sm ${ownWorks.length ? "selected" : ""}`}
+                                  onClick={() => setAssigningPersonId(picking ? null : id)}
+                                  disabled={!plan.works.length}
+                                >
+                                  🛠 Окремі роботи
                                 </button>
-                              )}
-                              <button className="chip chip-sm" onClick={() => leaveObjectOnOwn(plan.objectId, [id])}>
-                                🚶 Зняти
-                              </button>
-                            </div>
-                            {picking && (
+                                {carPresent && (
+                                  <button className="chip chip-sm" onClick={() => pickUpOne(plan.objectId, id, false)}>
+                                    🚐 У бус
+                                  </button>
+                                )}
+                                <button className="chip chip-sm" onClick={() => leaveObjectOnOwn(plan.objectId, [id])}>
+                                  🚶 Зняти
+                                </button>
+                              </div>
+                            )}
+                            {open && picking && (
                               <div style={{ marginTop: 8 }}>
                                 <div className="hint">
                                   Обрані роботи оплачуються лише цій людині — і тоді вона більше не бере участі в поділі
@@ -5044,41 +5059,50 @@ export function RoadTimesheet({
                   </>
                 )}
 
+                {/* Кожна дія -- окрема картка, але з маленьким проміжком: це
+                    різні речі, не пункти одного списку, і водночас одна група,
+                    а не окремі розділи. */}
                 {!showDropPicker && !showMovePicker && !showManualHours && !errandMode && (
-                  <div className="list" style={{ marginTop: 8 }}>
-                    <button
-                      className="cell"
-                      onClick={() => {
-                        setDropSelected([]);
-                        setAddArrivedSelected([]);
-                        setAtObjectDetailsExpanded(false);
-                        setArrivedPickerOpen(false);
-                        setShowDropPicker(true);
-                      }}
-                    >
-                      <span className="cell-title">{carPresent ? "🚐 Висадити людей" : "🚶 Додати тих, хто приїхав сам"}</span>
-                      <span className="cell-sub">{carPresent ? `${onboard.length} в машині` : "машина ще в дорозі"}</span>
-                    </button>
+                  <div className="action-stack">
+                    <div className="list">
+                      <button
+                        className="cell"
+                        onClick={() => {
+                          setDropSelected([]);
+                          setAddArrivedSelected([]);
+                          setAtObjectDetailsExpanded(false);
+                          setArrivedPickerOpen(false);
+                          setShowDropPicker(true);
+                        }}
+                      >
+                        <span className="cell-title">{carPresent ? "🚐 Висадити людей" : "🚶 Додати тих, хто приїхав сам"}</span>
+                        <span className="cell-sub">{carPresent ? `${onboard.length} в машині` : "машина ще в дорозі"}</span>
+                      </button>
+                    </div>
                     {/* Once work is underway, "start the rest" lives next to
                         "finish everyone" in the active-work card above -- keep
                         this only as the very first "start work" entry point. */}
                     {!shiftOpen && notStarted.length > 0 && (
-                      <button className="cell" onClick={startShift} disabled={!plan.works.length}>
-                        <span className="cell-title">▶️ Почати роботи</span>
-                        <span className="cell-sub">{nPeople(notStarted.length)}</span>
-                      </button>
+                      <div className="list">
+                        <button className="cell" onClick={startShift} disabled={!plan.works.length}>
+                          <span className="cell-title">▶️ Почати роботи</span>
+                          <span className="cell-sub">{nPeople(notStarted.length)}</span>
+                        </button>
+                      </div>
                     )}
-                    <button
-                      className="cell"
-                      onClick={() => {
-                        setPlanObjectId(atObjectId);
-                        setWorksReturnStep("AT_OBJECT");
-                        setStep("PLAN_WORKS");
-                      }}
-                    >
-                      <span className="cell-title">✏️ Додати/змінити роботи</span>
-                      <span className="cell-sub">{nWorks(plan.works.length)}</span>
-                    </button>
+                    <div className="list">
+                      <button
+                        className="cell"
+                        onClick={() => {
+                          setPlanObjectId(atObjectId);
+                          setWorksReturnStep("AT_OBJECT");
+                          setStep("PLAN_WORKS");
+                        }}
+                      >
+                        <span className="cell-title">✏️ Додати/змінити роботи</span>
+                        <span className="cell-sub">{nWorks(plan.works.length)}</span>
+                      </button>
+                    </div>
                     {/* All three belong to a foreman standing at the object.
                         Opened mid-drive, this screen exists only to register
                         who got here on their own and start them working: the
@@ -5086,18 +5110,20 @@ export function RoadTimesheet({
                         nothing here is finished yet to need hours typed in or
                         people moved on. */}
                     {carPresent && (
-                      <button
-                        className="cell"
-                        onClick={() => {
-                          setMoveSelected([]);
-                          setMoveTargetId(null);
-                          setShowMovePicker(true);
-                        }}
-                        disabled={!plan.here.length}
-                      >
-                        <span className="cell-title">🔄 Не той обʼєкт — перенести людей</span>
-                        <span className="cell-sub">виправлення помилки</span>
-                      </button>
+                      <div className="list">
+                        <button
+                          className="cell"
+                          onClick={() => {
+                            setMoveSelected([]);
+                            setMoveTargetId(null);
+                            setShowMovePicker(true);
+                          }}
+                          disabled={!plan.here.length}
+                        >
+                          <span className="cell-title">🔄 Не той обʼєкт — перенести людей</span>
+                          <span className="cell-sub">виправлення помилки</span>
+                        </button>
+                      </div>
                     )}
                     {/* No manual-hours entry here on purpose: hours get
                         corrected on the way back, once the work is finished
@@ -5106,18 +5132,20 @@ export function RoadTimesheet({
                         per-object and this screen already knows the object;
                         the return steps open it. */}
                     {carPresent && !openErrand && (
-                      <button
-                        className="cell"
-                        onClick={() => {
-                          setErrandDriverId(null);
-                          setErrandOdoBuffer("");
-                          setErrandMode("start");
-                        }}
-                        disabled={!plan.here.length}
-                      >
-                        <span className="cell-title">🚗 Машина вибула по справам</span>
-                        <span className="cell-sub">ці км не йдуть у доплату за виїзд</span>
-                      </button>
+                      <div className="list">
+                        <button
+                          className="cell"
+                          onClick={() => {
+                            setErrandDriverId(null);
+                            setErrandOdoBuffer("");
+                            setErrandMode("start");
+                          }}
+                          disabled={!plan.here.length}
+                        >
+                          <span className="cell-title">🚗 Машина вибула по справам</span>
+                          <span className="cell-sub">ці км не йдуть у доплату за виїзд</span>
+                        </button>
+                      </div>
                     )}
                   </div>
                 )}

@@ -589,6 +589,24 @@ body {
   padding: 8px 16px 4px;
 }
 
+/* Група дій обʼєкта: кожна окремою карткою, але проміжок менший за
+   відступ між розділами -- разом, і все ж не один список. */
+.action-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* Імʼя людини на обʼєкті -- ще й кнопка розгортання її дій. */
+.person-toggle {
+  border: none;
+  background: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
 .chip-ghost {
   background: none;
   border-color: transparent;
