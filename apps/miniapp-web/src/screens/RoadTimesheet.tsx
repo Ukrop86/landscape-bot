@@ -391,7 +391,6 @@ export function RoadTimesheet({
   const [planWorksSearch, setPlanWorksSearch] = useState("");
   const [expandedWorkCategoryId, setExpandedWorkCategoryId] = useState<string | null>(null);
   // Яка робота зараз відкрита для призначення людей (лише одна за раз).
-  const [assigningWorkId, setAssigningWorkId] = useState<string | null>(null);
   const [expandedWorkSubcategoryId, setExpandedWorkSubcategoryId] = useState<string | null>(null);
   const [selectedWorksExpanded, setSelectedWorksExpanded] = useState(false);
   const [planVolumeWorkId, setPlanVolumeWorkId] = useState<string | null>(null);
@@ -2093,12 +2092,6 @@ export function RoadTimesheet({
     haptic("selection");
   }
 
-  function clearWorkAssignees(objectId: string, workId: string) {
-    setPlans((prev) =>
-      prev.map((p) => (p.objectId !== objectId ? p : { ...p, works: p.works.map((w) => (w.workId === workId ? { ...w, employeeIds: [] } : w)) })),
-    );
-    haptic("selection");
-  }
 
   /** One selectable work row in the PLAN_WORKS picker -- rendered both
    * directly under a category and inside a subcategory group. */
@@ -2423,6 +2416,29 @@ export function RoadTimesheet({
   // `nowhere` when a self-transport employee leaves the object on their own.
   // `pauseForBus` is used by the return route: putting someone in the bus
   // means the vehicle has really reached that object, so road time pauses.
+  /**
+   * Гасить роботи, над якими вже нікому працювати.
+   *
+   * Закріплена робота йде, поки хоч один з її людей у зміні; бригадна -- поки
+   * в зміні хоч хтось. Раніше зупинка була одна на весь обʼєкт («не лишилось
+   * нікого»), тож знята з обʼєкта людина йшла, а її персональна робота далі
+   * накручувала годинник, і бейдж бадьоро показував «йде».
+   */
+  function stopFinishedWorks(works: PlannedWork[], sessions: EmployeeSession[], atMs: number): PlannedWork[] {
+    const openIds = new Set(sessions.filter((s) => !s.endedAt).map((s) => s.employeeId));
+    return works.map((w) => {
+      if (!w.workStartedAt) return w;
+      const assigned = w.employeeIds ?? [];
+      const stillWorked = assigned.length ? assigned.some((id) => openIds.has(id)) : openIds.size > 0;
+      if (stillWorked) return w;
+      return {
+        ...w,
+        workStartedAt: null,
+        workAccumulatedMs: (w.workAccumulatedMs ?? 0) + (atMs - new Date(w.workStartedAt).getTime()),
+      };
+    });
+  }
+
   async function departObject(
     objectId: string,
     employeeIdsToMove: string[],
@@ -2453,22 +2469,7 @@ export function RoadTimesheet({
       prev.map((p) => {
         if (p.objectId !== objectId) return p;
         const sessions = p.sessions.map((s) => (ids.includes(s.employeeId) && !s.endedAt ? { ...s, endedAt: now } : s));
-        // Taking the LAST person off has to stop the object's own work timers
-        // too. They are stopped by finishShift, and finishShift lives behind
-        // the "Роботи тривають" card, which disappears the moment nobody is
-        // clocked in -- so an emptied object kept its works running with no
-        // control left to stop them.
-        const nobodyLeftHere = p.here.filter((id) => !ids.includes(id)).length === 0;
-        const stillClockedIn = sessions.some((x) => !x.endedAt);
-        const works =
-          nobodyLeftHere && !stillClockedIn
-            ? p.works.map((w) =>
-                w.workStartedAt
-                  ? { ...w, workStartedAt: null, workAccumulatedMs: (w.workAccumulatedMs ?? 0) + (nowMs - new Date(w.workStartedAt).getTime()) }
-                  : w,
-              )
-            : p.works;
-        return { ...p, sessions, works };
+        return { ...p, sessions, works: stopFinishedWorks(p.works, sessions, nowMs) };
       }),
     );
     haptic("light");
@@ -2631,12 +2632,15 @@ export function RoadTimesheet({
 
   function stopPersonTimer(objectId: string, employeeId: string) {
     const now = new Date().toISOString();
+    const nowMs = Date.now();
     setPlans((prev) =>
-      prev.map((p) =>
-        p.objectId !== objectId
-          ? p
-          : { ...p, sessions: p.sessions.map((s) => (s.employeeId === employeeId && !s.endedAt ? { ...s, endedAt: now } : s)) },
-      ),
+      prev.map((p) => {
+        if (p.objectId !== objectId) return p;
+        const sessions = p.sessions.map((s) => (s.employeeId === employeeId && !s.endedAt ? { ...s, endedAt: now } : s));
+        // Разом із людиною гасне і робота, над якою більше нікому працювати --
+        // те саме правило, що й при знятті з обʼєкта.
+        return { ...p, sessions, works: stopFinishedWorks(p.works, sessions, nowMs) };
+      }),
     );
     logChange(`Стоп: ${employeeName(employeeId)} на ${planFor(objectId).objectName}`);
     haptic("light");
@@ -4858,60 +4862,24 @@ export function RoadTimesheet({
                       <span className="cell-title">🛠 Роботи на обʼєкті</span>
                       <span className="badge ok">{worksTotal}</span>
                     </div>
+                    {/* Один рядок на роботу: назва, час, кому вона належить і
+                        чи йде. Кнопка призначення звідси прибрана -- те саме
+                        робиться в картці людини («🛠 Окремі роботи»), а тут
+                        вона подвоювала висоту кожного рядка. */}
                     {plan.works.map((w) => {
                       const running = !!w.workStartedAt;
                       const elapsed = (w.workAccumulatedMs ?? 0) + (running ? now - new Date(w.workStartedAt as string).getTime() : 0);
-                      // Призначати можна лише на тих, хто тут був: людина без
-                      // сесії на цьому обʼєкті у розрахунок не потрапляє взагалі,
-                      // тож призначення на неї мовчки нічого б не дало.
-                      const peopleHere = [...new Set([...plan.sessions.map((s) => s.employeeId), ...plan.here])];
                       const assigned = w.employeeIds ?? [];
-                      const picking = assigningWorkId === w.workId;
                       return (
-                        <div key={w.workId} className="cell" style={{ cursor: "default", display: "block" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                            <span className="cell-title">{w.workName}</span>
-                            <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                              {elapsed > 0 && <span className="hint">{fmtHMS(elapsed)}</span>}
-                              {running && <span className="badge ok">йде</span>}
+                        <div key={w.workId} className="cell" style={{ cursor: "default" }}>
+                          <span className="cell-title">{w.workName}</span>
+                          <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+                            {elapsed > 0 && <span className="hint">{fmtHMS(elapsed)}</span>}
+                            <span title={assigned.length ? assigned.map(employeeName).join(", ") : "вся бригада"}>
+                              {assigned.length ? "👤" : "👥"}
                             </span>
-                          </div>
-                          <div style={{ marginTop: 6 }}>
-                            <button
-                              className={`chip ${assigned.length ? "selected" : ""}`}
-                              onClick={() => setAssigningWorkId(picking ? null : w.workId)}
-                            >
-                              {assigned.length ? `👤 ${assigned.map(employeeName).join(", ")}` : "👥 вся бригада"}
-                            </button>
-                          </div>
-                          {picking && (
-                            <div style={{ marginTop: 6 }}>
-                              <div className="hint">Кому зарахувати цю роботу? Нікого не обрано — гроші за неї ділить уся бригада на обʼєкті.</div>
-                              <div className="list" style={{ margin: "6px 0 0" }}>
-                                {peopleHere.map((id) => {
-                                  const mine = assigned.includes(id);
-                                  return (
-                                    <button
-                                      key={id}
-                                      className={`cell ${mine ? "selected" : ""}`}
-                                      onClick={() => toggleWorkAssignee(atObjectId, w.workId, id)}
-                                    >
-                                      <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                        <span className={`checkbox ${mine ? "checked" : ""}`}>{mine ? "✓" : ""}</span>
-                                        {shortName(employeeName(id))}
-                                      </span>
-                                      <span className={roleTagClass(roleFor(id))}>{roleFor(id)}</span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                              {assigned.length > 0 && (
-                                <button className="chip" onClick={() => clearWorkAssignees(atObjectId, w.workId)}>
-                                  ↩️ Повернути всій бригаді
-                                </button>
-                              )}
-                            </div>
-                          )}
+                            {running && <span className="badge ok">йде</span>}
+                          </span>
                         </div>
                       );
                     })}
