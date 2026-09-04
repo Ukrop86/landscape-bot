@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import express from "express";
 import cors from "cors";
-import { sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   startSyncLoop,
   runSyncCycle,
@@ -159,6 +159,137 @@ app.post("/internal/reset-working-data", requireBotToken, async (_req, res) => {
     await db.execute(sql.raw(`TRUNCATE TABLE ${WORKING_DATA_TABLES.join(", ")} RESTART IDENTITY`));
     console.log(`[maintenance] working data cleared: ${JSON.stringify(before)}`);
     res.json({ ok: true, cleared: before });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+/**
+ * POST /internal/reset-foreman — прибирає дані ОДНОГО бригадира.
+ *
+ *   { "foremanTgId": 123456789 }                      усі його дні
+ *   { "foremanTgId": 123456789, "date": "2026-09-05" } тільки цей день
+ *
+ * Навіщо окремо від reset-all: той чистить ПО ДАТІ, а в один день працює
+ * кілька бригад. Тестовий прогін треба вміти прибрати, не зачепивши чужий
+ * реальний день і чужі гроші.
+ *
+ * БУХЗВІТ не має колонки бригадира — там тільки дата, працівник і обʼєкт.
+ * Тому, як і для timesheet_entries, чиї це рядки, кажуть події самого дня:
+ * беремо з них обʼєкти й людей і видаляємо перетин. Обмеження в цього
+ * прийому одне й давно відоме: якщо ТОГО САМОГО дня інша бригада працювала
+ * на ТОМУ САМОМУ обʼєкті з ТІЄЮ САМОЮ людиною, її рядок теж підпаде.
+ * Для тестової бригади зі своїми людьми цього не станеться.
+ *
+ * Аркуш чистимо ПЕРШИМ і лише тоді базу: якщо Google відмовив, краще
+ * лишити все як є, ніж стерти базу й лишити гроші в БУХЗВІТі без сліду.
+ */
+app.post("/internal/reset-foreman", requireBotToken, async (req, res) => {
+  const body = (req.body ?? {}) as { foremanTgId?: number | string; date?: string };
+  const rawId = String(body.foremanTgId ?? "").trim();
+  if (!/^\d+$/.test(rawId)) {
+    res.status(400).json({ error: "foremanTgId обовʼязковий (число)" });
+    return;
+  }
+  const tgId = BigInt(rawId);
+  const date = String(body.date ?? "").trim();
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    res.status(400).json({ error: "date у форматі YYYY-MM-DD" });
+    return;
+  }
+
+  const byForeman = (col: any) => (date ? and(eq(col.foremanTgId, tgId), eq(col.date, date)) : eq(col.foremanTgId, tgId));
+
+  try {
+    const events = await db.select().from(schema.events).where(byForeman(schema.events));
+
+    // Що саме належить цьому бригадиру: дати, обʼєкти, люди.
+    const dates = new Set<string>();
+    const objectIds = new Set<string>();
+    const employeeIds = new Set<string>();
+    for (const e of events) {
+      if (e.date) dates.add(e.date);
+      try {
+        const payload = JSON.parse(e.payload ?? "{}") as {
+          objects?: { objectId?: string; sessions?: { employeeId?: string }[] }[];
+          employeeIds?: string[];
+        };
+        for (const o of payload.objects ?? []) {
+          if (o.objectId) objectIds.add(o.objectId);
+          for (const sess of o.sessions ?? []) if (sess.employeeId) employeeIds.add(sess.employeeId);
+        }
+        for (const id of payload.employeeIds ?? []) employeeIds.add(id);
+      } catch {
+        // побитий payload не має зупиняти прибирання решти
+      }
+    }
+
+    // У БУХЗВІТі стоять ІМЕНА, не id — тож перекладаємо через довідники.
+    let accountingRowsDeleted = 0;
+    if (dates.size && objectIds.size && employeeIds.size) {
+      const [employeeRows, objectRows] = await Promise.all([
+        db.select().from(schema.employees),
+        db.select().from(schema.objects),
+      ]);
+      const norm = (v: string) => v.trim().toLowerCase();
+      const employeeNames = new Set(
+        employeeRows.filter((r) => employeeIds.has(r.id)).map((r) => norm(r.name)),
+      );
+      const objectNames = new Set(objectRows.filter((r) => objectIds.has(r.id)).map((r) => norm(r.name)));
+      try {
+        accountingRowsDeleted = await sheetsClient.deleteRowsWhere(ACCOUNTING_SHEET, (row, map) => {
+          const d = sheetsClient.getCell(row, map, "Дата");
+          if (!dates.has(d)) return false;
+          if (!employeeNames.has(norm(sheetsClient.getCell(row, map, "Працівник")))) return false;
+          return objectNames.has(norm(sheetsClient.getCell(row, map, "Об'єкт")));
+        });
+      } catch (e) {
+        console.error("[maintenance] БУХЗВІТ clearing failed, Postgres left untouched", e);
+        res.status(502).json({
+          error: `Не вдалося очистити БУХЗВІТ: ${(e as Error).message}. Базу не чіпали — спробуйте ще раз.`,
+        });
+        return;
+      }
+    }
+
+    // Тепер база. Все, що має колонку бригадира, — прямо по ній.
+    const deleted: Record<string, number> = { "БУХЗВІТ (рядків)": accountingRowsDeleted };
+    const drop = async (label: string, table: any, where: any) => {
+      const rows = await db.delete(table).where(where).returning({ id: sql<number>`1` });
+      deleted[label] = rows.length;
+    };
+
+    await drop("events", schema.events, byForeman(schema.events));
+    await drop("reports", schema.reports, byForeman(schema.reports));
+    await drop("allowances", schema.allowances, byForeman(schema.allowances));
+    await drop("day_statuses", schema.dayStatuses, byForeman(schema.dayStatuses));
+    await drop("odometer_days", schema.odometerDays, byForeman(schema.odometerDays));
+    await drop("trip_progress", schema.tripProgress, byForeman(schema.tripProgress));
+    await drop("accounting_exports", schema.accountingExports, byForeman(schema.accountingExports));
+
+    // ТАБЕЛЬ бригадира не знає — той самий перетин, що й для БУХЗВІТу.
+    if (dates.size && objectIds.size && employeeIds.size) {
+      await drop(
+        "timesheet_entries",
+        schema.timesheetEntries,
+        and(
+          inArray(schema.timesheetEntries.date, [...dates]),
+          inArray(schema.timesheetEntries.objectId, [...objectIds]),
+          inArray(schema.timesheetEntries.employeeId, [...employeeIds]),
+        ),
+      );
+    }
+
+    // Плани й чернетка дати не мають (план без дати — це «наступний виїзд»),
+    // тож вони йдуть лише при повному прибиранні бригадира.
+    if (!date) {
+      await drop("trip_plans", schema.tripPlans, eq(schema.tripPlans.foremanTgId, tgId));
+      await drop("day_drafts", schema.dayDrafts, eq(schema.dayDrafts.foremanTgId, tgId));
+      await drop("ui_actions", schema.uiActions, eq(schema.uiActions.tgId, tgId));
+    }
+
+    console.log(`[maintenance] reset-foreman tgId=${rawId} date=${date || "-"} ${JSON.stringify(deleted)}`);
+    res.json({ ok: true, foremanTgId: rawId, date: date || null, deleted });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }
