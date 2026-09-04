@@ -5181,7 +5181,7 @@ export function RoadTimesheet({
                             setMoveMode("walk");
                             setShowMovePicker(true);
                           }}
-                          disabled={!plan.here.length || plans.length < 2}
+                          disabled={(!plan.here.length && !onboard.length) || plans.length < 2}
                         >
                           <span className="cell-title">🚶 Перевести на інший обʼєкт</span>
                           <span className="cell-sub">пішки, поруч</span>
@@ -5198,7 +5198,7 @@ export function RoadTimesheet({
                             setMoveMode("fix");
                             setShowMovePicker(true);
                           }}
-                          disabled={!plan.here.length}
+                          disabled={!plan.here.length && !onboard.length}
                         >
                           <span className="cell-title">🔄 Не той обʼєкт — виправити</span>
                         </button>
@@ -5446,33 +5446,50 @@ export function RoadTimesheet({
                         ? "Відпрацьовані тут години лишаються за людиною. На новому обʼєкті вона просто стоїть — час піде, коли натиснете «Старт». Доплата за виїзд не змінюється."
                         : "Виправлення = «я помилився обʼєктом». Тут від людини не лишиться нічого, а на новому обʼєкті їй зарахуються ті самі години й роботи, що й усій тамтешній бригаді."}
                     </div>
-                    <div className="section-title row">
-                      <span>{moveMode === "walk" ? "Кого перевести" : "Кого виправити"}</span>
-                      <button
-                        className="chip chip-sm"
-                        onClick={() => setMoveSelected(moveSelected.length === plan.here.length ? [] : [...plan.here])}
-                      >
-                        {moveSelected.length === plan.here.length ? "✕ Зняти всіх" : "✓ Обрати всіх"}
-                      </button>
-                    </div>
-                    <div className="list">
-                      {plan.here.map((id) => {
-                        const checked = moveSelected.includes(id);
-                        return (
-                          <button
-                            key={id}
-                            className={`cell ${checked ? "selected" : ""}`}
-                            onClick={() => setMoveSelected((prev) => (checked ? prev.filter((x) => x !== id) : [...prev, id]))}
-                          >
-                            <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                              <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
-                              {shortName(employeeName(id))}
-                            </span>
-                            <span className={roleTagClass(roleFor(id))}>{roleFor(id)}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
+                    {/* Не лише ті, хто стоїть на цьому обʼєкті: у бусі сидить
+                        людина, яку теж треба буває відправити пішки на сусідню
+                        точку, і поки її не було в списку, єдиним шляхом було
+                        «прибули самі» -- а це знімає доплату за виїзд. */}
+                    {(() => {
+                      const movable = [...plan.here, ...onboard.filter((id) => !plan.here.includes(id))];
+                      const stateOf = (id: string) =>
+                        onboard.includes(id)
+                          ? "🚐 в бусі"
+                          : plan.sessions.some((x) => x.employeeId === id && !x.endedAt)
+                            ? "⏱ працює"
+                            : "⏸ не працює";
+                      return (
+                        <>
+                          <div className="section-title row">
+                            <span>{moveMode === "walk" ? "Кого перевести" : "Кого виправити"}</span>
+                            <button
+                              className="chip chip-sm"
+                              onClick={() => setMoveSelected(moveSelected.length === movable.length ? [] : [...movable])}
+                            >
+                              {moveSelected.length === movable.length ? "✕ Зняти всіх" : "✓ Обрати всіх"}
+                            </button>
+                          </div>
+                          <div className="list">
+                            {movable.map((id) => {
+                              const checked = moveSelected.includes(id);
+                              return (
+                                <button
+                                  key={id}
+                                  className={`cell ${checked ? "selected" : ""}`}
+                                  onClick={() => setMoveSelected((prev) => (checked ? prev.filter((x) => x !== id) : [...prev, id]))}
+                                >
+                                  <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                    <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
+                                    {shortName(employeeName(id))}
+                                  </span>
+                                  <span className="cell-sub">{stateOf(id)}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </>
+                      );
+                    })()}
                     <div className="section-title">На який обʼєкт</div>
                     <div className="list">
                       {plans
