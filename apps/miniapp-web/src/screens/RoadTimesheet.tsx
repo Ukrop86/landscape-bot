@@ -5157,7 +5157,6 @@ export function RoadTimesheet({
                           disabled={!plan.here.length}
                         >
                           <span className="cell-title">🔄 Перемістити людей</span>
-                          <span className="cell-sub">виправлення помилки</span>
                         </button>
                       </div>
                     )}
