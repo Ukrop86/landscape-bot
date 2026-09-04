@@ -2784,6 +2784,7 @@ export function RoadTimesheet({
     moveEmployeesTo(moveSelected, { kind: "object", objectId: moveTargetId });
     setPlans((prev) =>
       prev.map((p) => {
+        if (p.objectId === moveTargetId) return { ...p, visited: true };
         if (p.objectId !== atObjectId) return p;
         const sessions = p.sessions.map((x) => (moving.has(x.employeeId) && !x.endedAt ? { ...x, endedAt: now } : x));
         return { ...p, sessions, works: stopFinishedWorks(p.works, sessions, nowMs) };
@@ -5123,8 +5124,12 @@ export function RoadTimesheet({
 
                 {/* Кожна дія -- окрема картка, але з маленьким проміжком: це
                     різні речі, не пункти одного списку, і водночас одна група,
-                    а не окремі розділи. */}
-                {!showDropPicker && !showMovePicker && !showManualHours && !errandMode && (
+                    а не окремі розділи.
+                    На зворотному шляху (atObjectReturnStep === "RETURN_PICKUP")
+                    цієї групи немає взагалі: висаджувати, додавати роботи чи
+                    переводити людей уже нікуди -- лишається подивитись, що
+                    зробили, завершити роботи й забрати людей. */}
+                {atObjectReturnStep !== "RETURN_PICKUP" && !showDropPicker && !showMovePicker && !showManualHours && !errandMode && (
                   <div className="action-stack">
                     <div className="list">
                       <button
@@ -5678,7 +5683,9 @@ export function RoadTimesheet({
 
                 <MainButton
                   text={
-                    atObjectReturnStep !== "DRIVE"
+                    atObjectReturnStep === "RETURN_PICKUP"
+                      ? "↩️ До повернення"
+                      : atObjectReturnStep !== "DRIVE"
                       ? "✅ Готово"
                       : nextUnvisited
                         ? "➡️ Продовжити маршрут"
@@ -5835,7 +5842,9 @@ export function RoadTimesheet({
                         </button>
                         {expanded && (
                           <div style={{ paddingBottom: 8 }}>
-                            {peopleHere > 0 && renderDepartureChoices(p, { allowBus: true, pauseForBus: true })}
+                            {/* Бус можна пропонувати лише там, де він стоїть:
+                                поки ми в дорозі, посадити нікого не можна. */}
+                            {peopleHere > 0 && renderDepartureChoices(p, { allowBus: carAtObjectId === p.objectId, pauseForBus: true })}
                             <div style={{ padding: "4px 16px 0" }}>
                               <div className="hint" style={{ fontWeight: 600 }}>🛠 Роботи</div>
                               <div className="hint">
@@ -5877,7 +5886,17 @@ export function RoadTimesheet({
                       // while, and that is not time on the road.
                       pauseDrivingSegment();
                       setCarAtObjectId(headingTo.objectId);
+                      // Заїхали -- отже тут були. Без цього обʼєкт, куди люди
+                      // дійшли пішки, лишався «ще не відвіданим» назавжди.
+                      setPlans((prev) => prev.map((x) => (x.objectId === headingTo.objectId ? { ...x, visited: true } : x)));
                       setHeadingToObjectId("");
+                      // Відкриваємо сам обʼєкт: зупинився -- подивився, що
+                      // роблять, завершив роботи, забрав людей. Той самий
+                      // екран, що й дорогою туди, лише без дій, яких на
+                      // зворотному шляху вже не буває.
+                      setAtObjectId(headingTo.objectId);
+                      setAtObjectReturnStep("RETURN_PICKUP");
+                      setStep("AT_OBJECT");
                       haptic("medium");
                     }}
                   />
