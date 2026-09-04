@@ -5758,6 +5758,15 @@ export function RoadTimesheet({
                         );
                         if (!ok) return;
                       }
+                      // Бус стоїть тут, і тут же стоять люди -- забирати їх
+                      // треба з цього ж екрана, а не зі списку обʼєктів.
+                      // Лишаємось на місці й лише перемикаємось у режим
+                      // повернення: той самий екран, що й після «Прибув» на
+                      // сусідньому обʼєкті.
+                      if (carPresent && plan.here.length > 0) {
+                        setAtObjectReturnStep("RETURN_PICKUP");
+                        return;
+                      }
                       setStep(stillOut.length ? "RETURN_PICKUP" : "RETURN");
                       return;
                     }
