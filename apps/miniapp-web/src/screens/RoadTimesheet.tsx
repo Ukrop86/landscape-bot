@@ -4871,9 +4871,9 @@ export function RoadTimesheet({
                       const elapsed = (w.workAccumulatedMs ?? 0) + (running ? now - new Date(w.workStartedAt as string).getTime() : 0);
                       const assigned = w.employeeIds ?? [];
                       return (
-                        <div key={w.workId} className="cell" style={{ cursor: "default" }}>
+                        <div key={w.workId} className="cell work-row" style={{ cursor: "default" }}>
                           <span className="cell-title">{w.workName}</span>
-                          <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+                          <span style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
                             {elapsed > 0 && <span className="hint">{fmtHMS(elapsed)}</span>}
                             <span title={assigned.length ? assigned.map(employeeName).join(", ") : "вся бригада"}>
                               {assigned.length ? "👤" : "👥"}

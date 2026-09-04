@@ -353,6 +353,31 @@ body {
   font-size: 13px;
 }
 
+/* Рядок роботи має триматись в одному рядку: назви робіт відрізняються
+   хвостом («…від 1000 до 1500м2»), тож перенос ховав саме те, що їх і
+   розрізняє. Дрібніший шрифт з обох боків, і місця вистачає. */
+.work-row {
+  flex-wrap: nowrap;
+  padding: 10px 16px;
+}
+
+.work-row .cell-title {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.work-row .hint {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.work-row .badge {
+  font-size: 11px;
+  padding: 2px 6px;
+}
+
 .chip {
   padding: 8px 14px;
   border-radius: 18px;
