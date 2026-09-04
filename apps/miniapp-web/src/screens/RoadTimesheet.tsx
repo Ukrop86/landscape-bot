@@ -4837,29 +4837,10 @@ export function RoadTimesheet({
                   <div className="empty-state">Роботи ще не розпочато</div>
                 )}
 
-                {/* Money: a work named to specific people is paid to them
-                    alone, and its value leaves the object's shared pool. The
-                    foreman has to see that BEFORE handing the same work to
-                    the whole crew -- otherwise the crew starts a job that
-                    pays them nothing. */}
-                {plan.works.some((w) => (w.employeeIds ?? []).length > 0) && (
-                  <div className="dedicated-note">
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>🛠 Закріплені роботи</div>
-                    <ul className="bullets">
-                      {plan.works
-                        .filter((w) => (w.employeeIds ?? []).length > 0)
-                        .map((w) => (
-                          <li key={w.workId}>
-                            {w.workName} — {(w.employeeIds ?? []).map((id) => shortName(employeeName(id))).join(", ")}
-                          </li>
-                        ))}
-                    </ul>
-                    <div className="hint" style={{ marginTop: 6 }}>
-                      Ці роботи оплачуються лише зазначеним людям, і в поділі решти робіт обʼєкта вони вже не
-                      беруть участі. Бригаді призначати їх не треба.
-                    </div>
-                  </div>
-                )}
+                {/* Жовтої картки «Закріплені роботи» тут більше немає: те саме
+                    видно рядком «🛠 окремо: …» у самої людини, і про це ще раз
+                    питає діалог перед стартом робіт бригаді. Три повторення
+                    одного факту займали пів екрана. */}
 
                 {renderObjectPhotos(plan)}
 

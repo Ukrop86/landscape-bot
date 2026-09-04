@@ -598,6 +598,25 @@ body {
   margin-top: 8px;
 }
 
+/* Дії мають виглядати як дії. Раніше кнопка й картка людини були однаковими
+   сірими прямокутниками, і на екрані не лишалось нічого, що відрізняло б
+   «натисни мене» від «подивись на мене». */
+.action-stack .cell-title {
+  color: var(--tg-link);
+}
+
+.action-stack .cell::after {
+  content: "›";
+  color: var(--tg-hint);
+  font-size: 22px;
+  line-height: 1;
+  margin-left: 10px;
+}
+
+.action-stack .cell:disabled .cell-title {
+  color: var(--tg-hint);
+}
+
 /* Імʼя людини на обʼєкті -- ще й кнопка розгортання її дій. */
 .person-toggle {
   border: none;
@@ -1208,17 +1227,6 @@ body {
   border: 1px solid var(--tg-border);
   font-size: 14px;
   line-height: 1;
-}
-
-/* "These works are already spoken for" notice on the object screen. Amber
-   rather than red: nothing is wrong, but it changes who gets paid, so it
-   must be read before the crew is started on the same work. */
-.dedicated-note {
-  margin: 8px 12px;
-  padding: 12px;
-  border-radius: 12px;
-  background: rgba(255, 159, 10, 0.12);
-  border: 1px solid rgba(255, 159, 10, 0.3);
 }
 
 /* Secondary actions attached to a row (a person at an object). Smaller than a
