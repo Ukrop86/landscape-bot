@@ -339,6 +339,20 @@ body {
   padding: 8px 12px;
 }
 
+/* Дві рівноцінні дії поруч, а не одна під одною: вони про одне й те саме
+   (як люди йдуть з обʼєкта), і читати їх треба разом. */
+.chip-row.split {
+  flex-wrap: nowrap;
+}
+
+.chip-row.split > .chip {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+  padding: 10px 8px;
+  font-size: 13px;
+}
+
 .chip {
   padding: 8px 14px;
   border-radius: 18px;

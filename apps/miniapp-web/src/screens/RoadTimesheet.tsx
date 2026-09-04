@@ -5077,43 +5077,37 @@ export function RoadTimesheet({
                         );
                       });
                     })()}
-                    {/* Дві дії в один рядок, і головна з них знімає обʼєкт
-                        так, як він реально закінчується: хто приїхав бусом --
-                        сідає в бус, хто приїхав сам -- їде своїм ходом. Раніше
-                        «посадити всіх» саджало в бус і тих, хто приїхав своєю
-                        машиною, а виправляти це доводилось по одному.
-                        Винятки лишились там, де й були: кнопки в картці
-                        людини, і «зняти» в неї означає саме «поїхав окремо». */}
+                    {/* Дві кнопки поруч, і кожна забирає СВОЇХ: у бус сідають
+                        ті, кого бус привіз, знімаються ті, хто приїхав сам.
+                        Одна кнопка «посадити всіх» саджала в бус і чужі машини
+                        теж, а розгрібати це доводилось по одному.
+                        Цифри рахуються з тих, хто зараз на обʼєкті, тож коли
+                        людину відправили окремо кнопкою в її картці, лічильник
+                        своєї групи зменшується сам. */}
                     {(() => {
                       const byBus = plan.here.filter((id) => !selfTransportIds.includes(id));
                       const onOwn = plan.here.filter((id) => selfTransportIds.includes(id));
-                      const finishAll = async () => {
-                        if (byBus.length) await pickUpHere(plan.objectId, byBus, false);
-                        if (onOwn.length) await leaveObjectOnOwn(plan.objectId, onOwn);
-                      };
+                      const ownStrands = strandsTheBus(plan.objectId, onOwn);
                       return (
-                        <>
-                          <div className="chip-row">
-                            {carPresent && (
-                              <button className="chip selected" onClick={finishAll} disabled={!byBus.length && !onOwn.length}>
-                                🚐 Посадити всіх у бус ({byBus.length})
-                              </button>
-                            )}
+                        <div className="chip-row split">
+                          {carPresent && (
                             <button
-                              className="chip"
-                              onClick={() => leaveObjectOnOwn(plan.objectId, plan.here)}
-                              disabled={strandsTheBus(plan.objectId, plan.here)}
-                              title={strandsTheBus(plan.objectId, plan.here) ? "Хтось має сісти за кермо — заберіть когось у бус" : ""}
+                              className="chip selected"
+                              onClick={() => pickUpHere(plan.objectId, byBus, false)}
+                              disabled={!byBus.length}
                             >
-                              🚶 Зняти всіх з обʼєкта ({plan.here.length})
+                              🚐 Посадити у бус ({byBus.length})
                             </button>
-                          </div>
-                          {carPresent && onOwn.length > 0 && (
-                            <div className="hint" style={{ padding: "0 16px 8px" }}>
-                              🚶 {nPeople(onOwn.length)} приїхали самі — вони поїдуть своїм ходом, у бус їх не саджаємо.
-                            </div>
                           )}
-                        </>
+                          <button
+                            className="chip"
+                            onClick={() => leaveObjectOnOwn(plan.objectId, onOwn)}
+                            disabled={!onOwn.length || ownStrands}
+                            title={ownStrands ? "Хтось має сісти за кермо — заберіть когось у бус" : ""}
+                          >
+                            🚶 Зняти з обʼєкта ({onOwn.length})
+                          </button>
+                        </div>
                       );
                     })()}
                   </>
