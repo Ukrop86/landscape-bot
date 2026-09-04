@@ -505,9 +505,12 @@ body {
   animation: drive-road 0.55s linear infinite;
 }
 
+/* Емодзі машини дивиться ЛІВОРУЧ, тож і їде вона ліворуч -- а земля під
+   нею через це має бігти праворуч. Спершу пунктир їхав в інший бік, і
+   машина виглядала так, ніби її тягне задом наперед. */
 @keyframes drive-road {
   to {
-    background-position-x: -28px;
+    background-position-x: 28px;
   }
 }
 
