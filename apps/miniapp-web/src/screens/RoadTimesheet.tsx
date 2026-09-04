@@ -2339,8 +2339,11 @@ export function RoadTimesheet({
     setDropSelected([]);
     setAddArrivedSelected([]);
     setAtObjectDetailsExpanded(false);
-    setArrivedPickerOpen(true);
-    setShowDropPicker(true);
+    // Відкриваємо сам обʼєкт, а не пікер людей поверх нього. Раніше звідси
+    // одразу вивалювався список прізвищ -- без обʼєкта на екрані й без
+    // решти його дій, і незрозуміло було, куди ти взагалі потрапив.
+    setArrivedPickerOpen(false);
+    setShowDropPicker(false);
     setStep("AT_OBJECT");
     haptic("selection");
   }
@@ -4536,7 +4539,14 @@ export function RoadTimesheet({
               // 🚗 -- саме туди зараз їдемо. Чоловічка, який позначав «люди вже
               // тут своїм ходом», прибрано: бейдж «👤 1/1» поруч каже це саме,
               // тільки точніше, а дві позначки про одне читались як різні речі.
-              const icon = headingTo?.objectId === p.objectId ? "🚗" : p.visited ? "✅" : "📍";
+              const icon =
+                headingTo?.objectId === p.objectId ? (
+                  "🚗"
+                ) : p.visited ? (
+                  <span className="obj-done">✓</span>
+                ) : (
+                  "📍"
+                );
               return (
                 <div className="list" key={p.objectId}>
                   <div className="cell-row">
@@ -4600,14 +4610,7 @@ export function RoadTimesheet({
           </div>
 
           {nextUnvisited && headingTo ? (
-            <>
-              <div className="hint" style={{ padding: "0 16px 8px", textAlign: "center" }}>
-                <button className="back-btn" onClick={() => setStep("ARRIVE_PICK")}>
-                  Прибули на інший обʼєкт?
-                </button>
-              </div>
-              <MainButton text={`📍 Прибув: ${headingTo.objectName}`} onClick={() => arriveAt(headingTo.objectId)} />
-            </>
+            <MainButton text={`📍 Прибув: ${headingTo.objectName}`} onClick={() => arriveAt(headingTo.objectId)} />
           ) : (
             <MainButton
               // Distinct label from the last-object "🏁 Повертатись на базу"

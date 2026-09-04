@@ -457,7 +457,8 @@ body {
 .drive-hero {
   display: flex;
   align-items: center;
-  gap: 14px;
+  justify-content: center;
+  gap: 18px;
   padding: 16px 16px 8px;
 }
 
@@ -517,9 +518,9 @@ body {
 }
 
 .drive-clock {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
-  text-align: right;
+  text-align: left;
 }
 
 .drive-state {
@@ -529,8 +530,24 @@ body {
 }
 
 .drive-clock .timer-big {
-  text-align: right;
+  text-align: left;
   padding: 2px 0 0;
+  font-size: 36px;
+}
+
+.obj-done {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(52, 199, 89, 0.16);
+  color: #34c759;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: -6px;
 }
 
 /* Кожен обʼєкт маршруту -- окрема картка, а не рядок у спільному списку. */
