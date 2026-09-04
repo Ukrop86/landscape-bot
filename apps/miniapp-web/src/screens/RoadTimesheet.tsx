@@ -2331,7 +2331,7 @@ export function RoadTimesheet({
   // Note: deliberately does NOT touch the driving clock. The car is still on
   // the road while this is open -- it is only being told that somebody made
   // their own way to the object ahead.
-  function openEarlySelfTransport(objectId: string) {
+  function openObjectMenu(objectId: string) {
     const target = plans.find((p) => p.objectId === objectId);
     if (!target) return;
     setAtObjectId(objectId);
@@ -3197,7 +3197,7 @@ export function RoadTimesheet({
       <div>
         <BackRow onBack={onBack} onHome={onBack} />
         <div className="header">
-          <h1>🚗 Дорожній табель</h1>
+          <h1>Дорожній табель</h1>
         </div>
         <div className="empty-state">Завантаження…</div>
       </div>
@@ -3223,7 +3223,7 @@ export function RoadTimesheet({
       <div>
         <BackRow onBack={onBack} onHome={onBack} onReset={hasTripInProgress ? resetTrip : undefined} />
         <div className="header">
-          <h1>🚗 Дорожній табель</h1>
+          <h1>Дорожній табель</h1>
           <div className="hint">{date}</div>
         </div>
 
@@ -3352,8 +3352,13 @@ export function RoadTimesheet({
         onHome={onBack}
         onReset={hasTripInProgress ? resetTrip : undefined}
       />
-      <div className="header">
-        <h1>🚗 Дорожній табель</h1>
+      {/* Заголовок і «редагувати поїздку» в один рядок: вони про одне й те
+          саме, а окремим рядком кнопка з'їдала висоту екрана без потреби. */}
+      <div className="header header-row">
+        <h1>Дорожній табель</h1>
+        {step === "DRIVE" && (
+          <button className="back-btn" onClick={() => setStep("HUB")}>✏️ Редагувати поїздку</button>
+        )}
       </div>
 
       {error && <div className="empty-state">⚠️ {error}</div>}
@@ -4428,17 +4433,11 @@ export function RoadTimesheet({
               </button>
             ))}
           </div>
-          <div style={{ padding: "8px 16px", textAlign: "center" }}>
-            <button className="back-btn" onClick={() => setStep("HUB")}>✏️ Редагувати поїздку</button>
-          </div>
         </>
       )}
 
       {step === "DRIVE" && (!nextUnvisited || headingTo) && (
         <>
-          <div style={{ padding: "8px 16px", textAlign: "right" }}>
-            <button className="back-btn" onClick={() => setStep("HUB")}>✏️ Редагувати поїздку</button>
-          </div>
           <div style={{ textAlign: "center" }}>
             <div className="step-badge">🚗 ПОЇЗДКА</div>
           </div>
@@ -4479,7 +4478,7 @@ export function RoadTimesheet({
                   setHeadingToObjectId("");
                 }}
               >
-                ✏️ їдемо в інше місце
+                🔀 їдемо в інше місце
               </button>
             </div>
           )}
@@ -4521,9 +4520,6 @@ export function RoadTimesheet({
             })()}
 
           <div className="section-title">Маршрут</div>
-          <div className="hint" style={{ padding: "0 16px 8px" }}>
-            🚶 біля обʼєкта — додати тих, хто вже приїхав туди своїм ходом, і почати їм роботи, поки ви ще в дорозі.
-          </div>
           <div className="route-stack">
             {plans.map((p) => {
               const expanded = expandedDriveObjectId === p.objectId;
@@ -4567,23 +4563,12 @@ export function RoadTimesheet({
                         )}
                       </span>
                     </button>
-                    {p.visited ? (
-                      <button
-                        className="cell-action"
-                        onClick={() => {
-                          setAtObjectId(p.objectId);
-                          setAtObjectReturnStep("DRIVE");
-                          setStep("AT_OBJECT");
-                        }}
-                        title="Редагувати"
-                      >
-                        ✏️
-                      </button>
-                    ) : (
-                      <button className="cell-action" onClick={() => openEarlySelfTransport(p.objectId)} title="Прибули свої (свій транспорт)">
-                        🚶
-                      </button>
-                    )}
+                    {/* Одна кнопка на обидва випадки: і відвіданий обʼєкт, і ще
+                        ні ведуть на той самий екран обʼєкта. Раніше тут стояли
+                        олівець і чоловічок -- дві різні картинки на одну дію. */}
+                    <button className="cell-action dots" onClick={() => openObjectMenu(p.objectId)} title="Меню обʼєкта">
+                      ⋯
+                    </button>
                   </div>
                   {expanded && (
                     <div style={{ padding: "4px 16px 12px" }}>
@@ -4607,6 +4592,14 @@ export function RoadTimesheet({
                 </div>
               );
             })}
+          </div>
+
+          {/* Позначки самі себе не пояснюють, а бригадир бачить цей екран
+              щодня -- один рядок дрібним шрифтом дешевший за здогадки. */}
+          <div className="route-legend">
+            <span><span className="obj-done">✓</span> були на обʼєкті</span>
+            <span>🚗 прямуємо</span>
+            <span>📍 ще не були</span>
           </div>
 
           {nextUnvisited && headingTo ? (

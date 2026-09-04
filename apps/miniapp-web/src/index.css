@@ -538,6 +538,41 @@ body {
   font-size: 36px;
 }
 
+/* Заголовок екрана й дія над поїздкою -- в один рядок. */
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.header-row h1 {
+  margin: 0;
+}
+
+/* Що означають позначки в маршруті. Дрібно, в один рядок, під списком. */
+.route-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  padding: 14px 16px 4px;
+  font-size: 13px;
+  color: var(--tg-hint);
+}
+
+.route-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.route-legend .obj-done {
+  width: 20px;
+  height: 20px;
+  font-size: 12px;
+  vertical-align: 0;
+}
+
 .obj-done {
   display: inline-flex;
   align-items: center;
@@ -742,6 +777,14 @@ body {
   padding: 0 16px;
   cursor: pointer;
   flex-shrink: 0;
+}
+
+/* Три крапки -- вхід у меню обʼєкта. Кольором посилання, бо сірий гліф
+   такої товщини на телефоні не читається як щось, на що можна натиснути. */
+.cell-row .cell-action.dots {
+  font-size: 24px;
+  line-height: 1;
+  color: var(--tg-link);
 }
 
 .suggestion-card {
