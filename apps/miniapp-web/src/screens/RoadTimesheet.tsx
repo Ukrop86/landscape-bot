@@ -2216,13 +2216,24 @@ export function RoadTimesheet({
   // second leg the same day). Only THIS trip having its own odoEnd already
   // set (either entered live, or restored by editTrip()) resumes at REVIEW;
   // otherwise it's still mid-route and belongs at RETURN.
+  // Стоянка на обʼєкті -- це не повернення. Правило нижче цього не розрізняло:
+  // усі обʼєкти відвідані + люди ще десь стоять означало "забираємо людей", і
+  // бригадир, який просто хотів повернутись до відкритої поїздки, потрапляв на
+  // екран повернення на базу. Гірше -- екран адміна від того показував бригаду
+  // як "повертаються", хоча вона щойно почала працювати.
+  //
+  // Тому спершу перевіряємо, чи машина стоїть там, де є люди: тоді
+  // повертатись треба на цей обʼєкт, а не в дорогу додому.
+  const carParkedWithCrew = carAtObjectId && plans.some((p) => p.objectId === carAtObjectId && p.here.length > 0);
   const tripResumeStep: Step = nextUnvisited
     ? "DRIVE"
-    : plans.some((p) => p.here.length > 0)
-      ? "RETURN_PICKUP"
-      : odoEnd
-        ? "REVIEW"
-        : "RETURN";
+    : carParkedWithCrew
+      ? "AT_OBJECT"
+      : plans.some((p) => p.here.length > 0)
+        ? "RETURN_PICKUP"
+        : odoEnd
+          ? "REVIEW"
+          : "RETURN";
 
   function arriveAt(objectId: string) {
     const target = plans.find((p) => p.objectId === objectId);
@@ -3551,7 +3562,18 @@ export function RoadTimesheet({
               disabled={!carId && !employeeIds.length && !plans.length}
             />
           ) : tripStartedAt ? (
-            <MainButton text="↩️ Повернутися до поїздки" onClick={() => setStep(tripResumeStep)} />
+            <MainButton
+              text="↩️ Повернутися до поїздки"
+              onClick={() => {
+                // AT_OBJECT малює конкретний обʼєкт, тож без цього повернення
+                // на нього дало б порожній екран.
+                if (tripResumeStep === "AT_OBJECT" && carAtObjectId) {
+                  setAtObjectId(carAtObjectId);
+                  setAtObjectReturnStep("DRIVE");
+                }
+                setStep(tripResumeStep);
+              }}
+            />
           ) : (
             <MainButton text="Далі → Перевірка перед виїздом" onClick={() => setStep("READY")} disabled={!readyToDepart} />
           )}
