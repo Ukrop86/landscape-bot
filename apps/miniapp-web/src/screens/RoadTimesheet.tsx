@@ -5289,8 +5289,21 @@ export function RoadTimesheet({
                             <span className="cell-title">
                               {isCurrent ? <span className="obj-here">➤</span> : "📍"} {p.objectName}
                             </span>
-                            <span className="badge">
-                              {isCurrent ? "ви тут" : p.here.length ? `${p.here.length} тут` : p.visited ? "відвідано" : "заплановано"}
+                            {/* Колір несе те саме, що й текст, тільки швидше:
+                                зелений -- ви тут, помаранчевий -- там ще стоять
+                                люди, синій -- туди ще їхати, сірий -- закрито. */}
+                            <span
+                              className={`badge ${
+                                isCurrent ? "ok" : p.here.length ? "warn" : p.visited ? "" : "info"
+                              }`}
+                            >
+                              {isCurrent
+                                ? "ви тут"
+                                : p.here.length
+                                  ? `👤 ${p.here.length} тут`
+                                  : p.visited
+                                    ? "відвідано"
+                                    : "заплановано"}
                             </span>
                           </button>
                         );
