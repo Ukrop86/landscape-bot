@@ -5165,13 +5165,12 @@ export function RoadTimesheet({
                         <span className="cell-sub">{nWorks(plan.works.length)}</span>
                       </button>
                     </div>
-                    {/* All three belong to a foreman standing at the object.
-                        Opened mid-drive, this screen exists only to register
-                        who got here on their own and start them working: the
-                        car is elsewhere, so it cannot leave on an errand, and
-                        nothing here is finished yet to need hours typed in or
-                        people moved on. */}
-                    {carPresent && (
+                    {/* Обидві дії НЕ залежать від того, де бус. Перехід пішки
+                        потрібен саме тоді, коли бус поїхав далі, а люди
+                        лишились на сусідній точці -- а кнопка ховалась рівно
+                        в цьому випадку. Пасажирів буса пропонуємо, лише коли
+                        він стоїть тут: вони належать тому обʼєкту, де машина. */}
+                    {plans.length > 1 && (
                       <div className="list">
                         <button
                           className="cell"
@@ -5181,14 +5180,14 @@ export function RoadTimesheet({
                             setMoveMode("walk");
                             setShowMovePicker(true);
                           }}
-                          disabled={(!plan.here.length && !onboard.length) || plans.length < 2}
+                          disabled={!plan.here.length && !(carPresent && onboard.length)}
                         >
                           <span className="cell-title">🚶 Перевести на інший обʼєкт</span>
                           <span className="cell-sub">пішки, поруч</span>
                         </button>
                       </div>
                     )}
-                    {carPresent && plans.length > 1 && (
+                    {plans.length > 1 && (
                       <div className="list">
                         <button
                           className="cell"
@@ -5198,7 +5197,7 @@ export function RoadTimesheet({
                             setMoveMode("fix");
                             setShowMovePicker(true);
                           }}
-                          disabled={!plan.here.length && !onboard.length}
+                          disabled={!plan.here.length && !(carPresent && onboard.length)}
                         >
                           <span className="cell-title">🔄 Не той обʼєкт — виправити</span>
                         </button>
@@ -5451,7 +5450,7 @@ export function RoadTimesheet({
                         точку, і поки її не було в списку, єдиним шляхом було
                         «прибули самі» -- а це знімає доплату за виїзд. */}
                     {(() => {
-                      const movable = [...plan.here, ...onboard.filter((id) => !plan.here.includes(id))];
+                      const movable = [...plan.here, ...(carPresent ? onboard.filter((id) => !plan.here.includes(id)) : [])];
                       const stateOf = (id: string) =>
                         onboard.includes(id)
                           ? "🚐 в бусі"
