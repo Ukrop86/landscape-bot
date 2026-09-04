@@ -464,6 +464,8 @@ export function RoadTimesheet({
   // Старт/Стоп; решта дій ховається, бо їх торкаються раз на день, а місце
   // на екрані вони їли в кожного.
   const [expandedPersonId, setExpandedPersonId] = useState<string | null>(null);
+  // Які групи людей на обʼєкті розгорнуті («окремі роботи» / «роботи бригади»).
+  const [openPeopleGroups, setOpenPeopleGroups] = useState<Record<string, boolean>>({});
   const [atObjectReturnStep, setAtObjectReturnStep] = useState<Step>("DRIVE");
   const [atObjectDetailsExpanded, setAtObjectDetailsExpanded] = useState(false);
   const [volumesReturnStep, setVolumesReturnStep] = useState<Step>("AT_OBJECT");
@@ -4928,8 +4930,13 @@ export function RoadTimesheet({
                         «▶️ Почати роботи» вмикає всіх одразу. «▶️ Старт» біля людини — тільки її (і її закріплені роботи).
                       </div>
                     )}
-                    <div className="list">
-                      {plan.here.map((id) => {
+                    {/* Дві групи замість одного довгого списку: у кого свої
+                        закріплені роботи, і хто працює на бригадних. На пʼятьох
+                        людях це різниця між екраном, який видно цілком, і
+                        стрічкою, яку треба гортати. Заголовок групи каже
+                        головне -- скільки людей працює і скільки робіт іде. */}
+                    {(() => {
+                      const renderPerson = (id: string) => {
                         const session = plan.sessions.find((s) => s.employeeId === id && !s.endedAt);
                         const running = !!session;
                         const closedMs = plan.sessions
@@ -5020,8 +5027,56 @@ export function RoadTimesheet({
                             )}
                           </div>
                         );
-                      })}
-                    </div>
+                      };
+                      const dedicatedWorks = plan.works.filter((w) => (w.employeeIds ?? []).length > 0);
+                      const crewWorks = plan.works.filter((w) => (w.employeeIds ?? []).length === 0);
+                      const dedicatedPeople = plan.here.filter((id) =>
+                        plan.works.some((w) => (w.employeeIds ?? []).includes(id)),
+                      );
+                      const crewPeople = plan.here.filter((id) => !dedicatedPeople.includes(id));
+                      const groups = [
+                        { key: "dedicated", title: "🛠 Окремі роботи", people: dedicatedPeople, works: dedicatedWorks },
+                        { key: "crew", title: "👥 Роботи бригади", people: crewPeople, works: crewWorks },
+                      ].filter((g) => g.people.length > 0 || g.works.length > 0);
+                      return groups.map((g) => {
+                        // Одна група -- нема чого ховати: розгорнута одразу.
+                        const open = openPeopleGroups[g.key] ?? groups.length === 1;
+                        const working = g.people.filter((id) =>
+                          plan.sessions.some((s) => s.employeeId === id && !s.endedAt),
+                        ).length;
+                        const going = g.works.filter((w) => !!w.workStartedAt).length;
+                        return (
+                          <div className="list" key={g.key} style={{ marginBottom: 8 }}>
+                            <button
+                              className="cell"
+                              onClick={() => setOpenPeopleGroups((prev) => ({ ...prev, [g.key]: !open }))}
+                            >
+                              <span className="cell-title" style={{ fontWeight: 600 }}>
+                                {open ? "▾" : "▸"} {g.title}
+                              </span>
+                              <span style={{ display: "flex", gap: 6 }}>
+                                {g.people.length > 0 && (
+                                  <span className={`badge ${working === 0 ? "" : working === g.people.length ? "ok" : "warn"}`}>
+                                    👤 {working}/{g.people.length}
+                                  </span>
+                                )}
+                                {g.works.length > 0 && (
+                                  <span className={`badge ${going === 0 ? "" : going === g.works.length ? "ok" : "warn"}`}>
+                                    🛠 {going}/{g.works.length}
+                                  </span>
+                                )}
+                              </span>
+                            </button>
+                            {open && g.people.map(renderPerson)}
+                            {open && g.people.length === 0 && (
+                              <div className="cell hint" style={{ cursor: "default" }}>
+                                нікого тут немає
+                              </div>
+                            )}
+                          </div>
+                        );
+                      });
+                    })()}
                     <div className="chip-row">
                       {carPresent && (
                         <button className="chip selected" onClick={() => pickUpHere(plan.objectId, plan.here, false)}>
@@ -5101,7 +5156,7 @@ export function RoadTimesheet({
                           }}
                           disabled={!plan.here.length}
                         >
-                          <span className="cell-title">🔄 Не той обʼєкт — перенести людей</span>
+                          <span className="cell-title">🔄 Перемістити людей</span>
                           <span className="cell-sub">виправлення помилки</span>
                         </button>
                       </div>
