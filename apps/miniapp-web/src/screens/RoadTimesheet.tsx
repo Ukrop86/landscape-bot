@@ -4402,35 +4402,6 @@ export function RoadTimesheet({
               })()}
             </div>
           )}
-
-          {/* Люди стоять на обʼєкті, а жодна робота не запущена — години їм
-              зараз не йдуть, і побачити це можна було тільки заглянувши в
-              картку обʼєкта. Саме так один день і простояв: бригада на місці,
-              бригадир на екрані «повертаємось», 🛠 0/8, годин нікому.
-              Тому кажемо це вголос і даємо кнопку прямо в обʼєкт. */}
-          {(() => {
-            const idle = plans.filter((p) => p.here.length > 0 && !p.sessions.some((s) => !s.endedAt));
-            if (!idle.length) return null;
-            return (
-              <div className="empty-state" style={{ textAlign: "left", color: "#d70015" }}>
-                ⚠️ <b>Роботи не розпочато</b> — годин цим людям зараз не нараховується.
-                {idle.map((p) => (
-                  <div key={p.objectId} style={{ marginTop: 8 }}>
-                    <button
-                      className="back-btn"
-                      onClick={() => {
-                        setAtObjectId(p.objectId);
-                        setAtObjectReturnStep("DRIVE");
-                        setStep("AT_OBJECT");
-                      }}
-                    >
-                      ▶️ {p.objectName} — {nPeople(p.here.length)}, почати роботи
-                    </button>
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
           {nextUnvisited && headingTo && (
             <div className="hint" style={{ textAlign: "center" }}>
               Прямуємо до 📍 {headingTo.objectName}{" "}
