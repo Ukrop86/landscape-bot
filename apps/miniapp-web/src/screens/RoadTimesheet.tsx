@@ -4467,10 +4467,15 @@ export function RoadTimesheet({
             </div>
           )}
           {nextUnvisited && headingTo && (
-            <div className="hint" style={{ textAlign: "center" }}>
-              Прямуємо до 📍 {headingTo.objectName}{" "}
+            <div className="hint drive-destination">Прямуємо до 📍 {headingTo.objectName}</div>
+          )}
+          {/* Дві дії поїздки -- обидві рідкісні, тож маленькі, приглушені й
+              під пунктом призначення, а не окремою секцією над маршрутом,
+              де вони важили більше за сам маршрут. */}
+          <div className="drive-actions">
+            {nextUnvisited && headingTo && (
               <button
-                className="back-btn"
+                className="chip chip-sm chip-ghost"
                 onClick={() => {
                   // Back to choosing: the clock pauses again until the new
                   // destination is picked, exactly as when leaving base.
@@ -4478,14 +4483,11 @@ export function RoadTimesheet({
                   setHeadingToObjectId("");
                 }}
               >
-                🔀 їдемо в інше місце
+                🔀 Зміна маршруту
               </button>
-            </div>
-          )}
-          <div className="section-title row">
-            <span>По дорозі</span>
-            <button className="chip" onClick={() => setShowRoadsideActions((v) => !v)}>
-              🚏 {showRoadsideActions ? "Сховати" : "Висадити/забрати по дорозі"}
+            )}
+            <button className="chip chip-sm chip-ghost" onClick={() => setShowRoadsideActions((v) => !v)}>
+              🚏 {showRoadsideActions ? "Сховати" : "Підібрати/висадити"}
             </button>
           </div>
 

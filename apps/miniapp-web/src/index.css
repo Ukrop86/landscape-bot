@@ -555,7 +555,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 16px;
-  padding: 14px 16px 4px;
+  padding: 32px 16px 4px;
   font-size: 13px;
   color: var(--tg-hint);
 }
@@ -571,6 +571,28 @@ body {
   height: 20px;
   font-size: 12px;
   vertical-align: 0;
+}
+
+/* Куди їдемо -- по центру, під годинником. */
+.drive-destination {
+  text-align: center;
+  padding: 4px 16px 0;
+}
+
+/* Рідкісні дії поїздки. Маленькі й приглушені: вони мають бути під рукою,
+   але не сперечатися за увагу з маршрутом і головною кнопкою. */
+.drive-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px 4px;
+}
+
+.chip-ghost {
+  background: none;
+  border-color: transparent;
+  color: var(--tg-hint);
 }
 
 .obj-done {
