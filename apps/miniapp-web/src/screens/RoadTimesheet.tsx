@@ -4527,9 +4527,13 @@ export function RoadTimesheet({
               const peopleTotal = peopleEverHere || p.here.length;
               const peopleHere = p.here.length;
               const peopleBadge = peopleTotal === 0 ? "" : peopleHere === 0 ? "danger" : peopleHere === peopleTotal ? "ok" : "warn";
+              // Тут рахуємо роботи, що ЙДУТЬ, а не ті, кому вписано обсяг.
+              // Обсяги вводять у кінці дня, тож посеред дня бейдж завжди був
+              // «0 з 3» і червоний -- поруч із «людина працює 35 хвилин» це
+              // читалось як «працює, а робіт нуль».
               const worksTotal = p.works.length;
-              const worksFilled = p.works.filter((w) => w.volume && w.volume !== "?").length;
-              const worksBadge = worksTotal === 0 ? "" : worksFilled === 0 ? "danger" : worksFilled === worksTotal ? "ok" : "warn";
+              const worksGoing = p.works.filter((w) => !!w.workStartedAt).length;
+              const worksBadge = worksTotal === 0 || worksGoing === 0 ? "" : worksGoing === worksTotal ? "ok" : "warn";
               const openSessions = p.sessions.filter((s) => !s.endedAt);
               const earliestOpenStart = openSessions.length ? Math.min(...openSessions.map((s) => new Date(s.startedAt).getTime())) : null;
               // 🚗 -- саме туди зараз їдемо. Чоловічка, який позначав «люди вже
@@ -4558,7 +4562,7 @@ export function RoadTimesheet({
                         )}
                         {worksTotal > 0 && (
                           <span className={`badge ${worksBadge}`}>
-                            🛠 {worksFilled}/{worksTotal}
+                            🛠 {worksGoing}/{worksTotal}
                           </span>
                         )}
                       </span>
@@ -4573,7 +4577,19 @@ export function RoadTimesheet({
                   {expanded && (
                     <div style={{ padding: "4px 16px 12px" }}>
                       <div className="hint" style={{ fontWeight: 600 }}>👥 Зараз тут</div>
-                      <div className="hint" style={{ marginBottom: 8 }}>{peopleHere ? p.here.map(employeeName).join(", ") : "нікого"}</div>
+                      {/* 🚐 привезли бусом, 🚶 приїхав своїм ходом -- ті самі
+                          позначки, що й на екрані обʼєкта. Різниця не
+                          косметична: хто приїхав сам, доплати за виїзд не
+                          отримує, тож сплутати їх коштує грошей. */}
+                      <div className="hint" style={{ marginBottom: 8 }}>
+                        {peopleHere
+                          ? p.here.map((id) => (
+                              <div key={id}>
+                                {selfTransportIds.includes(id) ? "🚶" : "🚐"} {employeeName(id)}
+                              </div>
+                            ))
+                          : "нікого"}
+                      </div>
                       {openSessions.length > 0 && (
                         <div className="hint" style={{ marginBottom: 8 }}>
                           ⏱ Роботи тривають {earliestOpenStart ? fmtHMS(now - earliestOpenStart) : ""}: {openSessions.map((s) => employeeName(s.employeeId)).join(", ")}
@@ -4600,6 +4616,8 @@ export function RoadTimesheet({
             <span><span className="obj-done">✓</span> були на обʼєкті</span>
             <span>🚗 прямуємо</span>
             <span>📍 ще не були</span>
+            <span>🚐 привезли бусом</span>
+            <span>🚶 приїхав сам</span>
           </div>
 
           {nextUnvisited && headingTo ? (
