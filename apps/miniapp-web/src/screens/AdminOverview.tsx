@@ -44,6 +44,27 @@ type Draft = {
   updatedAt: string;
 };
 
+/** Кроки табеля людською мовою: HUB нічого не каже навіть тому, хто це писав. */
+const STEP_NAMES: Record<string, string> = {
+  INDEX: "головна",
+  HUB: "збирає поїздку",
+  PICK_CAR: "вибирає авто",
+  ODO_START: "вводить одометр",
+  PICK_PEOPLE: "вибирає людей",
+  PICK_OBJECTS: "вибирає обʼєкти",
+  PLAN: "планує обʼєкт",
+  PLAN_WORKS: "заповнює роботи",
+  PLAN_VOLUMES: "заповнює обсяги",
+  READY: "готові до виїзду",
+  DRIVE: "у дорозі",
+  ARRIVE_PICK: "прибуття на обʼєкт",
+  AT_OBJECT: "на обʼєкті",
+  RETURN_PICKUP: "забирає людей",
+  RETURN: "повертається",
+  REVIEW: "підсумок дня",
+  DONE: "день зданий",
+};
+
 function clock(iso: string): string {
   return new Date(iso).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" });
 }
@@ -111,6 +132,10 @@ export function AdminOverview({ onBack }: { onBack: () => void }) {
     };
   }, [now]);
 
+  // Бригади, які вже показані як "у дорозі", у другому розділі зайві.
+  const activeForemen = new Set((data?.active ?? []).map((a) => String(a.foremanTgId)));
+  const pendingDrafts = drafts.filter((d) => !activeForemen.has(d.foremanTgId));
+
   const shiftDay = (delta: number) => {
     const d = new Date(`${date}T12:00:00`);
     d.setDate(d.getDate() + delta);
@@ -154,20 +179,22 @@ export function AdminOverview({ onBack }: { onBack: () => void }) {
                     <span className="cell-sub">👤 {shortName(t.foremanName)}</span>
                   </div>
 
-                  {/* The day as it happened, top to bottom. The departure comes
-                      from the car reservation, so there is always at least one
-                      point even before the phone has reported anything. */}
+                  {/* The day as it happened, top to bottom.
+                      The first point is when the car was taken, NOT a
+                      departure: a foreman can book the car the evening before
+                      and leave in the morning. Labelling it "виїхали" and
+                      pinning it to the top put it out of order against the
+                      real checkpoints and read as if the brigade had left
+                      twice. */}
                   <div className="trip-timeline">
-                    <div className="trip-point">
-                      <span className="trip-time">{clock(t.since)}</span>
-                      <span className="trip-label">🚗 виїхали</span>
-                    </div>
-                    {t.timeline.map((c, i) => (
-                      <div key={`${c.at}-${i}`} className="trip-point">
-                        <span className="trip-time">{clock(c.at)}</span>
-                        <span className="trip-label">{checkpointLabel(c)}</span>
-                      </div>
-                    ))}
+                    {[{ at: t.since, label: "🔑 взяли авто" }, ...t.timeline.map((c) => ({ at: c.at, label: checkpointLabel(c) }))]
+                      .sort((a, b) => a.at.localeCompare(b.at))
+                      .map((point, i) => (
+                        <div key={`${point.at}-${i}`} className="trip-point">
+                          <span className="trip-time">{clock(point.at)}</span>
+                          <span className="trip-label">{point.label}</span>
+                        </div>
+                      ))}
                   </div>
 
                   <div className="hint" style={{ marginTop: 6 }}>
@@ -185,11 +212,16 @@ export function AdminOverview({ onBack }: { onBack: () => void }) {
             </div>
           )}
 
-          <div className="section-title">Незавершені дні</div>
-          {drafts.length === 0 ? (
-            <div className="empty-state">Незавершених немає.</div>
+          {/* Тільки ті, кого НЕ видно вище. Бригада в дорозі -- це той самий
+              день, і показувати його двічі означає змусити читача щоразу
+              звіряти, чи це одна поїздка чи дві. Цінність цього розділу в
+              іншому: хто почав день і не виїхав, або повернувся і не здав
+              звіт -- саме вони раніше не було видно ніде. */}
+          <div className="section-title">Почали, але не здали</div>
+          {pendingDrafts.length === 0 ? (
+            <div className="empty-state">Таких немає.</div>
           ) : (
-            drafts.map((d) => (
+            pendingDrafts.map((d) => (
               <div key={d.foremanTgId} className="list" style={{ marginTop: 8 }}>
                 <div className="cell" style={{ cursor: "default" }}>
                   <span className="cell-title">👤 {shortName(d.foremanName)}</span>
@@ -203,7 +235,7 @@ export function AdminOverview({ onBack }: { onBack: () => void }) {
                 </div>
                 <div className="cell" style={{ cursor: "default", display: "block" }}>
                   <div className="cell-sub">
-                    {d.carName ? `🚙 ${d.carName}` : "авто не обрано"} · {d.step || "—"}
+                    {d.carName ? `🚙 ${d.carName}` : "авто не обрано"} · {STEP_NAMES[d.step] ?? d.step ?? "—"}
                     {d.tripStartedAt ? ` · виїхали ${clock(d.tripStartedAt)}` : " · ще не виїхали"}
                   </div>
                   {!!d.objectNames && <div className="cell-sub">📍 {d.objectNames}</div>}
