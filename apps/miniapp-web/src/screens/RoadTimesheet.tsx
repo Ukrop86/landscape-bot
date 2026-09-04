@@ -5077,21 +5077,45 @@ export function RoadTimesheet({
                         );
                       });
                     })()}
-                    <div className="chip-row">
-                      {carPresent && (
-                        <button className="chip selected" onClick={() => pickUpHere(plan.objectId, plan.here, false)}>
-                          🚐 Посадити всіх у бус ({plan.here.length})
-                        </button>
-                      )}
-                      <button
-                        className="chip"
-                        onClick={() => leaveObjectOnOwn(plan.objectId, plan.here)}
-                        disabled={strandsTheBus(plan.objectId, plan.here)}
-                        title={strandsTheBus(plan.objectId, plan.here) ? "Хтось має сісти за кермо — заберіть когось у бус" : ""}
-                      >
-                        🚶 Зняти всіх з обʼєкта ({plan.here.length})
-                      </button>
-                    </div>
+                    {/* Дві дії в один рядок, і головна з них знімає обʼєкт
+                        так, як він реально закінчується: хто приїхав бусом --
+                        сідає в бус, хто приїхав сам -- їде своїм ходом. Раніше
+                        «посадити всіх» саджало в бус і тих, хто приїхав своєю
+                        машиною, а виправляти це доводилось по одному.
+                        Винятки лишились там, де й були: кнопки в картці
+                        людини, і «зняти» в неї означає саме «поїхав окремо». */}
+                    {(() => {
+                      const byBus = plan.here.filter((id) => !selfTransportIds.includes(id));
+                      const onOwn = plan.here.filter((id) => selfTransportIds.includes(id));
+                      const finishAll = async () => {
+                        if (byBus.length) await pickUpHere(plan.objectId, byBus, false);
+                        if (onOwn.length) await leaveObjectOnOwn(plan.objectId, onOwn);
+                      };
+                      return (
+                        <>
+                          <div className="chip-row">
+                            {carPresent && (
+                              <button className="chip selected" onClick={finishAll} disabled={!byBus.length && !onOwn.length}>
+                                🚐 Посадити всіх у бус ({byBus.length})
+                              </button>
+                            )}
+                            <button
+                              className="chip"
+                              onClick={() => leaveObjectOnOwn(plan.objectId, plan.here)}
+                              disabled={strandsTheBus(plan.objectId, plan.here)}
+                              title={strandsTheBus(plan.objectId, plan.here) ? "Хтось має сісти за кермо — заберіть когось у бус" : ""}
+                            >
+                              🚶 Зняти всіх з обʼєкта ({plan.here.length})
+                            </button>
+                          </div>
+                          {carPresent && onOwn.length > 0 && (
+                            <div className="hint" style={{ padding: "0 16px 8px" }}>
+                              🚶 {nPeople(onOwn.length)} приїхали самі — вони поїдуть своїм ходом, у бус їх не саджаємо.
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </>
                 )}
 
