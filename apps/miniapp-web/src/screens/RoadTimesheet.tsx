@@ -757,6 +757,8 @@ export function RoadTimesheet({
   // that a car was taken. One effect on the transitions that matter rather
   // than calls scattered through the flow, and fire-and-forget: a failed
   // report is a stale admin screen, never a broken day.
+  // Що востаннє реально пішло на сервер: `${state}|${object}`.
+  const lastProgressRef = useRef("");
   const atObjectPlan = atObjectId ? plans.find((p) => p.objectId === atObjectId) : null;
   const headingName = headingToObjectId ? (plans.find((p) => p.objectId === headingToObjectId)?.objectName ?? "") : "";
   // Standing at an object is not one screen. The foreman opens the works
@@ -769,14 +771,23 @@ export function RoadTimesheet({
   // Work running anywhere beats whatever screen is open: it is a fact about
   // the brigade, not about the phone.
   const workingPlan = plans.find((p) => p.sessions.some((x) => !x.endedAt));
+  // Порядок тут вирішує все. Коментар вище каже, що відкрита робота б'є
+  // будь-який екран -- але перевірка екранів повернення стояла ПЕРШОЮ, тож
+  // бригадир, який дивився на екран повернення, поки бригада працює, давав
+  // то RETURNING (з екрана), то WORKING (з факту). Обидва по черзі проходили
+  // серверний захист «не писати те саме двічі» -- і стрічка адміна
+  // перетворювалась на «повертаються / почали роботи» по колу.
+  //
+  // Відкрита сесія тепер справді перемагає. Виняток один -- REVIEW: там день
+  // уже зданий на перевірку, і сесій там не буває.
   const progressState = !tripStartedAt
     ? ""
-    : step === "RETURN" || step === "RETURN_PICKUP"
-      ? "RETURNING"
-      : step === "REVIEW"
-        ? "AT_BASE"
-        : workingPlan
-          ? "WORKING"
+    : step === "REVIEW"
+      ? "AT_BASE"
+      : workingPlan
+        ? "WORKING"
+        : step === "RETURN" || step === "RETURN_PICKUP"
+          ? "RETURNING"
           : standingAtObject
             ? "AT_OBJECT"
             : "DRIVING";
@@ -798,6 +809,11 @@ export function RoadTimesheet({
     // passes through states nobody needs a dot for, and the admin's timeline
     // is meant to read as "where the brigade is", not as a tap log.
     const t = setTimeout(() => {
+      // Другий захист, поруч із серверним: застосунок перемальовується й
+      // перезапускається частіше, ніж бригада кудись рухається.
+      const stamp = `${progressState}|${progressObject}`;
+      if (stamp === lastProgressRef.current) return;
+      lastProgressRef.current = stamp;
       api
         .post("/api/road-timesheet/progress", {
           date,
@@ -805,7 +821,10 @@ export function RoadTimesheet({
           objectName: progressObject,
           peopleCount: employeeIds.length,
         })
-        .catch(() => {});
+        .catch(() => {
+          // Не дійшло -- нехай наступна зміна спробує ще раз.
+          lastProgressRef.current = "";
+        });
     }, 5000);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
