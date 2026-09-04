@@ -613,6 +613,12 @@ body {
   color: var(--tg-hint);
 }
 
+/* Обʼєкт, на якому бригадир стоїть просто зараз. */
+.obj-here {
+  color: #34c759;
+  font-weight: 700;
+}
+
 .obj-done {
   display: inline-flex;
   align-items: center;

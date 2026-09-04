@@ -5075,8 +5075,8 @@ export function RoadTimesheet({
                           setShowDropPicker(true);
                         }}
                       >
-                        <span className="cell-title">{carPresent ? "🚐 Висадити людей" : "🚶 Додати тих, хто приїхав сам"}</span>
-                        <span className="cell-sub">{carPresent ? `${onboard.length} в машині` : "машина ще в дорозі"}</span>
+                        <span className="cell-title">{carPresent ? "🚐 Висадити людей" : "🚶 Прибули самі"}</span>
+                        {carPresent && <span className="cell-sub">{onboard.length} в машині</span>}
                       </button>
                     </div>
                     {/* Once work is underway, "start the rest" lives next to
@@ -5169,18 +5169,30 @@ export function RoadTimesheet({
                   </div>
                 )}
 
+                {/* Увесь маршрут, а не лише «інші»: список, з якого зник той
+                    обʼєкт, на якому стоїш, змушував тримати в голові, скільки
+                    їх усього. Поточний позначено зеленою стрілкою. */}
                 {plans.length > 1 && !showDropPicker && !showMovePicker && !showManualHours && !errandMode && (
                   <>
-                    <div className="section-title">Інші обʼєкти — переключитись</div>
+                    <div className="section-title">Обʼєкти поїздки</div>
                     <div className="list">
-                      {plans
-                        .filter((p) => p.objectId !== atObjectId)
-                        .map((p) => (
-                          <button key={p.objectId} className="cell" onClick={() => switchAtObject(p.objectId)}>
-                            <span className="cell-title">📍 {p.objectName}</span>
-                            <span className="badge">{p.here.length ? `${p.here.length} тут` : p.visited ? "відвідано" : "заплановано"}</span>
+                      {plans.map((p) => {
+                        const isCurrent = p.objectId === atObjectId;
+                        return (
+                          <button
+                            key={p.objectId}
+                            className={`cell ${isCurrent ? "selected" : ""}`}
+                            onClick={() => !isCurrent && switchAtObject(p.objectId)}
+                          >
+                            <span className="cell-title">
+                              {isCurrent ? <span className="obj-here">➤</span> : "📍"} {p.objectName}
+                            </span>
+                            <span className="badge">
+                              {isCurrent ? "ви тут" : p.here.length ? `${p.here.length} тут` : p.visited ? "відвідано" : "заплановано"}
+                            </span>
                           </button>
-                        ))}
+                        );
+                      })}
                     </div>
                   </>
                 )}
@@ -5568,9 +5580,6 @@ export function RoadTimesheet({
                   </>
                 )}
 
-                <div className="hint" style={{ padding: "0 16px 8px", textAlign: "center" }}>
-                  Можна їхати далі з тими, хто залишився в машині — робота тут триватиме без вас.
-                </div>
                 <MainButton
                   text={
                     atObjectReturnStep !== "DRIVE"
