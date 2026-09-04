@@ -4439,12 +4439,20 @@ export function RoadTimesheet({
           <div style={{ textAlign: "center" }}>
             <div className="step-badge">🚗 ПОЇЗДКА</div>
           </div>
-          <div className="pulse-icon">🚗</div>
-          <div className="section-title" style={{ textAlign: "center" }}>{nextUnvisited ? "В ДОРОЗІ" : "ПОВЕРТАЄМОСЬ"}</div>
-          <div className="timer-big">
-            {fmtHMS(drivingAccumulatedMs + (drivingSegmentStartedAt ? now - new Date(drivingSegmentStartedAt).getTime() : 0))}
+          {/* Машина ліворуч, годинник праворуч. Дорога під колесами біжить,
+              поки сегмент іде, і завмирає, коли бус стоїть — видно з одного
+              погляду, чи час зараз рахується, без жодного підпису. */}
+          <div className="drive-hero">
+            <div className={`drive-road ${drivingSegmentStartedAt ? "moving" : ""}`}>
+              <span className="drive-car">🚗</span>
+            </div>
+            <div className="drive-clock">
+              <div className="drive-state">{nextUnvisited ? "В ДОРОЗІ" : "ПОВЕРТАЄМОСЬ"}</div>
+              <div className="timer-big">
+                {fmtHMS(drivingAccumulatedMs + (drivingSegmentStartedAt ? now - new Date(drivingSegmentStartedAt).getTime() : 0))}
+              </div>
+            </div>
           </div>
-          <div className="hint" style={{ textAlign: "center" }}>лише час у дорозі — на об'єктах не рахується</div>
           {!nextUnvisited && (
             <div className="hint" style={{ textAlign: "center" }}>
               Усі обʼєкти відвідано — час повертатись на базу
@@ -4513,7 +4521,7 @@ export function RoadTimesheet({
           <div className="hint" style={{ padding: "0 16px 8px" }}>
             🚶 біля обʼєкта — додати тих, хто вже приїхав туди своїм ходом, і почати їм роботи, поки ви ще в дорозі.
           </div>
-          <div className="list">
+          <div className="route-stack">
             {plans.map((p) => {
               const expanded = expandedDriveObjectId === p.objectId;
               const peopleEverHere = new Set(p.sessions.map((s) => s.employeeId)).size;
@@ -4525,11 +4533,12 @@ export function RoadTimesheet({
               const worksBadge = worksTotal === 0 ? "" : worksFilled === 0 ? "danger" : worksFilled === worksTotal ? "ok" : "warn";
               const openSessions = p.sessions.filter((s) => !s.endedAt);
               const earliestOpenStart = openSessions.length ? Math.min(...openSessions.map((s) => new Date(s.startedAt).getTime())) : null;
-              // 🚶 = the car hasn't arrived yet, but people who came under
-              // their own transport are already here (and maybe working).
-              const icon = p.visited ? "✅" : peopleHere > 0 ? "🚶" : "📍";
+              // 🚗 -- саме туди зараз їдемо. Чоловічка, який позначав «люди вже
+              // тут своїм ходом», прибрано: бейдж «👤 1/1» поруч каже це саме,
+              // тільки точніше, а дві позначки про одне читались як різні речі.
+              const icon = headingTo?.objectId === p.objectId ? "🚗" : p.visited ? "✅" : "📍";
               return (
-                <div key={p.objectId}>
+                <div className="list" key={p.objectId}>
                   <div className="cell-row">
                     <button className="cell" onClick={() => setExpandedDriveObjectId(expanded ? null : p.objectId)}>
                       <span className="cell-title">

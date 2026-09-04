@@ -450,6 +450,104 @@ body {
   padding: 8px;
 }
 
+/* Екран поїздки: машина ліворуч, годинник праворуч.
+   Дорога під колесами рухається, поки йде сегмент, і стоїть, коли бус
+   припаркований -- це той самий факт, що й цифри, тільки видно його
+   боковим зором, не читаючи. */
+.drive-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 16px 8px;
+}
+
+.drive-road {
+  position: relative;
+  flex: 0 0 auto;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  background: rgba(0, 122, 255, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.drive-car {
+  font-size: 40px;
+  line-height: 1;
+  transform: translateY(-6px);
+}
+
+.drive-road.moving .drive-car {
+  animation: drive-bob 1.1s ease-in-out infinite;
+}
+
+/* Смуга дороги. Пунктир зроблено фоном, а не елементами: рухати
+   background-position дешевше, ніж перемальовувати вузли. */
+.drive-road::after {
+  content: "";
+  position: absolute;
+  left: -24px;
+  right: -24px;
+  bottom: 26px;
+  height: 3px;
+  border-radius: 2px;
+  background-image: linear-gradient(to right, currentColor 0 14px, transparent 14px 28px);
+  background-size: 28px 3px;
+  background-repeat: repeat-x;
+  opacity: 0.28;
+}
+
+.drive-road.moving::after {
+  animation: drive-road 0.55s linear infinite;
+}
+
+@keyframes drive-road {
+  to {
+    background-position-x: -28px;
+  }
+}
+
+@keyframes drive-bob {
+  50% {
+    transform: translateY(-9px);
+  }
+}
+
+.drive-clock {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+}
+
+.drive-state {
+  font-size: 13px;
+  letter-spacing: 1px;
+  opacity: 0.55;
+}
+
+.drive-clock .timer-big {
+  text-align: right;
+  padding: 2px 0 0;
+}
+
+/* Кожен обʼєкт маршруту -- окрема картка, а не рядок у спільному списку. */
+.route-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Рух -- підказка, а не самоціль: кому він заважає, той його не побачить. */
+@media (prefers-reduced-motion: reduce) {
+  .drive-road.moving .drive-car,
+  .drive-road.moving::after {
+    animation: none;
+  }
+}
+
 .pulse-icon {
   width: 96px;
   height: 96px;
