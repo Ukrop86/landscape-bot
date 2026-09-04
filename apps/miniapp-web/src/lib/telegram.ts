@@ -70,12 +70,38 @@ export function getInitDataUser(): WebAppUser | null {
 // Native Telegram confirm dialog when available; some Telegram WebViews
 // silently block window.confirm (the tap just does nothing), so prefer the
 // SDK's own dialog and fall back to window.confirm for plain-browser dev.
+/**
+ * Telegram відхиляє попап, довший за свої ліміти (256 символів на текст, 64 на
+ * заголовок), помилкою WebAppPopupParamInvalid — і вона летить із самого
+ * виклику, тобто діалог не зʼявляється взагалі, а дія мовчки не відбувається.
+ *
+ * Так і сталося: бригадир 13 разів поспіль натиснув «Зняти всіх з обʼєкта»,
+ * і щоразу нічого. У повідомленні перелічувались пʼятеро повними ПІБ — разом
+ * далеко за 256.
+ *
+ * Тому кожен діалог тепер: обрізає текст до ліміту і, якщо Telegram усе одно
+ * відмовив, показує звичайний браузерний діалог. Питання, задане негарно,
+ * незрівнянно краще за питання, яке не поставили.
+ */
+const MAX_MESSAGE = 250;
+const MAX_TITLE = 60;
+
+function clamp(text: string, max: number): string {
+  const value = String(text ?? "").trim();
+  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+}
+
 export function confirmDialog(message: string): Promise<boolean> {
   const webApp = getWebApp();
+  const text = clamp(message, MAX_MESSAGE);
   if (webApp?.showConfirm) {
-    return new Promise((resolve) => webApp.showConfirm!(message, resolve));
+    try {
+      return new Promise((resolve) => webApp.showConfirm!(text, resolve));
+    } catch {
+      // Впав -- питаємо браузерним діалогом, аби питання таки прозвучало.
+    }
   }
-  return Promise.resolve(window.confirm(message));
+  return Promise.resolve(window.confirm(text));
 }
 
 /**
@@ -86,15 +112,24 @@ export function confirmDialog(message: string): Promise<boolean> {
  */
 export function alertDialog(message: string): Promise<void> {
   const webApp = getWebApp();
+  const text = clamp(message, MAX_MESSAGE);
   if (webApp?.showAlert) {
-    return new Promise((resolve) => webApp.showAlert!(message, () => resolve()));
+    try {
+      return new Promise((resolve) => webApp.showAlert!(text, () => resolve()));
+    } catch {
+      // нижче
+    }
   }
   if (webApp?.showPopup) {
-    return new Promise((resolve) =>
-      webApp.showPopup!({ message, buttons: [{ id: "ok", type: "default", text: "Зрозуміло" }] }, () => resolve()),
-    );
+    try {
+      return new Promise((resolve) =>
+        webApp.showPopup!({ message: text, buttons: [{ id: "ok", type: "default", text: "Зрозуміло" }] }, () => resolve()),
+      );
+    } catch {
+      // нижче
+    }
   }
-  window.alert(message);
+  window.alert(text);
   return Promise.resolve();
 }
 
@@ -109,12 +144,14 @@ export function alertDialog(message: string): Promise<void> {
  */
 export function askDialog(message: string, yes = "Так", no = "Ні", title?: string): Promise<boolean> {
   const webApp = getWebApp();
+  const text = clamp(message, MAX_MESSAGE);
   if (webApp?.showPopup) {
-    return new Promise((resolve) =>
+    try {
+      return new Promise((resolve) =>
       webApp.showPopup!(
         {
-          ...(title ? { title } : {}),
-          message,
+          ...(title ? { title: clamp(title, MAX_TITLE) } : {}),
+          message: text,
           // BOTH buttons are type "default" on purpose. Telegram renders a
           // "cancel" button with its own localised label ("Скасувати") and
           // throws the given text away -- which turned a Так/Ні question into
@@ -129,8 +166,11 @@ export function askDialog(message: string, yes = "Так", no = "Ні", title?: 
         (buttonId) => resolve(buttonId === "yes"),
       ),
     );
+    } catch {
+      // Telegram відмовив -- питання все одно має прозвучати.
+    }
   }
-  return confirmDialog(message);
+  return confirmDialog(text);
 }
 
 // Small tactile feedback on toggles/confirmations -- no-ops outside Telegram

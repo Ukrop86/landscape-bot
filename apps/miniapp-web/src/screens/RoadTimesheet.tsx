@@ -2321,9 +2321,14 @@ export function RoadTimesheet({
     const unstarted = neverStartedHere(objectId, ids);
     if (!unstarted.length) return true;
     const objectName = planFor(objectId).objectName;
+    // Коротко і з обмеженням: повний перелік ПІБ пʼятьох людей переступав
+    // ліміт попапа в Telegram, і діалог не показувався взагалі -- кнопка
+    // мовчки не спрацьовувала (див. clamp у lib/telegram.ts).
+    const shown = unstarted.slice(0, 3).map((id) => shortName(employeeName(id))).join(", ");
+    const rest = unstarted.length > 3 ? ` та ще ${unstarted.length - 3}` : "";
     return confirmDialog(
-      `На об'єкті «${objectName}» не розпочато роботи: ${unstarted.map(employeeName).join(", ")}.\n\n` +
-        `Якщо забрати без нарахування — за цей об'єкт вони нічого не отримають. Ви бажаєте продовжити?`,
+      `«${objectName}»: не розпочато роботи — ${shown}${rest}.\n\n` +
+        `Якщо забрати без нарахування, за цей обʼєкт вони нічого не отримають. Продовжити?`,
     );
   }
 
