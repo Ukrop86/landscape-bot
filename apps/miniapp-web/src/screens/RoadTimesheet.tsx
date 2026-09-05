@@ -2827,15 +2827,16 @@ export function RoadTimesheet({
     setPlans((prev) =>
       prev.map((p) => {
         if (p.objectId === atObjectId) {
-          return {
-            ...p,
-            sessions: p.sessions.filter((s) => !moving.has(s.employeeId)),
-            works: p.works.map((w) =>
-              (w.employeeIds ?? []).some((id) => moving.has(id))
-                ? { ...w, employeeIds: (w.employeeIds ?? []).filter((id) => !moving.has(id)) }
-                : w,
-            ),
-          };
+          const sessions = p.sessions.filter((s) => !moving.has(s.employeeId));
+          const works = p.works.map((w) =>
+            (w.employeeIds ?? []).some((id) => moving.has(id))
+              ? { ...w, employeeIds: (w.employeeIds ?? []).filter((id) => !moving.has(id)) }
+              : w,
+          );
+          // Те саме правило, що й скрізь: робота йде, поки над нею є відкрита
+          // сесія. Без цього робота людини, якої тут «ніколи не було»,
+          // лишалась із живим годинником.
+          return { ...p, sessions, works: stopFinishedWorks(works, sessions, Date.now()) };
         }
         if (p.objectId === moveTargetId) {
           // The crew already at the target defines the window. If nobody has
