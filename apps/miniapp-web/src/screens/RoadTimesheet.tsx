@@ -479,6 +479,18 @@ export function RoadTimesheet({
   // обʼєкт: години лишаються тут, там починається нова робота. "fix" -- її
   // тут узагалі не було, це виправлення помилки.
   const [moveMode, setMoveMode] = useState<"walk" | "fix">("walk");
+  // Додавання людини на обʼєкт посеред дня. `arrival` -- як вона тут
+  // опинилась: бусом (іде в поділ доплати за виїзд) чи своїм ходом (не йде).
+  // Досі це питання ніхто не ставив -- єдиний шлях додати людину мовчки
+  // позначав її «приїхав сам» і забирав доплату.
+  const [showAddPersonPicker, setShowAddPersonPicker] = useState(false);
+  const [addPersonSelected, setAddPersonSelected] = useState<string[]>([]);
+  const [addPersonArrival, setAddPersonArrival] = useState<"bus" | "own">("bus");
+  const [addPersonSearch, setAddPersonSearch] = useState("");
+  const [expandedAddBrigadeId, setExpandedAddBrigadeId] = useState<string | null>(null);
+  // Меню «Редагувати людей» на екрані обʼєкта -- згорнуте, бо всі три дії
+  // всередині трапляються рідко, а місце вгорі їли постійно.
+  const [peopleMenuOpen, setPeopleMenuOpen] = useState(false);
   // Manual hours fallback: if the foreman forgot to start the timer for
   // someone, they can type the worked hours in directly here. showManualHours
   // opens the per-person list; manualHoursEmployeeId + manualHoursBuffer drive
@@ -2816,6 +2828,62 @@ export function RoadTimesheet({
     setShowMovePicker(false);
   }
 
+  /**
+   * Додати людину на обʼєкт посеред дня.
+   *
+   * Випадок, заради якого це є: бригадир забув когось внести, роботи вже
+   * годину йдуть, а людина працює з бригадою від самого ранку. Досі це
+   * робилось через «прибули самі» -- і мовчки коштувало людині доплати за
+   * виїзд, бо та кнопка ставить прапорець self-transport.
+   *
+   * Тому питаємо прямо, як вона тут опинилась, і даємо їй ГОДИНИ БРИГАДИ:
+   * сесія від найранішого старту на цьому обʼєкті, відкрита, поки бригада
+   * працює. Не з моменту додавання -- інакше людина, яка працює з 08:00,
+   * втрачала б усе до тієї хвилини, коли її помітили.
+   *
+   * Якщо бригада ще не починала, сесії немає: людина просто стоїть і піде в
+   * роботу разом з усіма.
+   */
+  async function confirmAddPeople() {
+    if (!atObjectId || !addPersonSelected.length) return;
+    const ids = [...addPersonSelected];
+    const objectName = currentAtPlan()?.objectName ?? "";
+    const mergedEmployeeIds = [...new Set([...employeeIds, ...ids])];
+    try {
+      await api.post("/api/road-timesheet/reserve", { date, carId, employeeIds: mergedEmployeeIds });
+    } catch (e) {
+      setError((e as Error).message);
+      haptic("error");
+      return;
+    }
+    setEmployeeIds(mergedEmployeeIds);
+    setSelfTransportIds((prev) =>
+      addPersonArrival === "own" ? [...new Set([...prev, ...ids])] : prev.filter((x) => !ids.includes(x)),
+    );
+    moveEmployeesTo(ids, { kind: "object", objectId: atObjectId });
+    setPlans((prev) =>
+      prev.map((p) => {
+        if (p.objectId !== atObjectId) return p;
+        const crew = p.sessions.filter((x) => !ids.includes(x.employeeId));
+        if (!crew.length) return { ...p, sessions: crew };
+        const startedAt = new Date(Math.min(...crew.map((x) => new Date(x.startedAt).getTime()))).toISOString();
+        const stillWorking = crew.some((x) => !x.endedAt);
+        const endedAt = stillWorking
+          ? undefined
+          : new Date(Math.max(...crew.map((x) => new Date(x.endedAt as string).getTime()))).toISOString();
+        const joined = ids.map((employeeId) => ({ employeeId, startedAt, ...(endedAt ? { endedAt } : {}) }));
+        return { ...p, sessions: [...crew, ...joined] };
+      }),
+    );
+    logChange(
+      `${objectName}: додано ${ids.map(employeeName).join(", ")} ` +
+        `(${addPersonArrival === "own" ? "приїхали самі" : "привезли бусом"}, години бригади)`,
+    );
+    haptic("success");
+    setAddPersonSelected([]);
+    setShowAddPersonPicker(false);
+  }
+
   function confirmMove() {
     if (!atObjectId || !moveTargetId || !moveSelected.length) return;
     if (moveMode === "walk") return walkToObject();
@@ -3129,6 +3197,11 @@ export function RoadTimesheet({
         setMoveSelected([]);
         setMoveTargetId(null);
         setShowMovePicker(false);
+        return;
+      }
+      if (showAddPersonPicker) {
+        setAddPersonSelected([]);
+        setShowAddPersonPicker(false);
         return;
       }
       if (showManualHours) {
@@ -4951,7 +5024,7 @@ export function RoadTimesheet({
                     orders, with half the actions in each -- and neither said
                     how someone got here, which is what decides whether the
                     bus is even an option for them. */}
-                {plan.here.length > 0 && !showDropPicker && !showMovePicker && !showManualHours && !errandMode && (
+                {plan.here.length > 0 && !showDropPicker && !showMovePicker && !showAddPersonPicker && !showManualHours && !errandMode && (
                   <>
                     <div className="section-title">Люди на обʼєкті</div>
                     {!worksRunning && plan.here.length > 0 && (
@@ -5149,7 +5222,7 @@ export function RoadTimesheet({
                     цієї групи немає взагалі: висаджувати, додавати роботи чи
                     переводити людей уже нікуди -- лишається подивитись, що
                     зробили, завершити роботи й забрати людей. */}
-                {atObjectReturnStep !== "RETURN_PICKUP" && !showDropPicker && !showMovePicker && !showManualHours && !errandMode && (
+                {atObjectReturnStep !== "RETURN_PICKUP" && !showDropPicker && !showMovePicker && !showAddPersonPicker && !showManualHours && !errandMode && (
                   <div className="action-stack">
                     <div className="list">
                       <button
@@ -5190,44 +5263,64 @@ export function RoadTimesheet({
                         <span className="cell-sub">{nWorks(plan.works.length)}</span>
                       </button>
                     </div>
-                    {/* Обидві дії НЕ залежать від того, де бус. Перехід пішки
-                        потрібен саме тоді, коли бус поїхав далі, а люди
-                        лишились на сусідній точці -- а кнопка ховалась рівно
-                        в цьому випадку. Пасажирів буса пропонуємо, лише коли
+                    {/* Три дії про склад людей, згорнуті в одне меню: кожна
+                        трапляється кілька разів на день, а місце вгорі екрана
+                        вони їли постійно. Дві з них не залежать від того, де
+                        бус -- перехід пішки потрібен саме тоді, коли бус
+                        поїхав далі. Пасажирів буса пікер пропонує, лише коли
                         він стоїть тут: вони належать тому обʼєкту, де машина. */}
-                    {plans.length > 1 && (
-                      <div className="list">
-                        <button
-                          className="cell"
-                          onClick={() => {
-                            setMoveSelected([]);
-                            setMoveTargetId(null);
-                            setMoveMode("walk");
-                            setShowMovePicker(true);
-                          }}
-                          disabled={!plan.here.length && !(carPresent && onboard.length)}
-                        >
-                          <span className="cell-title">🚶 Перевести на інший обʼєкт</span>
-                          <span className="cell-sub">пішки, поруч</span>
-                        </button>
-                      </div>
-                    )}
-                    {plans.length > 1 && (
-                      <div className="list">
-                        <button
-                          className="cell"
-                          onClick={() => {
-                            setMoveSelected([]);
-                            setMoveTargetId(null);
-                            setMoveMode("fix");
-                            setShowMovePicker(true);
-                          }}
-                          disabled={!plan.here.length && !(carPresent && onboard.length)}
-                        >
-                          <span className="cell-title">🔄 Не той обʼєкт — виправити</span>
-                        </button>
-                      </div>
-                    )}
+                    <div className="list">
+                      <button className="cell" onClick={() => setPeopleMenuOpen((v) => !v)}>
+                        <span className="cell-title">
+                          {peopleMenuOpen ? "▾" : "▸"} 👥 Редагувати людей
+                        </span>
+                      </button>
+                      {peopleMenuOpen && (
+                        <>
+                          <button
+                            className="cell"
+                            onClick={() => {
+                              setAddPersonSelected([]);
+                              setAddPersonArrival("bus");
+                              setAddPersonSearch("");
+                              setShowAddPersonPicker(true);
+                            }}
+                          >
+                            <span className="cell-title">➕ Додати людину</span>
+                            <span className="cell-sub">з годинами бригади</span>
+                          </button>
+                          {plans.length > 1 && (
+                            <button
+                              className="cell"
+                              onClick={() => {
+                                setMoveSelected([]);
+                                setMoveTargetId(null);
+                                setMoveMode("walk");
+                                setShowMovePicker(true);
+                              }}
+                              disabled={!plan.here.length && !(carPresent && onboard.length)}
+                            >
+                              <span className="cell-title">🚶 Перевести на інший обʼєкт</span>
+                              <span className="cell-sub">пішки, поруч</span>
+                            </button>
+                          )}
+                          {plans.length > 1 && (
+                            <button
+                              className="cell"
+                              onClick={() => {
+                                setMoveSelected([]);
+                                setMoveTargetId(null);
+                                setMoveMode("fix");
+                                setShowMovePicker(true);
+                              }}
+                              disabled={!plan.here.length && !(carPresent && onboard.length)}
+                            >
+                              <span className="cell-title">🔄 Не той обʼєкт — виправити</span>
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
                     {/* No manual-hours entry here on purpose: hours get
                         corrected on the way back, once the work is finished
                         and it is clear whose timer never ran. The editor
@@ -5253,7 +5346,7 @@ export function RoadTimesheet({
                   </div>
                 )}
 
-                {openErrand && !errandMode && !showDropPicker && !showMovePicker && !showManualHours && (
+                {openErrand && !errandMode && !showDropPicker && !showMovePicker && !showAddPersonPicker && !showManualHours && (
                   <div className="list" style={{ marginTop: 8 }}>
                     <div className="cell" style={{ cursor: "default", background: "rgba(255,159,10,0.12)" }}>
                       <span className="cell-title">🚗 Машина у роз'їздах</span>
@@ -5275,7 +5368,7 @@ export function RoadTimesheet({
                 {/* Увесь маршрут, а не лише «інші»: список, з якого зник той
                     обʼєкт, на якому стоїш, змушував тримати в голові, скільки
                     їх усього. Поточний позначено зеленою стрілкою. */}
-                {plans.length > 1 && !showDropPicker && !showMovePicker && !showManualHours && !errandMode && (
+                {plans.length > 1 && !showDropPicker && !showMovePicker && !showAddPersonPicker && !showManualHours && !errandMode && (
                   <>
                     <div className="section-title">Обʼєкти поїздки</div>
                     <div className="list">
@@ -5471,6 +5564,106 @@ export function RoadTimesheet({
                         disabled={!dropSelected.length && !addArrivedSelected.length}
                       >
                         Підтвердити
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {showAddPersonPicker && (
+                  <>
+                    <div className="hint" style={{ padding: "0 16px 8px" }}>
+                      Людина стане в бригаду з ЇЇ годинами: сесія почнеться тоді, коли тут почала працювати бригада, а не
+                      зараз. Якщо роботи ще не починались — просто стане на обʼєкт і піде в роботу разом з усіма.
+                    </div>
+                    <div className="section-title">Як вона тут опинилась</div>
+                    <div className="chip-row split">
+                      <button
+                        className={`chip ${addPersonArrival === "bus" ? "selected" : ""}`}
+                        onClick={() => setAddPersonArrival("bus")}
+                      >
+                        🚐 Привезли бусом
+                      </button>
+                      <button
+                        className={`chip ${addPersonArrival === "own" ? "selected" : ""}`}
+                        onClick={() => setAddPersonArrival("own")}
+                      >
+                        🚶 Приїхала сама
+                      </button>
+                    </div>
+                    <div className="hint" style={{ padding: "6px 16px 0" }}>
+                      {addPersonArrival === "bus"
+                        ? "Іде в поділ доплати за виїзд нарівні з рештою бригади."
+                        : "Доплату за виїзд не отримує — зарплату за роботу отримує як усі."}
+                    </div>
+                    <div className="section-title">Кого додати</div>
+                    <input
+                      className="search-box"
+                      placeholder="Пошук людини…"
+                      value={addPersonSearch}
+                      onChange={(e) => setAddPersonSearch(e.target.value)}
+                    />
+                    <div className="list">
+                      {groupByBrigade(
+                        employees.filter(
+                          (e) =>
+                            !employeeIds.includes(e.id) &&
+                            !busyEmployees.has(e.id) &&
+                            e.name.toLowerCase().includes(addPersonSearch.toLowerCase()),
+                        ),
+                        employees,
+                      ).map((g) => {
+                        const expanded = expandedAddBrigadeId === g.id || !!addPersonSearch;
+                        const selectedCount = g.members.filter((e) => addPersonSelected.includes(e.id)).length;
+                        return (
+                          <div key={g.id}>
+                            <button className="cell" onClick={() => setExpandedAddBrigadeId(expanded ? null : g.id)}>
+                              <span className="cell-title">
+                                {expanded ? "▾" : "▸"} {g.title}
+                              </span>
+                              <span className="badge">
+                                {selectedCount}/{g.members.length}
+                              </span>
+                            </button>
+                            {expanded && (
+                              <div style={{ paddingLeft: 12 }}>
+                                {g.members.map((emp) => {
+                                  const checked = addPersonSelected.includes(emp.id);
+                                  return (
+                                    <button
+                                      key={emp.id}
+                                      className={`cell ${checked ? "selected" : ""}`}
+                                      onClick={() =>
+                                        setAddPersonSelected((prev) =>
+                                          prev.includes(emp.id) ? prev.filter((x) => x !== emp.id) : [...prev, emp.id],
+                                        )
+                                      }
+                                    >
+                                      <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                        <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
+                                        {shortName(emp.name)}
+                                      </span>
+                                      <span className={roleTagClass(employeeRole(emp))}>{employeeRole(emp)}</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="chip-row">
+                      <button
+                        className="chip"
+                        onClick={() => {
+                          setAddPersonSelected([]);
+                          setShowAddPersonPicker(false);
+                        }}
+                      >
+                        Скасувати
+                      </button>
+                      <button className="chip selected" onClick={confirmAddPeople} disabled={!addPersonSelected.length}>
+                        Додати ({addPersonSelected.length})
                       </button>
                     </div>
                   </>
