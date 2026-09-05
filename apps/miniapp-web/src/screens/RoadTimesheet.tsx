@@ -5288,6 +5288,29 @@ export function RoadTimesheet({
                         бус -- перехід пішки потрібен саме тоді, коли бус
                         поїхав далі. Пасажирів буса пікер пропонує, лише коли
                         він стоїть тут: вони належать тому обʼєкту, де машина. */}
+                    {/* Перехід пішки -- звичайний хід дня, а не виправлення:
+                        дві точки на одній території, частина бригади лишається
+                        на другій. Тому окремою кнопкою, над меню правок. */}
+                    {plans.length > 1 && (
+                      <div className="list">
+                        <button
+                          className="cell"
+                          onClick={() => {
+                            setMoveSelected([]);
+                            setMoveTargetId(null);
+                            setMoveMode("walk");
+                            setShowMovePicker(true);
+                          }}
+                          disabled={!plan.here.length && !(carPresent && onboard.length)}
+                        >
+                          <span className="cell-title">🚶 Перевести на інший обʼєкт</span>
+                          <span className="cell-sub">пішки, поруч</span>
+                        </button>
+                      </div>
+                    )}
+                    {/* А тут -- те, що роблять, коли щось пішло не так або про
+                        когось забули. Згорнуте: трапляється рідко, а місце
+                        вгорі екрана їло постійно. */}
                     <div className="list">
                       <button className="cell" onClick={() => setPeopleMenuOpen((v) => !v)}>
                         <span className="cell-title">
@@ -5308,21 +5331,6 @@ export function RoadTimesheet({
                             <span className="cell-title">➕ Додати людину</span>
                             <span className="cell-sub">з годинами бригади</span>
                           </button>
-                          {plans.length > 1 && (
-                            <button
-                              className="cell"
-                              onClick={() => {
-                                setMoveSelected([]);
-                                setMoveTargetId(null);
-                                setMoveMode("walk");
-                                setShowMovePicker(true);
-                              }}
-                              disabled={!plan.here.length && !(carPresent && onboard.length)}
-                            >
-                              <span className="cell-title">🚶 Перевести на інший обʼєкт</span>
-                              <span className="cell-sub">пішки, поруч</span>
-                            </button>
-                          )}
                           {plans.length > 1 && (
                             <button
                               className="cell"
