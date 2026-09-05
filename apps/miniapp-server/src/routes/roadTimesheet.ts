@@ -1542,6 +1542,49 @@ roadTimesheetRouter.get("/day-status", async (req, res) => {
 });
 
 /**
+ * GET /api/road-timesheet/returned-days — дні цього бригадира, які адмін
+ * повернув на редагування, за БУДЬ-ЯКУ дату.
+ *
+ * Навіщо: усе інше в табелі прив'язане до однієї дати, і за замовчуванням це
+ * сьогодні. День, внесений заднім числом, після повернення ставав невидимим:
+ * на сьогоднішньому екрані його немає, а екран внесення заднім числом уміє
+ * тільки писати новий і не показує, що вже здано. Бригадир бачив, що звіт
+ * повернули, і не мав куди натиснути.
+ *
+ * Статус береться по ОСТАННІЙ події кожної поїздки (те саме правило, що й у
+ * fetchAllTrips): повторна відправка додає нову подію, а повернену лишає в
+ * історії, тож «є хоч один RTS_RETURN» показувало б день повернутим назавжди.
+ */
+roadTimesheetRouter.get("/returned-days", async (req, res) => {
+  const foremanTgId = req.user!.tgId;
+  const returnRows = await db
+    .select()
+    .from(schema.events)
+    .where(and(eq(schema.events.foremanTgId, BigInt(foremanTgId)), eq(schema.events.type, "RTS_RETURN")))
+    .orderBy(desc(schema.events.ts));
+
+  const days: Array<{ date: string; reason: string | null; trips: number }> = [];
+  for (const date of [...new Set(returnRows.map((r) => r.date).filter(Boolean))]) {
+    const trips = await fetchAllTrips(date, foremanTgId);
+    const returnedTrips = trips.filter((t) => t.status === "ПОВЕРНУТО");
+    if (!returnedTrips.length) continue;
+    let reason: string | null = null;
+    const row = returnRows.find((r) => r.date === date);
+    if (row) {
+      try {
+        const payload = JSON.parse(row.payload ?? "{}") as { reasonText?: string; note?: string };
+        reason = [payload.reasonText, payload.note].filter(Boolean).join(" — ") || null;
+      } catch {
+        reason = null;
+      }
+    }
+    days.push({ date, reason, trips: returnedTrips.length });
+  }
+  days.sort((a, b) => (a.date < b.date ? 1 : -1));
+  res.json({ days });
+});
+
+/**
  * GET /api/road-timesheet/submitted-today?date=YYYY-MM-DD — every leg (trip)
  * submitted so far today, each in a shape that can be loaded straight back
  * into the editable client state (so a re-opened, not-yet-approved day shows

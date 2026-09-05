@@ -7,7 +7,7 @@ import { mirrorDraft, clearMirroredDraft, fetchMirroredDraft } from "../lib/draf
 import { alertDialog, askDialog, confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial, roleTagClass, roleRank, type EmployeeRole } from "../lib/employee";
 import { groupWorks } from "../lib/works";
-import { works as nWorks, people as nPeople, objects as nObjects } from "../lib/plural";
+import { works as nWorks, people as nPeople, objects as nObjects, plural } from "../lib/plural";
 import { saveDraft, loadDraft, clearDraft } from "../lib/draft";
 import { BackRow } from "../components/BackRow";
 import { MainButton } from "../components/MainButton";
@@ -357,6 +357,11 @@ export function RoadTimesheet({
   }, []);
 
   const [date, setDate] = useState(() => todayISO());
+  // Повернені на редагування дні за БУДЬ-ЯКУ дату. Усе інше на цьому екрані
+  // живе однією датою (сьогодні), тож повернений день, внесений заднім
+  // числом, не мав де показатись -- бригадир отримував повідомлення й не мав
+  // куди натиснути.
+  const [returnedDays, setReturnedDays] = useState<Array<{ date: string; reason: string | null; trips: number }>>([]);
 
   // --- dictionaries ---
   const [cars, setCars] = useState<Car[]>([]);
@@ -774,6 +779,13 @@ export function RoadTimesheet({
   // report is a stale admin screen, never a broken day.
   // Що востаннє реально пішло на сервер: `${state}|${object}`.
   const lastProgressRef = useRef("");
+  useEffect(() => {
+    api
+      .get<{ days: Array<{ date: string; reason: string | null; trips: number }> }>("/api/road-timesheet/returned-days")
+      .then((r) => setReturnedDays(r.days ?? []))
+      .catch(() => setReturnedDays([]));
+  }, [date, dayStatus?.returned]);
+
   const atObjectPlan = atObjectId ? plans.find((p) => p.objectId === atObjectId) : null;
   const headingName = headingToObjectId ? (plans.find((p) => p.objectId === headingToObjectId)?.objectName ?? "") : "";
   // Standing at an object is not one screen. The foreman opens the works
@@ -3120,6 +3132,11 @@ export function RoadTimesheet({
         objects: buildObjectsPayload(),
         idempotencyKey,
         tripSeq: editingTripSeq ?? undefined,
+        // Повернений день минулої дати правиться саме тут. Резерви авто й
+        // людей на той день давно неактуальні, а чужа зависла бронь блокувала
+        // б повторну відправку назавжди. Сервер приймає цей прапорець лише
+        // для дати СТРОГО раніше сьогоднішньої, тож живий день ним не обійти.
+        backdated: date < todayISO() ? true : undefined,
       });
       setDayCombined(res.combined);
       setEditingTripSeq(res.tripSeq);
@@ -3412,6 +3429,30 @@ export function RoadTimesheet({
             {dayStatus.returnReason ? ` Причина: ${dayStatus.returnReason}.` : ""} Відкрийте поїздку нижче, виправте і надішліть
             повторно.
           </div>
+        )}
+
+        {/* Повернені дні інших дат. Сьогоднішній і так видно нижче -- тут
+            саме ті, до яких з цього екрана не було жодного шляху. */}
+        {returnedDays.filter((d) => d.date !== date).length > 0 && (
+          <>
+            <div className="section-title">↩️ Повернені на редагування</div>
+            <div className="list">
+              {returnedDays
+                .filter((d) => d.date !== date)
+                .map((d) => (
+                  <button key={d.date} className="cell" onClick={() => setDate(d.date)}>
+                    <span className="cell-title">
+                      📅 {d.date}
+                      {d.reason ? <span className="cell-sub" style={{ display: "block" }}>{d.reason}</span> : null}
+                    </span>
+                    <span className="badge danger">{d.trips} {plural(d.trips, "поїздка", "поїздки", "поїздок")}</span>
+                  </button>
+                ))}
+            </div>
+            <div className="hint" style={{ padding: "6px 16px 0" }}>
+              Натисніть дату — табель відкриється на ній, і поїздку можна буде виправити та надіслати повторно.
+            </div>
+          </>
         )}
 
         <div className="section-title">Поточні поїздки</div>
