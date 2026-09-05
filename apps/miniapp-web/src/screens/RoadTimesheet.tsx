@@ -67,6 +67,9 @@ type PlannedWork = {
 // together via "Завершити". Lets people finish and leave an object at
 // different times instead of a single all-or-nothing shift.
 type EmployeeSession = { employeeId: string; startedAt: string; endedAt?: string };
+
+/** Псевдо-обʼєкт «база» у виборі, куди подіти людину при виправленні. */
+const BASE_TARGET = "__BASE__";
 type ObjPlan = {
   objectId: string;
   objectName: string;
@@ -2910,6 +2913,17 @@ export function RoadTimesheet({
   function confirmMove() {
     if (!atObjectId || !moveTargetId || !moveSelected.length) return;
     if (moveMode === "walk") return walkToObject();
+    if (moveTargetId === BASE_TARGET) {
+      // Не переміщення, а вилучення: людини в поїздці не було взагалі.
+      // removeEmployeesFromTrip стирає її сесії всюди, прибирає зі складу й
+      // з self-transport, і кладе в тост «Скасувати» -- разом з тим, де вона
+      // стояла до цього.
+      removeEmployeesFromTrip(moveSelected, `${moveSelected.map(employeeName).join(", ")}: на базі, не в поїздці`);
+      setMoveSelected([]);
+      setMoveTargetId(null);
+      setShowMovePicker(false);
+      return;
+    }
     const fromName = currentAtPlan()?.objectName ?? "";
     const toName = plans.find((p) => p.objectId === moveTargetId)?.objectName ?? "";
     const count = moveSelected.length;
@@ -5719,7 +5733,9 @@ export function RoadTimesheet({
                     <div className="hint" style={{ padding: "0 16px 8px" }}>
                       {moveMode === "walk"
                         ? "Відпрацьовані тут години лишаються за людиною. На новому обʼєкті вона просто стоїть — час піде, коли натиснете «Старт». Доплата за виїзд не змінюється."
-                        : "Виправлення = «я помилився обʼєктом». Тут від людини не лишиться нічого, а на новому обʼєкті їй зарахуються ті самі години й роботи, що й усій тамтешній бригаді."}
+                        : moveTargetId === BASE_TARGET
+                          ? "Людину буде прибрано з поїздки цілком: години на всіх обʼєктах зникнуть, зі складу вона вийде, доплату за виїзд не отримає. Одразу після цього буде «Скасувати»."
+                          : "Виправлення = «я помилився обʼєктом». Тут від людини не лишиться нічого, а на новому обʼєкті їй зарахуються ті самі години й роботи, що й усій тамтешній бригаді."}
                     </div>
                     {/* Не лише ті, хто стоїть на цьому обʼєкті: у бусі сидить
                         людина, яку теж треба буває відправити пішки на сусідню
@@ -5765,8 +5781,29 @@ export function RoadTimesheet({
                         </>
                       );
                     })()}
-                    <div className="section-title">На який обʼєкт</div>
+                    <div className="section-title">{moveMode === "walk" ? "На який обʼєкт" : "Куди"}</div>
                     <div className="list">
+                      {/* «На базу» = людини в цій поїздці взагалі не було: її
+                          помилково відправили працювати, а вона лишалась на
+                          базі. Прибирає зі складу цілком -- години, місце,
+                          доплату за виїзд. Є «Скасувати» в тості, бо дія
+                          безслідна. */}
+                      {moveMode === "fix" &&
+                        (() => {
+                          const checked = moveTargetId === BASE_TARGET;
+                          return (
+                            <button
+                              className={`cell ${checked ? "selected" : ""}`}
+                              onClick={() => setMoveTargetId(BASE_TARGET)}
+                            >
+                              <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
+                                🏠 На базу — її тут не було
+                              </span>
+                              <span className="badge danger">прибрати з поїздки</span>
+                            </button>
+                          );
+                        })()}
                       {plans
                         .filter((p) => p.objectId !== atObjectId)
                         .map((p) => {
@@ -5798,7 +5835,7 @@ export function RoadTimesheet({
                         Скасувати
                       </button>
                       <button className="chip selected" onClick={confirmMove} disabled={!moveSelected.length || !moveTargetId}>
-                        {moveMode === "walk" ? "Перевести" : "Виправити"}
+                        {moveMode === "walk" ? "Перевести" : moveTargetId === BASE_TARGET ? "Прибрати з поїздки" : "Виправити"}
                       </button>
                     </div>
                   </>
