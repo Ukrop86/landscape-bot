@@ -222,9 +222,7 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
           <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
           {w.name}
         </span>
-        <span className="cell-sub">
-          {w.tariff} грн/{w.unit ?? "од."}
-        </span>
+        <span className="cell-sub">{w.unit ?? "од."}</span>
       </button>
     );
   }
@@ -801,17 +799,20 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
                 {allEmployeeIds.length} · {Math.round(totalHours * 100) / 100} год
               </span>
             </div>
+            {/* Суми закриті до затвердження -- те саме правило, що й у
+                живому табелі (renderFundBreakdown). Тут воно було відсутнє:
+                екран заднім числом показував і доплату, і фонд, і тариф
+                кожної роботи. Клас виїзду лишаємо -- це кілометри, не гроші,
+                і бригадиру корисно бачити, що він порахувався. */}
             {preview && (
               <>
                 <div className="cell" style={{ cursor: "default" }}>
                   <span className="cell-title">Клас виїзду</span>
-                  <span className="cell-sub">
-                    {preview.tripClass} · доплата {preview.roadAllowance.perPerson} грн/особу
-                  </span>
+                  <span className="cell-sub">{preview.tripClass}</span>
                 </div>
                 <div className="cell" style={{ cursor: "default" }}>
-                  <span className="cell-title">Фонд за роботи</span>
-                  <span className="cell-sub">{Math.round(preview.salaryPacks.reduce((a, s) => a + s.objectTotal, 0) * 100) / 100} грн</span>
+                  <span className="cell-title">💸 Нарахування</span>
+                  <span className="cell-sub">🔒 ••• після затвердження</span>
                 </div>
               </>
             )}
@@ -819,6 +820,7 @@ export function RetroEntry({ onBack, onSaved }: { onBack: () => void; onSaved: (
 
           <div className="hint" style={{ padding: "0 16px 8px" }}>
             Доплату за виїзд поділять між усіма {allEmployeeIds.length} людьми з цих обʼєктів.
+            Суми буде видно після затвердження адміністратором.
           </div>
           {peopleWithoutHours.length > 0 && (
             <div className="hint" style={{ padding: "0 16px 8px" }}>
