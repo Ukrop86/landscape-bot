@@ -2829,6 +2829,33 @@ export function RoadTimesheet({
   }
 
   /**
+   * Вікно, яке отримує людина, додана в бригаду на обʼєкті вже після старту.
+   *
+   * Правило: беремо тих, хто працює ЗАРАЗ, і найраніший з їхніх стартів. Якщо
+   * бригадир запускав людей поодинці о 08:00, 08:10 і 08:20 -- новачок
+   * отримає 08:00.
+   *
+   * Чому саме відкриті сесії: раніше бралися всі поспіль, включно з давно
+   * закритими. Людина, яка відпрацювала з 06:00 до 07:00 і поїхала, тягнула
+   * початок новачка на 06:00 -- тобто на годину, коли на обʼєкті ще нікого не
+   * було. Коли ж не працює вже ніхто, день тут скінчився, і новачок отримує
+   * повний проміжок бригади: від найранішого старту до найпізнішого кінця.
+   */
+  function crewWindowAt(plan: ObjPlan, excludeIds: string[]): { startedAt: string; endedAt?: string } | null {
+    const exclude = new Set(excludeIds);
+    const crew = plan.sessions.filter((s) => !exclude.has(s.employeeId));
+    if (!crew.length) return null;
+    const open = crew.filter((s) => !s.endedAt);
+    if (open.length) {
+      return { startedAt: new Date(Math.min(...open.map((s) => new Date(s.startedAt).getTime()))).toISOString() };
+    }
+    return {
+      startedAt: new Date(Math.min(...crew.map((s) => new Date(s.startedAt).getTime()))).toISOString(),
+      endedAt: new Date(Math.max(...crew.map((s) => new Date(s.endedAt as string).getTime()))).toISOString(),
+    };
+  }
+
+  /**
    * Додати людину на обʼєкт посеред дня.
    *
    * Випадок, заради якого це є: бригадир забув когось внести, роботи вже
@@ -2865,13 +2892,9 @@ export function RoadTimesheet({
       prev.map((p) => {
         if (p.objectId !== atObjectId) return p;
         const crew = p.sessions.filter((x) => !ids.includes(x.employeeId));
-        if (!crew.length) return { ...p, sessions: crew };
-        const startedAt = new Date(Math.min(...crew.map((x) => new Date(x.startedAt).getTime()))).toISOString();
-        const stillWorking = crew.some((x) => !x.endedAt);
-        const endedAt = stillWorking
-          ? undefined
-          : new Date(Math.max(...crew.map((x) => new Date(x.endedAt as string).getTime()))).toISOString();
-        const joined = ids.map((employeeId) => ({ employeeId, startedAt, ...(endedAt ? { endedAt } : {}) }));
+        const window = crewWindowAt(p, ids);
+        if (!window) return { ...p, sessions: crew };
+        const joined = ids.map((employeeId) => ({ employeeId, ...window }));
         return { ...p, sessions: [...crew, ...joined] };
       }),
     );
@@ -2911,13 +2934,9 @@ export function RoadTimesheet({
           // started there yet, the newcomers simply wait to be started with
           // everyone else -- no session is invented for them.
           const crew = p.sessions.filter((s) => !moving.has(s.employeeId));
-          if (!crew.length) return { ...p, sessions: crew };
-          const startedAt = new Date(Math.min(...crew.map((s) => new Date(s.startedAt).getTime()))).toISOString();
-          const stillWorking = crew.some((s) => !s.endedAt);
-          const endedAt = stillWorking
-            ? undefined
-            : new Date(Math.max(...crew.map((s) => new Date(s.endedAt as string).getTime()))).toISOString();
-          const joined = moveSelected.map((employeeId) => ({ employeeId, startedAt, ...(endedAt ? { endedAt } : {}) }));
+          const window = crewWindowAt(p, moveSelected);
+          if (!window) return { ...p, sessions: crew };
+          const joined = moveSelected.map((employeeId) => ({ employeeId, ...window }));
           return { ...p, sessions: [...crew, ...joined] };
         }
         return p;
@@ -5571,10 +5590,28 @@ export function RoadTimesheet({
 
                 {showAddPersonPicker && (
                   <>
-                    <div className="hint" style={{ padding: "0 16px 8px" }}>
-                      Людина стане в бригаду з ЇЇ годинами: сесія почнеться тоді, коли тут почала працювати бригада, а не
-                      зараз. Якщо роботи ще не починались — просто стане на обʼєкт і піде в роботу разом з усіма.
-                    </div>
+                    {/* Показуємо конкретний час ДО підтвердження: правило
+                        «як бригада» звучить просто, поки всі стартували
+                        разом, і перестає, коли бригадир запускав кожного
+                        окремо. Хай бачить число, а не формулювання. */}
+                    {(() => {
+                      const w = crewWindowAt(plan, addPersonSelected);
+                      const hhmm = (iso: string) =>
+                        new Date(iso).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" });
+                      return (
+                        <div className="hint" style={{ padding: "0 16px 8px" }}>
+                          {w ? (
+                            <>
+                              Отримає години бригади: <b>з {hhmm(w.startedAt)}</b>
+                              {w.endedAt ? <> до <b>{hhmm(w.endedAt)}</b></> : " і далі, поки бригада працює"}. Це
+                              найраніший старт серед тих, хто працює тут зараз.
+                            </>
+                          ) : (
+                            "Роботи тут ще не починались — людина просто стане на обʼєкт і піде в роботу разом з усіма."
+                          )}
+                        </div>
+                      );
+                    })()}
                     <div className="section-title">Як вона тут опинилась</div>
                     <div className="chip-row split">
                       <button
