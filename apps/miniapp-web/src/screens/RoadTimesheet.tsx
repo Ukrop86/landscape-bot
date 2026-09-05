@@ -185,6 +185,9 @@ type LastTripSuggestion = {
  * empty day: the two never occupy the builder at the same time.
  */
 type BuilderSnapshot = {
+  /** Дата дня, який відклали. Без неї відкладений день повертався на ту дату,
+      яка стояла на екрані в момент повернення -- тобто на чужу. */
+  date?: string;
   step: Step;
   carId: string;
   odoStart: string;
@@ -252,6 +255,8 @@ type DraftShape = {
   // the draft so an app-kill during planning cannot lose a running trip -- on
   // restore this is what comes back, and the half-written plan is dropped.
   dayStash?: BuilderSnapshot | null;
+  /** Дата поверненого дня, який правиться замість сьогоднішнього. */
+  fixingReturnedDate?: string | null;
 };
 
 // Autosaved drafts can predate a schema change (e.g. the old singular
@@ -452,6 +457,12 @@ export function RoadTimesheet({
   // The day set aside while the planner is using the pickers. Non-null only in
   // plan mode; putting it back is what "exit the planner" means.
   const [dayStash, setDayStash] = useState<BuilderSnapshot | null>(null);
+  // Дата поверненого дня, який зараз правиться замість сьогоднішнього.
+  // Сьогоднішній день при цьому лежить у dayStash -- той самий механізм, що й
+  // для планувальника: правка чужої дати не має коштувати дня, який іде.
+  const [fixingReturnedDate, setFixingReturnedDate] = useState<string | null>(null);
+  /** Повідомлення після повторної відправки виправленого дня. */
+  const [fixedDayNotice, setFixedDayNotice] = useState<string | null>(null);
   const [plannedResources, setPlannedResources] = useState<PlannedResources>({ cars: [], employees: [] });
   // A parked plan is edited by loading it back into the ordinary pickers --
   // there is no second builder. This flag is what tells the day apart from the
@@ -665,6 +676,19 @@ export function RoadTimesheet({
       setPlanObjectId(draft.planObjectId ?? null);
       setCoefs(draft.coefs ?? {});
       setEditingTripSeq(draft.editingTripSeq ?? null);
+      if (draft.fixingReturnedDate && stash) {
+        // Застосунок помер під час правки поверненого дня. Той день лежить на
+        // сервері й нікуди не дінеться -- а день, що йшов, живе тільки тут.
+        // Тож повертаємо його, а виправлення бригадир відкриє заново.
+        restoreBuilder(stash);
+        setDayStash(null);
+        setFixingReturnedDate(null);
+        setStep(stash.tripStartedAt ? stash.step : "INDEX");
+        setRestoredBanner(true);
+        draftRestoredRef.current = true;
+        return;
+      }
+      setFixingReturnedDate(draft.fixingReturnedDate ?? null);
       if (draft.planEditing) {
         // The app died with the planner open. A half-written plan is five
         // minutes of re-picking; the trip underneath it is a day's work, so
@@ -897,7 +921,10 @@ export function RoadTimesheet({
         // no single right one to open, and clobbering a restored draft for a
         // NEW trip would throw away work they haven't submitted yet.
         const returnedTrips = res.trips.filter((t) => t.status !== "ЗАТВЕРДЖЕНО");
-        if (status.returned && returnedTrips.length === 1 && !draftRestoredRef.current) {
+        // Виняток -- режим правки поверненого дня: конструктор там свідомо
+        // порожній (сьогоднішній день лежить у `dayStash`), тож відновлена
+        // чернетка нічого не боронить, і поїздку треба відкрити одразу.
+        if (status.returned && returnedTrips.length === 1 && (!draftRestoredRef.current || !!fixingReturnedDate)) {
           editTrip(returnedTrips[0]);
           return;
         }
@@ -939,6 +966,7 @@ export function RoadTimesheet({
       editingPlanId,
       planForemanTgId,
       dayStash,
+      fixingReturnedDate,
     };
     saveDraft<DraftShape>(snapshot);
     // Те саме -- на сервер, із затримкою і фоном. Телефон лишається робочою
@@ -980,6 +1008,7 @@ export function RoadTimesheet({
     editingPlanId,
     planForemanTgId,
     dayStash,
+    fixingReturnedDate,
   ]);
 
   function employeeName(id: string) {
@@ -1117,6 +1146,7 @@ export function RoadTimesheet({
   /** Everything the builder currently holds, as one value. */
   function snapshotBuilder(): BuilderSnapshot {
     return {
+      date,
       step,
       carId,
       odoStart,
@@ -1176,6 +1206,7 @@ export function RoadTimesheet({
   }
 
   function restoreBuilder(snap: BuilderSnapshot) {
+    if (snap.date) setDate(snap.date);
     setCarId(snap.carId);
     setOdoStart(snap.odoStart);
     setOdoStartPhoto(snap.odoStartPhoto);
@@ -1321,6 +1352,38 @@ export function RoadTimesheet({
     if (plan) applyPlanToBuilder(plan, { withOdometer: false });
     setPlanEditing(true);
     setStep("HUB");
+    haptic("selection");
+  }
+
+  /**
+   * Відкрити повернений день іншої дати, не втративши той, що йде зараз.
+   *
+   * Прямий `setDate` тут не годиться: конструктор дня один на весь екран, і
+   * редагування поверненої поїздки затирає карту, людей і таймери
+   * сьогоднішнього дня, а автозбереження одразу пише це в чернетку -- разом з
+   * чужою датою. Тому той самий прийом, що й у планувальника: сьогоднішній
+   * день відкладається в `dayStash` (тепер разом зі своєю датою) і чекає.
+   */
+  function openReturnedDay(target: string) {
+    setFixedDayNotice(null);
+    if (!fixingReturnedDate) setDayStash(snapshotBuilder());
+    blankBuilder();
+    setFixingReturnedDate(target);
+    setDate(target);
+    setStep("INDEX");
+    haptic("selection");
+  }
+
+  /** Повернутись до свого дня: віддати конструктор назад тому, хто його ждав. */
+  function exitReturnedDay() {
+    if (dayStash) restoreBuilder(dayStash);
+    else {
+      blankBuilder();
+      setDate(todayISO());
+    }
+    setDayStash(null);
+    setFixingReturnedDate(null);
+    setStep("INDEX");
     haptic("selection");
   }
 
@@ -3157,13 +3220,23 @@ export function RoadTimesheet({
         errands,
       };
       setSubmittedTrips((prev) => [...prev.filter((t) => t.tripSeq !== res.tripSeq), savedTrip].sort((a, b) => a.tripSeq - b.tripSeq));
-      setStep("DONE");
       clearDraft();
       // День уже в базі як RTS_SAVE -- дзеркало більше нічого не додає.
       clearMirroredDraft();
       setDayStatus((prev) => (prev ? { ...prev, hasSubmission: true, eventId: res.eventId } : prev));
       logChange("Звіт відправлено");
       haptic("success");
+      if (fixingReturnedDate) {
+        // Виправлений день уже в базі. Затримувати бригадира на екрані
+        // підсумку не можна: автозбереження на кроці DONE не працює, а
+        // сьогоднішній день лежить лише в `dayStash` -- закритий застосунок
+        // забрав би його разом з пам'яттю вкладки. Тож віддаємо конструктор
+        // назад одразу, і чернетка сьогоднішнього дня пишеться знову.
+        setFixedDayNotice(date);
+        exitReturnedDay();
+      } else {
+        setStep("DONE");
+      }
     } catch (e) {
       setError((e as Error).message);
       haptic("error");
@@ -3423,6 +3496,28 @@ export function RoadTimesheet({
 
         {error && <div className="empty-state">⚠️ {error}</div>}
 
+        {fixedDayNotice && !fixingReturnedDate && (
+          <div className="empty-state" style={{ textAlign: "left" }}>
+            ✅ <b>День {fixedDayNotice} надіслано повторно.</b> Ви знову на {date}.
+          </div>
+        )}
+
+        {/* Те саме попередження, що й на решті кроків: з INDEX починається
+            виправлення, і саме тут найлегше забути, що дата вже не сьогоднішня. */}
+        {fixingReturnedDate && (
+          <div className="empty-state" style={{ textAlign: "left", color: "#d70015" }}>
+            ✏️ <b>Ви виправляєте день {fixingReturnedDate}</b>
+            {dayStash?.tripStartedAt || dayStash?.carId || (dayStash?.plans?.length ?? 0) > 0
+              ? " — сьогоднішній день відкладено і чекає, нічого з нього не втрачено."
+              : ""}
+            <div style={{ marginTop: 8 }}>
+              <button className="back-btn" onClick={exitReturnedDay}>
+                ↩️ Повернутись до {todayISO()}
+              </button>
+            </div>
+          </div>
+        )}
+
         {dayStatus?.returned && (
           <div className="empty-state" style={{ textAlign: "left" }}>
             🔴 <b>Звіт повернено на доопрацювання.</b>
@@ -3440,7 +3535,7 @@ export function RoadTimesheet({
               {returnedDays
                 .filter((d) => d.date !== date)
                 .map((d) => (
-                  <button key={d.date} className="cell" onClick={() => setDate(d.date)}>
+                  <button key={d.date} className="cell" onClick={() => openReturnedDay(d.date)}>
                     <span className="cell-title">
                       📅 {d.date}
                       {d.reason ? <span className="cell-sub" style={{ display: "block" }}>{d.reason}</span> : null}
@@ -3580,6 +3675,22 @@ export function RoadTimesheet({
       </div>
 
       {error && <div className="empty-state">⚠️ {error}</div>}
+
+      {/* Поки правиться чужа дата, це має бути видно з будь-якого кроку: інакше
+          бригадир дописує сьогоднішній день у вчорашній, не помічаючи. */}
+      {fixingReturnedDate && (
+        <div className="empty-state" style={{ textAlign: "left", color: "#d70015" }}>
+          ✏️ <b>Ви виправляєте день {fixingReturnedDate}</b>
+          {dayStash?.tripStartedAt || dayStash?.carId || (dayStash?.plans?.length ?? 0) > 0
+            ? " — сьогоднішній день відкладено і чекає, нічого з нього не втрачено."
+            : ""}
+          <div style={{ marginTop: 8 }}>
+            <button className="back-btn" onClick={exitReturnedDay}>
+              ↩️ Повернутись до {todayISO()}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Stays visible on every step while the day is in the returned state,
           not just on the one screen it was opened from -- the foreman is
