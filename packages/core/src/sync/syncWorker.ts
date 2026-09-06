@@ -6,7 +6,12 @@ import * as sheets from "./mappers.js";
  * One full sync cycle: Sheets -> DB, dictionaries only. Google Sheets is the
  * source of truth for everything a human fills in by hand -- people, objects,
  * works, cars, materials, settings -- and this mirrors it into Postgres for
- * fast reads from the mini-app. Never writes back to Sheets from here.
+ * fast reads from the mini-app.
+ *
+ * Один-єдиний запис назад в аркуш: рядку, у якого є назва й немає ID, синк
+ * видає ID і дописує його в комірку (`autoId.ts`). Це не робочі дані, а
+ * ключ, без якого рядок не існує -- і саме його ручне проставляння вже
+ * коштувало довіднику РОБОТИ зсунутих ставок.
  */
 export async function runSyncCycle() {
   const startedAt = Date.now();

@@ -1,4 +1,5 @@
 import { getCell, loadSheet } from "../google/sheets.js";
+import { loadDictionarySheet } from "./autoId.js";
 import { toBool, parseNumber } from "../google/utils.js";
 import {
   SHEET_NAMES,
@@ -43,7 +44,12 @@ export async function readUsers() {
 }
 
 export async function readEmployees() {
-  const { data, map } = await loadSheet(SHEET_NAMES.employees);
+  const { data, map } = await loadDictionarySheet({
+    sheetName: SHEET_NAMES.employees,
+    idHeader: EMP_HEADERS.id,
+    nameHeader: EMP_HEADERS.name,
+    fallbackPrefix: "EMP_",
+  });
   return data
     .map((row) => ({
       id: getCell(row, map, EMP_HEADERS.id),
@@ -56,7 +62,12 @@ export async function readEmployees() {
 }
 
 export async function readObjects() {
-  const { data, map } = await loadSheet(SHEET_NAMES.objects);
+  const { data, map } = await loadDictionarySheet({
+    sheetName: SHEET_NAMES.objects,
+    idHeader: OBJECTS_HEADERS.id,
+    nameHeader: OBJECTS_HEADERS.name,
+    fallbackPrefix: "OBJ_",
+  });
   return data
     .map((row) => ({
       id: getCell(row, map, OBJECTS_HEADERS.id),
@@ -68,7 +79,12 @@ export async function readObjects() {
 }
 
 export async function readWorks() {
-  const { data, map } = await loadSheet(SHEET_NAMES.works);
+  const { data, map } = await loadDictionarySheet({
+    sheetName: SHEET_NAMES.works,
+    idHeader: WORKS_HEADERS.id,
+    nameHeader: WORKS_HEADERS.name,
+    fallbackPrefix: "WT_",
+  });
   return data
     .map((row) => ({
       id: getCell(row, map, WORKS_HEADERS.id),
@@ -83,7 +99,12 @@ export async function readWorks() {
 }
 
 export async function readCars() {
-  const { data, map } = await loadSheet(SHEET_NAMES.cars);
+  const { data, map } = await loadDictionarySheet({
+    sheetName: SHEET_NAMES.cars,
+    idHeader: CARS_HEADERS.id,
+    nameHeader: CARS_HEADERS.name,
+    fallbackPrefix: "CAR_",
+  });
   return data
     .map((row) => ({
       id: getCell(row, map, CARS_HEADERS.id),
@@ -115,7 +136,12 @@ function parseDiscountsCell(raw: unknown): Record<number, number> {
 }
 
 export async function readLogisticDirections() {
-  const { data, map } = await loadSheet(SHEET_NAMES.logistic);
+  const { data, map } = await loadDictionarySheet({
+    sheetName: SHEET_NAMES.logistic,
+    idHeader: LOGISTIC_HEADERS.id,
+    nameHeader: LOGISTIC_HEADERS.name,
+    fallbackPrefix: "LG_",
+  });
   return data
     .map((row) => ({
       id: getCell(row, map, LOGISTIC_HEADERS.id),
@@ -128,7 +154,12 @@ export async function readLogisticDirections() {
 }
 
 export async function readMaterials() {
-  const { data, map } = await loadSheet(SHEET_NAMES.materials);
+  const { data, map } = await loadDictionarySheet({
+    sheetName: SHEET_NAMES.materials,
+    idHeader: MATERIALS_HEADERS.id,
+    nameHeader: MATERIALS_HEADERS.name,
+    fallbackPrefix: "MAT_",
+  });
   return data
     .map((row) => ({
       id: getCell(row, map, MATERIALS_HEADERS.id),
@@ -142,7 +173,12 @@ export async function readMaterials() {
 }
 
 export async function readTools() {
-  const { data, map } = await loadSheet(SHEET_NAMES.tools);
+  const { data, map } = await loadDictionarySheet({
+    sheetName: SHEET_NAMES.tools,
+    idHeader: TOOLS_HEADERS.id,
+    nameHeader: TOOLS_HEADERS.name,
+    fallbackPrefix: "TL_",
+  });
   return data
     .map((row) => ({
       id: getCell(row, map, TOOLS_HEADERS.id),

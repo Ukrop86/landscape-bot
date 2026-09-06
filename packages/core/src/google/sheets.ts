@@ -299,3 +299,33 @@ export async function upsertRowByKeys(sheetName: string, keys: Record<string, an
   await appendRows(sheetName, [newRow]);
   return { action: "appended" as const };
 }
+
+/**
+ * Writes individual cells in one API call.
+ *
+ * `updateRow` rewrites a whole row, which is wrong for touching a single
+ * column of a row a human is also editing: the round trip between reading
+ * and writing is long enough for them to have changed another cell, and the
+ * whole-row write would put the old value back. Here each cell is its own
+ * range, so nothing but the named cells is touched.
+ */
+export async function updateCells(
+  sheetName: string,
+  cells: Array<{ row1Based: number; col0Based: number; value: any }>,
+) {
+  if (!cells.length) return;
+  const sheets = getSheetsClient();
+
+  await withSheetsRetry(`${sheetName} update ${cells.length} cells`, () =>
+    sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: config.sheetId,
+      requestBody: {
+        valueInputOption: "USER_ENTERED",
+        data: cells.map((c) => ({
+          range: `${sheetRef(sheetName)}!${colToA1(c.col0Based)}${c.row1Based}`,
+          values: [[c.value]],
+        })),
+      },
+    }),
+  );
+}
