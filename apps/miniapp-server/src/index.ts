@@ -430,8 +430,36 @@ app.use("/api", apiRouter);
 // to register in @BotFather. Falls back gracefully if it hasn't been built.
 const webDist = path.resolve(__dirname, "../../miniapp-web/dist");
 if (fs.existsSync(webDist)) {
-  app.use(express.static(webDist));
+  /**
+   * Кеш роздачі — два протилежні правила, і саме їх відсутність робила деплой
+   * невидимим для бригадирів.
+   *
+   * `index.html` — **ніколи не кешувати**. Це єдиний файл з незмінною
+   * адресою, і саме в ньому написано, який хешований бандл вантажити. Без
+   * заголовка express.static не каже про кеш нічого, і WebView Telegram
+   * (особливо на Android) вирішує сам -- тримає стару сторінку, стара
+   * сторінка тягне старий бандл, і бригадир тижнями не бачить того, що вже
+   * місяць у продакшні. Це не теорія: 05.09 Альбіна не бачила розділу
+   * «Повернені на редагування» через півтори години після деплою, і в логах
+   * видно чому -- її застосунок навіть не запитував `/returned-days`.
+   * Порада «закрити міні-апп повністю і відкрити знову» лікувала наслідок.
+   *
+   * Усе інше в `dist` — навпаки, кешувати рік: у назві файлу є хеш вмісту,
+   * тож нова збірка це нові імена, а старі нікому не заважають.
+   */
+  const noStore = (res: express.Response) => res.setHeader("Cache-Control", "no-store, must-revalidate");
+
+  app.use(
+    express.static(webDist, {
+      etag: true,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith(".html")) noStore(res);
+        else res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      },
+    }),
+  );
   app.get(/^(?!\/api).*/, (_req, res) => {
+    noStore(res);
     res.sendFile(path.join(webDist, "index.html"));
   });
 } else {
