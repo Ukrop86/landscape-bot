@@ -4,7 +4,7 @@ import { useClearErrorOnSuccess } from "../lib/useClearErrorOnSuccess";
 import { todayISO } from "../lib/date";
 import { setTrackContext, track } from "../lib/track";
 import { mirrorDraft, clearMirroredDraft, fetchMirroredDraft } from "../lib/draftMirror";
-import { alertDialog, askDialog, confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
+import { alertDialog, ask3Dialog, askDialog, confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial, roleTagClass, roleRank, findMyEmployeeId, type EmployeeRole } from "../lib/employee";
 import { groupWorks } from "../lib/works";
 import { works as nWorks, people as nPeople, objects as nObjects, plural } from "../lib/plural";
@@ -6405,15 +6405,23 @@ export function RoadTimesheet({
                     if (atObjectReturnStep === "DRIVE" && carAtObjectId === plan.objectId && plan.here.length > 0) {
                       const byBus = plan.here.filter((id) => !selfTransportIds.includes(id));
                       const names = plan.here.map((id) => shortName(employeeName(id))).join(", ");
-                      const take = await askDialog(
+                      // Три відповіді, а не дві. Обидві попередні виїжджали,
+                      // тож бригадир, який хотів забрати одного, а другого
+                      // лишити, не мав куди подітись -- це робиться на самому
+                      // обʼєкті, по людині. «Скасувати» саме для цього: нічого
+                      // не робить і лишає екран, як був.
+                      const take = await ask3Dialog(
                         `На «${plan.objectName}» ще ${nPeople(plan.here.length)}: ${names}.\n\n` +
-                          `Якщо їдете далі разом — заберіть їх у бус зараз. Якщо лишаються тут працювати — «Лишити тут», ` +
-                          `заберете їх на зворотному шляху.`,
-                        byBus.length ? "🚐 Забрати в бус" : "Забрати",
+                          `Забрати всіх — «${byBus.length ? "🚐 Забрати всіх" : "Забрати всіх"}». Лишаються тут працювати — ` +
+                          `«Лишити тут», заберете на зворотному шляху.\n\n` +
+                          `Якщо когось треба забрати, а когось лишити — «Скасувати» і зробіть це по людині на обʼєкті.`,
+                        byBus.length ? "🚐 Забрати всіх" : "Забрати всіх",
                         "Лишити тут",
+                        "Скасувати",
                         "Забираємо людей?",
                       );
-                      if (take && byBus.length) await pickUpHere(plan.objectId, byBus);
+                      if (take === "cancel") return;
+                      if (take === "a" && byBus.length) await pickUpHere(plan.objectId, byBus);
                     }
                     setStep(atObjectReturnStep);
                   }}

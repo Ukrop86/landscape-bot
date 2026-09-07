@@ -173,6 +173,53 @@ export function askDialog(message: string, yes = "Так", no = "Ні", title?: 
   return confirmDialog(text);
 }
 
+/**
+ * Питання з ТРЬОМА відповідями, третя з яких -- «нічого не роби».
+ *
+ * `askDialog` має лише два виходи, і обидва щось роблять. Там, де питання
+ * звучить посеред дії («забрати людей у бус?»), цього мало: бригадир може
+ * захотіти забрати одного, а другого лишити, або згадати, що спершу треба
+ * дещо поправити. З двома кнопками він у будь-якому разі виїжджав.
+ *
+ * Повертає "a" | "b" | "cancel". Закритий свайпом попап -- це теж "cancel":
+ * жодна дія не має ставатись від того, що людина змахнула вікно.
+ * Telegram дозволяє до трьох кнопок; на старих клієнтах без showPopup
+ * лишається питання з двох варіантів, а «скасувати» дає відмова.
+ */
+export function ask3Dialog(
+  message: string,
+  a: string,
+  b: string,
+  cancel = "Скасувати",
+  title?: string,
+): Promise<"a" | "b" | "cancel"> {
+  const webApp = getWebApp();
+  const text = clamp(message, MAX_MESSAGE);
+  if (webApp?.showPopup) {
+    try {
+      return new Promise((resolve) =>
+        webApp.showPopup!(
+          {
+            ...(title ? { title: clamp(title, MAX_TITLE) } : {}),
+            message: text,
+            // Усі три -- "default": Telegram підміняє текст у кнопки типу
+            // "cancel" своїм локалізованим підписом (див. askDialog).
+            buttons: [
+              { id: "a", type: "default", text: a },
+              { id: "b", type: "default", text: b },
+              { id: "cancel", type: "default", text: cancel },
+            ],
+          },
+          (buttonId) => resolve(buttonId === "a" ? "a" : buttonId === "b" ? "b" : "cancel"),
+        ),
+      );
+    } catch {
+      // Telegram відмовив -- питання все одно має прозвучати.
+    }
+  }
+  return confirmDialog(text).then((ok) => (ok ? "a" : "cancel"));
+}
+
 // Small tactile feedback on toggles/confirmations -- no-ops outside Telegram
 // (plain browser dev, or old client versions without HapticFeedback).
 export function haptic(kind: ImpactStyle | NotificationType | "selection" = "light") {
