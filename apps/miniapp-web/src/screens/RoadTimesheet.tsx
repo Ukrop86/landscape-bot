@@ -245,6 +245,10 @@ type DraftShape = {
   // сюди був саме звідти, це майже завжди збігалось. З входом «У дорозі» вже
   // ні: бригадир опинявся на обʼєкті, на який не прибував.
   volumesReturnStep?: Step;
+  // «Їдемо на базу, вони доробляють». Без цього перезапуск застосунку в
+  // дорозі повертав день у глухий кут: на обʼєктах люди -- отже «Рушили на
+  // базу» знову немає, хоч бригадир уже їде.
+  goingHomeWithoutThem?: boolean;
   coefs: Record<string, CoefPair>;
   // Which already-submitted trip this draft is mid-edit of, if any -- lost
   // without this, an interrupted edit (app killed before resubmitting) would
@@ -495,6 +499,22 @@ export function RoadTimesheet({
   const [atObjectReturnStep, setAtObjectReturnStep] = useState<Step>("DRIVE");
   const [atObjectDetailsExpanded, setAtObjectDetailsExpanded] = useState(false);
   const [volumesReturnStep, setVolumesReturnStep] = useState<Step>("AT_OBJECT");
+  /**
+   * Бригада їде на базу, а хтось лишається дороблювати.
+   *
+   * Звичайний хід дня, якого в застосунку не було зовсім: з трьох обʼєктів
+   * один робітник лишився на першому, ще один (той, що приїхав сам) -- на
+   * другому, решта сіли в бус і поїхали. Забирати їх не треба: доробить і
+   * піде сам. Але екран повернення показував «▶️ Рушили на базу» ЛИШЕ коли
+   * на обʼєктах не лишилось нікого, тож день упирався в глухий кут -- або
+   * їдь по людину, яка ще працює, або нікуди не їдь.
+   *
+   * Прапорець вмикає сам бригадир відповіддю «🏠 Ні, їдемо на базу». Він не
+   * закриває нікому годин: люди далі числяться на обʼєктах, працюють, і
+   * бригадир зупиняє їх тоді, коли вони справді закінчать. До того звіт не
+   * відправляється (див. перевірку у `save()`).
+   */
+  const [goingHomeWithoutThem, setGoingHomeWithoutThem] = useState(false);
   const [expandedReturnObjectId, setExpandedReturnObjectId] = useState<string | null>(null);
   const [expandedReturnPickupObjectId, setExpandedReturnPickupObjectId] = useState<string | null>(null);
   const [dropSelected, setDropSelected] = useState<string[]>([]);
@@ -694,6 +714,7 @@ export function RoadTimesheet({
       setAtObjectReturnStep(draft.atObjectReturnStep ?? "DRIVE");
       setPlanObjectId(draft.planObjectId ?? null);
       setVolumesReturnStep(draft.volumesReturnStep ?? "AT_OBJECT");
+      setGoingHomeWithoutThem(!!draft.goingHomeWithoutThem);
       setCoefs(draft.coefs ?? {});
       setEditingTripSeq(draft.editingTripSeq ?? null);
       if (draft.fixingReturnedDate && stash) {
@@ -988,6 +1009,7 @@ export function RoadTimesheet({
       atObjectReturnStep,
       planObjectId,
       volumesReturnStep,
+      goingHomeWithoutThem,
       coefs,
       editingTripSeq,
       planEditing,
@@ -1031,6 +1053,7 @@ export function RoadTimesheet({
     atObjectReturnStep,
     planObjectId,
     volumesReturnStep,
+    goingHomeWithoutThem,
     coefs,
     editingTripSeq,
     planEditing,
@@ -1237,6 +1260,7 @@ export function RoadTimesheet({
     setCarAtObjectId("");
     setAtObjectReturnStep("DRIVE");
     setPlanObjectId(null);
+    setGoingHomeWithoutThem(false);
     setChangeLog([]);
     setEditingTripSeq(null);
     setPreview(null);
@@ -3201,6 +3225,28 @@ export function RoadTimesheet({
   }
 
   async function save() {
+    // Відкрита сесія на момент відправки -- це тихо з'їдені гроші.
+    //
+    // Сервер рахує незакриту сесію ДО МОМЕНТУ ЗАПИТУ
+    // (`new Date(s.pickedUpAt ?? now)`), тож звіт, надісланий о 17:30, обріже
+    // людину, яка працює до 19:00, на півтори години. У звіті це виглядає
+    // абсолютно нормально, і не побачить ніхто -- ні бригадир, ні адмін, ні
+    // сама людина. Тому це єдина перевірка тут, яка НЕ пропускає далі:
+    // зупинити роботу завжди можна, а повернути з'їдені години -- ні.
+    const stillWorking = plans.flatMap((p) =>
+      p.sessions.filter((s) => !s.endedAt).map((s) => `${shortName(employeeName(s.employeeId))} — «${p.objectName}»`),
+    );
+    if (stillWorking.length) {
+      await alertDialog(
+        `Ще йде робота:\n${[...new Set(stillWorking)].map((x) => `• ${x}`).join("\n")}\n\n` +
+          `Спершу зупиніть її, інакше години зарахуються до цієї хвилини, а все, що людина напрацює далі, зникне.\n\n` +
+          `Відкрийте обʼєкт (список унизу або ✏️ у списку обʼєктів) → прізвище → «🚶 Зняти», ` +
+          `або «🕒 Ввести години вручну», якщо знаєте точний час.`,
+      );
+      haptic("error");
+      return;
+    }
+
     // Catch-all safety net: an object with real volume but nobody ever
     // clocked in earns money that can't be split (pay is by hours), so 90%
     // of it would silently vanish. Warn before sending so the foreman can go
@@ -6371,15 +6417,24 @@ export function RoadTimesheet({
                       const stillOut = plans.filter((p) => p.here.length > 0);
                       if (stillOut.length) {
                         const lines = stillOut.map((p) => `• ${p.objectName} — ${nPeople(p.here.length)}`).join("\n");
-                        const ok = await askDialog(
-                          `На обʼєктах ще залишаються люди:\n${lines}\n\n` +
-                            `Їх треба забрати по дорозі — на екрані повернення в кожного обʼєкта буде «Посадити в бус». ` +
-                            `Роботи в них зупиняться саме тоді.`,
-                          "Так",
-                          "Ні",
-                          "Роботи завершені, повертаємось?",
+                        // Три відповіді, бо їх у житті три. Раніше було дві, і
+                        // жодна не вела на базу: «Так» відкривало список «кого
+                        // забрати», «Ні» не робило нічого. Найчастішого випадку
+                        // -- людина лишається доробляти, бус їде -- не існувало.
+                        const answer = await ask3Dialog(
+                          `Ще працюють:\n${lines}\n\n` +
+                            `Заїхати по них дорогою на базу — «🚗 Так, заберемо».\n\n` +
+                            `Якщо вони доробляють і підуть самі — «🏠 Ні, їдемо на базу». Години їм зупините тоді, ` +
+                            `коли вони справді закінчать; доти звіт не відправляється.`,
+                          "🚗 Так, заберемо",
+                          "🏠 Ні, їдемо на базу",
+                          "Скасувати",
+                          "Люди ще працюють на обʼєктах",
                         );
-                        if (!ok) return;
+                        if (answer === "cancel") return;
+                        setGoingHomeWithoutThem(answer === "b");
+                      } else {
+                        setGoingHomeWithoutThem(false);
                       }
                       // Бус стоїть тут, і тут же стоять люди -- забирати їх
                       // треба з цього ж екрана, а не зі списку обʼєктів.
@@ -6476,8 +6531,16 @@ export function RoadTimesheet({
                 {!driving && stillToCollect.length > 0 && (
                   <div className="suggestion-card">
                     <div className="cell-title" style={{ marginBottom: 6 }}>
-                      🚗 Ще є люди на інших обʼєктах
+                      {goingHomeWithoutThem ? "⏳ Ще працюють на обʼєктах" : "🚗 Ще є люди на інших обʼєктах"}
                     </div>
+                    {/* Обрали їхати без них -- тоді це нагадування, чого ви
+                        чекаєте, а не завдання. Кнопки лишаються: передумати
+                        й заїхати можна будь-коли. */}
+                    {goingHomeWithoutThem && (
+                      <div className="hint" style={{ marginBottom: 6 }}>
+                        Не забираємо — доробляють і йдуть самі. Години зупините, коли закінчать. Якщо передумали, можна заїхати:
+                      </div>
+                    )}
                     {stillToCollect.map((p) => (
                       <button
                         key={p.objectId}
@@ -6550,7 +6613,7 @@ export function RoadTimesheet({
                     );
                   })}
                 </div>
-                {anyPending && !driving && !(parkedAt && parkedAt.here.length) && (
+                {anyPending && !goingHomeWithoutThem && !driving && !(parkedAt && parkedAt.here.length) && (
                   <div className="hint" style={{ padding: "0 16px 10px", textAlign: "center" }}>
                     Оберіть обʼєкт вище — поїдемо забирати решту.
                   </div>
@@ -6589,9 +6652,12 @@ export function RoadTimesheet({
                       await pickUpHere(parkedAt.objectId, parkedAt.here, false);
                     }}
                   />
-                ) : !anyPending && !driving ? (
-                  <MainButton text="▶️ Рушили на базу" onClick={departFromObject} />
-                ) : !anyPending && driving ? (
+                ) : (!anyPending || goingHomeWithoutThem) && !driving ? (
+                  <MainButton
+                    text={anyPending ? "▶️ Рушили на базу — вони доробляють" : "▶️ Рушили на базу"}
+                    onClick={departFromObject}
+                  />
+                ) : (!anyPending || goingHomeWithoutThem) && driving ? (
                   <MainButton
                     text="🏁 Приїхали на базу"
                     onClick={() => {
@@ -6609,6 +6675,27 @@ export function RoadTimesheet({
       {step === "RETURN" && (
         <>
           <div className="step-badge">ПОВЕРНЕННЯ</div>
+          {/* Ви вже на базі, а хтось ще доробляє. Це не помилка й нічого не
+              блокує тут -- але звіт до їх зупинки не піде (див. `save()`), і
+              бригадир має бачити, чого саме чекає, а не впертись у це аж на
+              кнопці «Відправити». */}
+          {(() => {
+            const working = plans.flatMap((p) =>
+              p.sessions.filter((s) => !s.endedAt).map((s) => `${shortName(employeeName(s.employeeId))} — «${p.objectName}»`),
+            );
+            if (!working.length) return null;
+            return (
+              <div className="empty-state" style={{ textAlign: "left" }}>
+                ⏳ <b>Ще працюють:</b>
+                <ul className="bullets">
+                  {[...new Set(working)].map((x) => (
+                    <li key={x}>{x}</li>
+                  ))}
+                </ul>
+                Звіт можна буде відправити, коли зупините їм роботи: обʼєкт → прізвище → «🚶 Зняти» або «🕒 Ввести години вручну».
+              </div>
+            );
+          })()}
           <div className="section-title">Обʼєкти</div>
           <div className="hint" style={{ padding: "0 16px 8px" }}>Перевірте обсяги й уведіть кінцевий одометр</div>
           <div className="list">
