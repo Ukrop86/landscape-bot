@@ -862,10 +862,17 @@ export function RoadTimesheet({
           : standingAtObject
             ? "AT_OBJECT"
             : "DRIVING";
+  // Обʼєкт для стрічки адміна беремо від машини, а не від того, що відкрито
+  // на екрані: нижній список -- навігатор, і бригадир ходить ним по обʼєктах,
+  // просто щоб бачити обстановку. Поки об'єкт брався з `atObjectId`, кожен
+  // такий перегляд переписував адміну «де бригада». На відкритий обʼєкт
+  // падаємо лише тоді, коли машини немає на жодному (їде дорогою, а картку
+  // обʼєкта попереду відкрили заради тих, хто дістався туди своїм ходом).
+  const carPlanName = carAtObjectId ? plans.find((p) => p.objectId === carAtObjectId)?.objectName : "";
   const progressObject = workingPlan
     ? workingPlan.objectName
     : standingAtObject
-      ? (atObjectPlan?.objectName ?? "")
+      ? (carPlanName || atObjectPlan?.objectName || "")
       : headingName;
 
   // Журнал дій. Тимчасово, на час обкатки: сам крок, на якому людина
@@ -5177,6 +5184,15 @@ export function RoadTimesheet({
                 </>
               );
             }
+            // Обʼєкт, на якому СТОЇТЬ МАШИНА, і чи ми зараз дивимось не на
+            // нього. Нижній список -- навігатор: бригадир вільно ходить по
+            // обʼєктах поїздки, щоб бачити, які роботи йдуть, і керувати
+            // ними. Але виїзд -- це про машину, а не про те, що відкрито на
+            // екрані. Поки цієї різниці не було, бригадир, який подивився
+            // наперед і натиснув «Продовжити маршрут», отримував питання про
+            // обʼєкт, куди не їхав.
+            const carPlan = carAtObjectId ? plans.find((p) => p.objectId === carAtObjectId) ?? null : null;
+            const viewingElsewhere = plan.objectId !== carAtObjectId;
             const openSessions = plan.sessions.filter((s) => !s.endedAt);
             const openSessionIds = new Set(openSessions.map((s) => s.employeeId));
             const everSessionIds = new Set(plan.sessions.map((s) => s.employeeId));
@@ -5226,6 +5242,15 @@ export function RoadTimesheet({
                     )}
                   </span>
                 </div>
+
+                {/* Дивитись чужий обʼєкт можна скільки завгодно -- але видно,
+                    що це саме перегляд, і де насправді машина. */}
+                {viewingElsewhere && (
+                  <div className="hint" style={{ padding: "0 16px 8px" }}>
+                    👁 Дивитесь «{plan.objectName}» ·{" "}
+                    {carPlan ? `машина на «${carPlan.objectName}»` : "машина в дорозі"}
+                  </div>
+                )}
 
                 {shiftOpen ? (
                   <div className="active-work-card">
@@ -5682,47 +5707,28 @@ export function RoadTimesheet({
                           <button
                             key={p.objectId}
                             className={`cell ${isCurrent ? "selected" : ""}`}
-                            onClick={() => {
-                              if (isCurrent) return;
-                              // Цей список ПЕРЕМИКАЄ панель, а не везе.
-                              //
-                              // На обʼєкті, де ще не були, тап ставив зелену
-                              // позначку «➤ ви тут» — при тому, що бус лишався
-                              // на попередньому обʼєкті, а бригадир нікуди не
-                              // їхав. Бригадир читав список як «куди далі»,
-                              // тицяв наступний обʼєкт, а потім «Продовжити
-                              // маршрут» питало його, чому на новому обʼєкті
-                              // нікого не висаджено, — і це виглядало як
-                              // помилка програми на рівному місці.
-                              if (!p.visited && !p.here.length && !p.sessions.length) {
-                                alertDialog(
-                                  `На «${p.objectName}» ще не були — цей список лише перемикає, який обʼєкт ви дивитесь.\n\n` +
-                                    `Щоб туди поїхати: «➡️ Продовжити маршрут» → оберіть «${p.objectName}» → «📍 Прибув».\n\n` +
-                                    `Якщо це сусідня ділянка і люди переходять пішки — «🚶 Перевести на інший обʼєкт».`,
-                                );
-                                return;
-                              }
-                              switchAtObject(p.objectId);
-                            }}
+                            onClick={() => switchAtObject(p.objectId)}
                           >
+                            {/* Зелений кружечок -- «оцей обʼєкт зараз
+                                відкритий», і більше нічого. Тут стояв напис
+                                «ви тут», і він брехав: список перемикає
+                                панель, а не везе бригаду, тож бригадир, який
+                                дивився наперед, бачив себе на обʼєкті, де його
+                                не було. 🚐 каже, де насправді машина -- саме
+                                звідти й стартує виїзд. */}
                             <span className="cell-title">
-                              {isCurrent ? <span className="obj-here">➤</span> : "📍"} {p.objectName}
+                              {isCurrent ? <span className="view-dot" /> : "📍"} {p.objectName}
+                              {carAtObjectId === p.objectId ? " 🚐" : ""}
                             </span>
                             {/* Колір несе те саме, що й текст, тільки швидше:
-                                зелений -- ви тут, помаранчевий -- там ще стоять
-                                люди, синій -- туди ще їхати, сірий -- закрито. */}
-                            <span
-                              className={`badge ${
-                                isCurrent ? "ok" : p.here.length ? "warn" : p.visited ? "" : "info"
-                              }`}
-                            >
-                              {isCurrent
-                                ? "ви тут"
-                                : p.here.length
-                                  ? `👤 ${p.here.length} тут`
-                                  : p.visited
-                                    ? "відвідано"
-                                    : "заплановано"}
+                                помаранчевий -- там ще стоять люди, синій --
+                                туди ще їхати, сірий -- закрито. */}
+                            <span className={`badge ${p.here.length ? "warn" : p.visited ? "" : "info"}`}>
+                              {p.here.length
+                                ? `👤 ${p.here.length} тут`
+                                : p.visited
+                                  ? "відвідано"
+                                  : "заплановано"}
                             </span>
                           </button>
                         );
@@ -6302,6 +6308,21 @@ export function RoadTimesheet({
                   </>
                 )}
 
+                {/* Дивимось не на той обʼєкт, де машина: виїжджати звідси
+                    нема чим і нема звідки. Замість «Продовжити маршрут» --
+                    дорога назад до машини, і вже звідти звичайний порядок:
+                    продовжити маршрут → обрати, куди їхати → «Прибув».
+                    Так попередження «нікого не висаджено» більше не може
+                    вилізти на обʼєкті, який просто відкрили подивитись. */}
+                {viewingElsewhere ? (
+                  <MainButton
+                    text={carPlan ? `↩️ До «${carPlan.objectName}»` : "↩️ До маршруту"}
+                    onClick={() => {
+                      if (carPlan) switchAtObject(carPlan.objectId);
+                      else setStep("DRIVE");
+                    }}
+                  />
+                ) : (
                 <MainButton
                   text={
                     atObjectReturnStep === "RETURN_PICKUP"
@@ -6397,6 +6418,7 @@ export function RoadTimesheet({
                     setStep(atObjectReturnStep);
                   }}
                 />
+                )}
               </>
             );
           })()}

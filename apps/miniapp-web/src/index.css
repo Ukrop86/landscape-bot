@@ -1498,3 +1498,40 @@ body {
 .trip-point:last-child .trip-label {
   font-weight: 600;
 }
+
+/* Зелений мигаючий кружечок у навігаторі обʼєктів: «оцей обʼєкт зараз
+   відкритий». Заміна напису «ви тут», який брехав -- список перемикає
+   панель, а не везе бригаду, тож бригадир, що дивився маршрут наперед,
+   бачив себе на обʼєкті, де його не було. */
+.view-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #34c759;
+  animation: view-dot-pulse 1.6s ease-out infinite;
+  flex: none;
+}
+
+@keyframes view-dot-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.55);
+    opacity: 1;
+  }
+  70% {
+    box-shadow: 0 0 0 7px rgba(52, 199, 89, 0);
+    opacity: 0.5;
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 199, 89, 0);
+    opacity: 1;
+  }
+}
+
+/* Телефон у руці цілий день, і миготіння тут -- зручність, а не сенс:
+   кому воно заважає, той бачить просто зелену крапку. */
+@media (prefers-reduced-motion: reduce) {
+  .view-dot {
+    animation: none;
+  }
+}
