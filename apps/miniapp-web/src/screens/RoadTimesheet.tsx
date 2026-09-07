@@ -5682,7 +5682,28 @@ export function RoadTimesheet({
                           <button
                             key={p.objectId}
                             className={`cell ${isCurrent ? "selected" : ""}`}
-                            onClick={() => !isCurrent && switchAtObject(p.objectId)}
+                            onClick={() => {
+                              if (isCurrent) return;
+                              // Цей список ПЕРЕМИКАЄ панель, а не везе.
+                              //
+                              // На обʼєкті, де ще не були, тап ставив зелену
+                              // позначку «➤ ви тут» — при тому, що бус лишався
+                              // на попередньому обʼєкті, а бригадир нікуди не
+                              // їхав. Бригадир читав список як «куди далі»,
+                              // тицяв наступний обʼєкт, а потім «Продовжити
+                              // маршрут» питало його, чому на новому обʼєкті
+                              // нікого не висаджено, — і це виглядало як
+                              // помилка програми на рівному місці.
+                              if (!p.visited && !p.here.length && !p.sessions.length) {
+                                alertDialog(
+                                  `На «${p.objectName}» ще не були — цей список лише перемикає, який обʼєкт ви дивитесь.\n\n` +
+                                    `Щоб туди поїхати: «➡️ Продовжити маршрут» → оберіть «${p.objectName}» → «📍 Прибув».\n\n` +
+                                    `Якщо це сусідня ділянка і люди переходять пішки — «🚶 Перевести на інший обʼєкт».`,
+                                );
+                                return;
+                              }
+                              switchAtObject(p.objectId);
+                            }}
                           >
                             <span className="cell-title">
                               {isCurrent ? <span className="obj-here">➤</span> : "📍"} {p.objectName}
