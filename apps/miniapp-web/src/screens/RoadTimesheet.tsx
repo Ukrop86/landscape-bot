@@ -3,6 +3,7 @@ import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPa
 import { useClearErrorOnSuccess } from "../lib/useClearErrorOnSuccess";
 import { todayISO } from "../lib/date";
 import { setTrackContext, track } from "../lib/track";
+import { tapProps } from "../lib/tap";
 import { mirrorDraft, clearMirroredDraft, fetchMirroredDraft } from "../lib/draftMirror";
 import { alertDialog, ask3Dialog, askDialog, confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
 import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial, roleTagClass, roleRank, findMyEmployeeId, type EmployeeRole } from "../lib/employee";
@@ -245,6 +246,10 @@ type DraftShape = {
   // сюди був саме звідти, це майже завжди збігалось. З входом «У дорозі» вже
   // ні: бригадир опинявся на обʼєкті, на який не прибував.
   volumesReturnStep?: Step;
+  // Список робіт до заходу в пікер. Саме на цьому екрані застосунок і застав
+  // бригадира, коли сім зайвих робіт лишились непоміченими: після перезапуску
+  // знімка не було, і вихід «‹ Назад» знову нічого б не спитав.
+  worksBeforePicker?: PlannedWork[] | null;
   // «Їдемо на базу, вони доробляють». Без цього перезапуск застосунку в
   // дорозі повертав день у глухий кут: на обʼєктах люди -- отже «Рушили на
   // базу» знову немає, хоч бригадир уже їде.
@@ -425,6 +430,63 @@ export function RoadTimesheet({
   // --- pre-departure review (READY) ---
   const [editReturnStep, setEditReturnStep] = useState<Step>("HUB");
   const [worksReturnStep, setWorksReturnStep] = useState<Step>("PLAN");
+  /**
+   * Яким був список робіт, коли зайшли в пікер.
+   *
+   * Пікер живий: кожен тап одразу міняє день, а «Готово» лише веде назад.
+   * Тож вихід через «‹ Назад» лишав зміни й нічого не питав -- бригадир
+   * вийшла з семи випадково доданих робіт і побачила їх аж на здачі.
+   * Тепер вихід назад зі зміненим списком питає, що з ним робити.
+   */
+  const [worksBeforePicker, setWorksBeforePicker] = useState<PlannedWork[] | null>(null);
+
+  /** Єдиний вхід у пікер робіт: запамʼятовує список, щоб було що відкотити. */
+  function openWorksPicker(objectId: string, returnTo: Step) {
+    setPlanObjectId(objectId);
+    setWorksReturnStep(returnTo);
+    setWorksBeforePicker(planFor(objectId).works);
+    setStep("PLAN_WORKS");
+  }
+
+  /**
+   * Вихід із пікера через «‹ Назад».
+   *
+   * «Готово» — це «так, я обрав». А «Назад» люди тиснуть і коли передумали,
+   * і коли просто виходять, і коли не розуміють, що встигли натикати. Тож
+   * якщо список змінився — питаємо прямо, показуючи БУЛО і СТАЛО. Третій
+   * вихід («Лишитись у списку») потрібен, щоб змах по попапу нічого не
+   * вирішував: із двох кнопок закриття вікна означало б відкат.
+   */
+  async function leaveWorksPicker() {
+    const before = worksBeforePicker;
+    const objectId = planObjectId;
+    if (!before || !objectId) {
+      setWorksBeforePicker(null);
+      setStep(worksReturnStep);
+      return;
+    }
+    const now = planFor(objectId).works;
+    const same = now.length === before.length && now.every((w) => before.some((b) => b.workId === w.workId));
+    if (!same) {
+      const answer = await ask3Dialog(
+        `Список робіт на «${planFor(objectId).objectName}» змінився.\n\n` +
+          `Було: ${before.length} · Стало: ${now.length}\n\n` +
+          `Зберегти зміни чи повернути як було?`,
+        "Зберегти",
+        "Скасувати зміни",
+        "Лишитись у списку",
+        "Список робіт змінено",
+      );
+      if (answer === "cancel") return;
+      if (answer === "b") {
+        setPlans((prev) => prev.map((p) => (p.objectId !== objectId ? p : { ...p, works: before })));
+        logChange(`${planFor(objectId).objectName}: зміни в списку робіт скасовано (лишилось ${before.length})`);
+        haptic("warning");
+      }
+    }
+    setWorksBeforePicker(null);
+    setStep(worksReturnStep);
+  }
   const [readyPeopleExpanded, setReadyPeopleExpanded] = useState(false);
   const [readyExpandedObjectId, setReadyExpandedObjectId] = useState<string | null>(null);
 
@@ -714,6 +776,7 @@ export function RoadTimesheet({
       setAtObjectReturnStep(draft.atObjectReturnStep ?? "DRIVE");
       setPlanObjectId(draft.planObjectId ?? null);
       setVolumesReturnStep(draft.volumesReturnStep ?? "AT_OBJECT");
+      setWorksBeforePicker(draft.worksBeforePicker ?? null);
       setGoingHomeWithoutThem(!!draft.goingHomeWithoutThem);
       setCoefs(draft.coefs ?? {});
       setEditingTripSeq(draft.editingTripSeq ?? null);
@@ -1009,6 +1072,7 @@ export function RoadTimesheet({
       atObjectReturnStep,
       planObjectId,
       volumesReturnStep,
+      worksBeforePicker,
       goingHomeWithoutThem,
       coefs,
       editingTripSeq,
@@ -1053,6 +1117,7 @@ export function RoadTimesheet({
     atObjectReturnStep,
     planObjectId,
     volumesReturnStep,
+    worksBeforePicker,
     goingHomeWithoutThem,
     coefs,
     editingTripSeq,
@@ -1260,6 +1325,7 @@ export function RoadTimesheet({
     setCarAtObjectId("");
     setAtObjectReturnStep("DRIVE");
     setPlanObjectId(null);
+    setWorksBeforePicker(null);
     setGoingHomeWithoutThem(false);
     setChangeLog([]);
     setEditingTripSeq(null);
@@ -2272,7 +2338,7 @@ export function RoadTimesheet({
   function workPickerCell(objectId: string, w: Work) {
     const checked = planFor(objectId).works.some((pw) => pw.workId === w.id);
     return (
-      <button key={w.id} className={`cell ${checked ? "selected" : ""}`} onClick={() => toggleWork(objectId, w)}>
+      <button key={w.id} className={`cell ${checked ? "selected" : ""}`} {...tapProps(() => toggleWork(objectId, w))}>
         <span className="cell-title" style={{ display: "flex", alignItems: "center" }}>
           <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
           {w.name}
@@ -3398,7 +3464,7 @@ export function RoadTimesheet({
       return;
     }
     if (step === "PLAN_WORKS") {
-      setStep(worksReturnStep);
+      leaveWorksPicker();
       return;
     }
     if (step === "REVIEW") {
@@ -4459,9 +4525,7 @@ export function RoadTimesheet({
                   <button
                     className="cell"
                     onClick={() => {
-                      setPlanObjectId(plan.objectId);
-                      setWorksReturnStep("PLAN");
-                      setStep("PLAN_WORKS");
+                      openWorksPicker(plan.objectId, "PLAN");
                     }}
                   >
                     <span className="cell-title">{plan.objectName}</span>
@@ -4531,7 +4595,7 @@ export function RoadTimesheet({
                     <div style={{ paddingLeft: 12 }}>
                       <button
                         className={`bulk-select-btn ${allSelected ? "active" : ""}`}
-                        onClick={() => toggleAllWorksInCategory(planObjectId, g.members)}
+                        {...tapProps(() => toggleAllWorksInCategory(planObjectId, g.members))}
                       >
                         {allSelected ? "✕ Зняти всі в категорії" : "✓ Обрати всі в категорії"}
                       </button>
@@ -4557,7 +4621,7 @@ export function RoadTimesheet({
                               <div style={{ paddingLeft: 12 }}>
                                 <button
                                   className={`bulk-select-btn ${subAllSelected ? "active" : ""}`}
-                                  onClick={() => toggleAllWorksInCategory(planObjectId, sg.members)}
+                                  {...tapProps(() => toggleAllWorksInCategory(planObjectId, sg.members))}
                                 >
                                   {subAllSelected ? "✕ Зняти всі в підкатегорії" : "✓ Обрати всі в підкатегорії"}
                                 </button>
@@ -4585,7 +4649,10 @@ export function RoadTimesheet({
           <MainButton
             text="Готово"
             onClick={() => {
+              // «Готово» -- це «так, я обрав». Тут нічого не питаємо й нічого
+              // не відкочуємо, лише забуваємо знімок.
               logChange(`Роботи на "${planFor(planObjectId).objectName}": ${planFor(planObjectId).works.length}`);
+              setWorksBeforePicker(null);
               setStep(worksReturnStep);
             }}
             disabled={!planFor(planObjectId).works.length}
@@ -4850,9 +4917,7 @@ export function RoadTimesheet({
                     <button
                       className="cell-action"
                       onClick={() => {
-                        setPlanObjectId(p.objectId);
-                        setWorksReturnStep("READY");
-                        setStep("PLAN_WORKS");
+                        openWorksPicker(p.objectId, "READY");
                       }}
                       title="Редагувати"
                     >
@@ -5634,9 +5699,7 @@ export function RoadTimesheet({
                       <button
                         className="cell"
                         onClick={() => {
-                          setPlanObjectId(atObjectId);
-                          setWorksReturnStep("AT_OBJECT");
-                          setStep("PLAN_WORKS");
+                          openWorksPicker(atObjectId, "AT_OBJECT");
                         }}
                       >
                         <span className="cell-title">✏️ Додати/змінити роботи</span>
@@ -7129,9 +7192,7 @@ export function RoadTimesheet({
                         <button
                           className="chip chip-sm"
                           onClick={() => {
-                            setPlanObjectId(p.objectId);
-                            setWorksReturnStep("REVIEW");
-                            setStep("PLAN_WORKS");
+                            openWorksPicker(p.objectId, "REVIEW");
                           }}
                         >
                           ✏️ Змінити роботи
