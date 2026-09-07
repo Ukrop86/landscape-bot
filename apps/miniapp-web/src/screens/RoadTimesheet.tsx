@@ -2399,6 +2399,19 @@ export function RoadTimesheet({
   // drive screen.
   const headingTo = plans.find((p) => p.objectId === headingToObjectId) ?? null;
 
+  /**
+   * Пункт призначення для екрана ВИЇЗДУ — дійсний, лише поки на обʼєкті ще є
+   * що робити.
+   *
+   * `headingTo` сам по собі цього не перевіряє, хоч коментар вище саме це й
+   * обіцяв. Через це бригадир, який завершив роботи й поїхав далі, бачив
+   * «Прямуємо до 📍 Апартель Косино» і кнопку «📍 Прибув: Апартель Косино» —
+   * назад на обʼєкт, з якого щойно виїхав, поки насправді їхав до Ужгорода.
+   * На екрані ПОВЕРНЕННЯ фільтр не потрібен і шкідливий: там якраз
+   * повертаються по відпрацьовані обʼєкти, тож він користується `headingTo`.
+   */
+  const driveHeadingTo = headingTo && objectUnfinished(headingTo) ? headingTo : null;
+
   // Where "↩️ Повернутися до поїздки" on HUB should actually land. Follows
   // the LIVE trip's state first (objects still to visit -> people to pick up
   // -> final odometer): an earlier trip submitted for this date must not
@@ -4785,7 +4798,7 @@ export function RoadTimesheet({
         </>
       )}
 
-      {step === "DRIVE" && nextUnvisited && !headingTo && (
+      {step === "DRIVE" && nextUnvisited && !driveHeadingTo && (
         <>
           <div style={{ textAlign: "center" }}>
             <div className="step-badge">🚗 КУДИ ЇДЕМО?</div>
@@ -4824,7 +4837,7 @@ export function RoadTimesheet({
         </>
       )}
 
-      {step === "DRIVE" && (!nextUnvisited || headingTo) && (
+      {step === "DRIVE" && (!nextUnvisited || driveHeadingTo) && (
         <>
           <div style={{ textAlign: "center" }}>
             <div className="step-badge">🚗 ПОЇЗДКА</div>
@@ -4854,14 +4867,14 @@ export function RoadTimesheet({
               })()}
             </div>
           )}
-          {nextUnvisited && headingTo && (
-            <div className="hint drive-destination">Прямуємо до 📍 {headingTo.objectName}</div>
+          {nextUnvisited && driveHeadingTo && (
+            <div className="hint drive-destination">Прямуємо до 📍 {driveHeadingTo.objectName}</div>
           )}
           {/* Дві дії поїздки -- обидві рідкісні, тож маленькі, приглушені й
               під пунктом призначення, а не окремою секцією над маршрутом,
               де вони важили більше за сам маршрут. */}
           <div className="drive-actions">
-            {nextUnvisited && headingTo && (
+            {nextUnvisited && driveHeadingTo && (
               <button
                 className="chip chip-sm chip-ghost"
                 onClick={() => {
@@ -4952,7 +4965,7 @@ export function RoadTimesheet({
               // тут своїм ходом», прибрано: бейдж «👤 1/1» поруч каже це саме,
               // тільки точніше, а дві позначки про одне читались як різні речі.
               const icon =
-                headingTo?.objectId === p.objectId ? (
+                driveHeadingTo?.objectId === p.objectId ? (
                   "🚗"
                 ) : p.visited ? (
                   <span className="obj-done">✓</span>
@@ -5032,8 +5045,8 @@ export function RoadTimesheet({
             <span>🚶 приїхав сам</span>
           </div>
 
-          {nextUnvisited && headingTo ? (
-            <MainButton text={`📍 Прибув: ${headingTo.objectName}`} onClick={() => arriveAt(headingTo.objectId)} />
+          {nextUnvisited && driveHeadingTo ? (
+            <MainButton text={`📍 Прибув: ${driveHeadingTo.objectName}`} onClick={() => arriveAt(driveHeadingTo.objectId)} />
           ) : (
             <MainButton
               // Distinct label from the last-object "🏁 Повертатись на базу"
@@ -6337,6 +6350,28 @@ export function RoadTimesheet({
                       }
                       setStep(stillOut.length ? "RETURN_PICKUP" : "RETURN");
                       return;
+                    }
+                    // Їдемо на наступний обʼєкт, а бригада стоїть на цьому.
+                    //
+                    // Гілка останнього обʼєкта (вище) про це питає, ця -- ні:
+                    // бус просто виїжджав, лишаючи людей стояти. Забрати їх
+                    // після цього можна було тільки абсурдним шляхом, який
+                    // бригадир і знайшов сам: обрати наступною метою обʼєкт,
+                    // на якому й так стоїш, «прибути» на нього вдруге і аж
+                    // тоді посадити. У звіті це другий приїзд туди, де ніхто
+                    // нікуди не їздив.
+                    if (atObjectReturnStep === "DRIVE" && carAtObjectId === plan.objectId && plan.here.length > 0) {
+                      const byBus = plan.here.filter((id) => !selfTransportIds.includes(id));
+                      const names = plan.here.map((id) => shortName(employeeName(id))).join(", ");
+                      const take = await askDialog(
+                        `На «${plan.objectName}» ще ${nPeople(plan.here.length)}: ${names}.\n\n` +
+                          `Якщо їдете далі разом — заберіть їх у бус зараз. Якщо лишаються тут працювати — «Лишити тут», ` +
+                          `заберете їх на зворотному шляху.`,
+                        byBus.length ? "🚐 Забрати в бус" : "Забрати",
+                        "Лишити тут",
+                        "Забираємо людей?",
+                      );
+                      if (take && byBus.length) await pickUpHere(plan.objectId, byBus);
                     }
                     setStep(atObjectReturnStep);
                   }}
