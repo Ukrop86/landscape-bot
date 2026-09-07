@@ -88,6 +88,7 @@ export default function App() {
           onSaved={showSavedToast}
           onOpenRetro={() => setScreen("roadTimesheetRetro")}
           isAdmin={me?.role === "ADMIN"}
+          myPib={me?.pib ?? ""}
         />
       )}
       {screen === "roadTimesheetRetro" && <RetroEntry onBack={() => setScreen("roadTimesheet")} onSaved={showSavedToast} />}

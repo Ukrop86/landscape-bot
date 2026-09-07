@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type Car, type Employee, type Work, type WorkObject, type SalaryPack, type TripPlan, type PlanObject, type Foreman, type PlannedResources } from "../lib/api";
 import { useClearErrorOnSuccess } from "../lib/useClearErrorOnSuccess";
 import { todayISO } from "../lib/date";
 import { setTrackContext, track } from "../lib/track";
 import { mirrorDraft, clearMirroredDraft, fetchMirroredDraft } from "../lib/draftMirror";
 import { alertDialog, askDialog, confirmDialog, haptic, useTelegramBackButton } from "../lib/telegram";
-import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial, roleTagClass, roleRank, type EmployeeRole } from "../lib/employee";
+import { employeeRole, initials, roleAccent, groupByBrigade, shortName, surnameInitial, roleTagClass, roleRank, findMyEmployeeId, type EmployeeRole } from "../lib/employee";
 import { groupWorks } from "../lib/works";
 import { works as nWorks, people as nPeople, objects as nObjects, plural } from "../lib/plural";
 import { saveDraft, loadDraft, clearDraft } from "../lib/draft";
@@ -345,11 +345,14 @@ export function RoadTimesheet({
   onSaved,
   onOpenRetro,
   isAdmin = false,
+  myPib = "",
 }: {
   onBack: () => void;
   onSaved: () => void;
   onOpenRetro: () => void;
   isAdmin?: boolean;
+  /** ПІБ з аркуша КОРИСТУВАЧІ — щоб підписати власний рядок у списках. */
+  myPib?: string;
 }) {
   // INDEX, not HUB: the hub is the builder for ONE trip, and landing straight
   // in it hid both the day's other trips and the planned ones.
@@ -490,6 +493,17 @@ export function RoadTimesheet({
   const [expandedReturnObjectId, setExpandedReturnObjectId] = useState<string | null>(null);
   const [expandedReturnPickupObjectId, setExpandedReturnPickupObjectId] = useState<string | null>(null);
   const [dropSelected, setDropSelected] = useState<string[]>([]);
+  /**
+   * Чи натиснув бригадир «Підтвердити», нікого не обравши.
+   *
+   * 07.09 бригадир чотири рази відкривав висадку і писав, що «не може
+   * висадити себе». У бусі він був сам, його рядок на екрані був -- але
+   * рядок не читався як те, на що треба натиснути, а «Підтвердити» був
+   * `disabled` і виглядав при цьому як звичайна активна синя кнопка. Тап у
+   * неї не давав НІЧОГО: ні дії, ні пояснення. Мовчання кнопки і є те, що
+   * людина називає «не працює».
+   */
+  const [dropEmptyHint, setDropEmptyHint] = useState(false);
   const [showDropPicker, setShowDropPicker] = useState(false);
   const [moveSelected, setMoveSelected] = useState<string[]>([]);
   const [moveTargetId, setMoveTargetId] = useState<string | null>(null);
@@ -1014,6 +1028,14 @@ export function RoadTimesheet({
   function employeeName(id: string) {
     return employees.find((e) => e.id === id)?.name ?? id;
   }
+
+  /**
+   * Рядок цього бригадира в довіднику ПРАЦІВНИКИ, зіставлений по ПІБ — тим
+   * самим правилом, що й на сервері (`resolveForemanEmployeeId`), бо спільного
+   * id між КОРИСТУВАЧІ й ПРАЦІВНИКИ немає. Порожньо, якщо ПІБ не збігся: тоді
+   * підпису «(Ви)» просто не буде, і це чесніше, ніж підписати не того.
+   */
+  const myEmployeeId = useMemo(() => findMyEmployeeId(employees, myPib), [employees, myPib]);
 
 
 
@@ -5415,6 +5437,7 @@ export function RoadTimesheet({
                         onClick={() => {
                           setDropSelected([]);
                           setAddArrivedSelected([]);
+                          setDropEmptyHint(false);
                           setAtObjectDetailsExpanded(false);
                           setArrivedPickerOpen(false);
                           setShowDropPicker(true);
@@ -5612,18 +5635,30 @@ export function RoadTimesheet({
                             {dropSelected.length === onboard.length ? "✕ Зняти всіх" : "✓ Обрати всіх"}
                           </button>
                         </div>
+                        {/* Заголовок про ІНШИХ, а список -- це і ти теж. Без
+                            цього рядка бригадир, який був у бусі сам, чотири
+                            рази відкривав висадку і не розумів, що треба
+                            натиснути на власне прізвище. */}
+                        <div className="hint" style={{ padding: "0 16px 6px" }}>
+                          Натисніть на прізвище — навпроти зʼявиться ✓. Себе теж треба позначити.
+                        </div>
                         <div className="list">
                           {onboard.map((id) => {
                             const checked = dropSelected.includes(id);
+                            const isMe = !!myEmployeeId && id === myEmployeeId;
                             return (
                               <button
                                 key={id}
                                 className={`cell ${checked ? "selected" : ""}`}
-                                onClick={() => setDropSelected((prev) => (checked ? prev.filter((x) => x !== id) : [...prev, id]))}
+                                onClick={() => {
+                                  setDropEmptyHint(false);
+                                  setDropSelected((prev) => (checked ? prev.filter((x) => x !== id) : [...prev, id]));
+                                }}
                               >
                                 <span className="cell-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
                                   <span className={`checkbox ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span>
                                   {shortName(employeeName(id))}
+                                  {isMe && <span className="badge info">Ви</span>}
                                 </span>
                                 <span className={roleTagClass(roleFor(id))}>{roleFor(id)}</span>
                               </button>
@@ -5740,21 +5775,38 @@ export function RoadTimesheet({
                     </div>
                     )}
 
+                    {dropEmptyHint && (
+                      <div className="empty-state" style={{ textAlign: "left", color: "#d70015" }}>
+                        Нікого не обрано. Натисніть на прізвище у списку «Кого залишити тут» — навпроти має зʼявитись ✓.
+                      </div>
+                    )}
                     <div className="confirm-row">
                       <button
                         className="chip"
                         onClick={() => {
                           setDropSelected([]);
                           setAddArrivedSelected([]);
+                          setDropEmptyHint(false);
                           setShowDropPicker(false);
                         }}
                       >
                         Скасувати
                       </button>
+                      {/* НЕ disabled: раніше кнопка була вимкнена, але виглядала
+                          як звичайна активна, і тап у неї не давав нічого --
+                          ні дії, ні пояснення. Мовчазна кнопка і є те, що
+                          людина називає «не працює». Тепер вона відповідає. */}
                       <button
                         className="chip selected"
-                        onClick={confirmDropAndArrived}
-                        disabled={!dropSelected.length && !addArrivedSelected.length}
+                        onClick={() => {
+                          if (!dropSelected.length && !addArrivedSelected.length) {
+                            setDropEmptyHint(true);
+                            haptic("error");
+                            return;
+                          }
+                          setDropEmptyHint(false);
+                          confirmDropAndArrived();
+                        }}
                       >
                         Підтвердити
                       </button>

@@ -143,3 +143,27 @@ export function groupByBrigade(employees: Employee[], roster: Employee[] = emplo
       return a.title.localeCompare(b.title);
     });
 }
+
+/**
+ * Зіставлення ПІБ бригадира (аркуш КОРИСТУВАЧІ) з рядком у ПРАЦІВНИКИ.
+ *
+ * Спільного id між цими двома довідниками немає, тож єдиний ключ -- ім'я.
+ * Дзеркало `normalizeName` із сервера (`routes/roadTimesheet.ts`), яким там
+ * знаходять, кому платити 20%: правило має бути одне, інакше застосунок
+ * підпише «(Ви)» не тому, кого сервер потім вважає власником дня.
+ */
+export function normalizeName(v: string): string {
+  return String(v ?? "")
+    .toLowerCase()
+    .replace(/[’ʼ'`]/g, "ʼ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Рядок у ПРАЦІВНИКИ, що відповідає ПІБ цього користувача (або ""). */
+export function findMyEmployeeId(employees: Employee[], pib: string): string {
+  if (!pib) return "";
+  const target = normalizeName(pib);
+  const matches = employees.filter((e) => normalizeName(e.name) === target);
+  return (matches.find((e) => e.active) ?? matches[0])?.id ?? "";
+}
