@@ -4669,18 +4669,47 @@ export function RoadTimesheet({
                   </div>
                 )}
                 <div className="list">
-                  {plan.works.map((w) => (
-                    <button key={w.workId} className="cell" onClick={() => openVolumeDetail(planObjectId, w)}>
-                      <span className="cell-title">{w.workName}</span>
-                      {w.volume && w.volume !== "?" ? (
-                        <span className="badge ok">
-                          {w.volume} {w.unit}
-                        </span>
-                      ) : (
-                        <span className="badge warn">🟡 Введи</span>
-                      )}
-                    </button>
-                  ))}
+                  {plan.works.map((w) => {
+                    const filled = !!w.volume && w.volume !== "?";
+                    return (
+                      <div key={w.workId} className="cell-row">
+                        <button className="cell" onClick={() => openVolumeDetail(planObjectId, w)}>
+                          <span className="cell-title">{w.workName}</span>
+                          {filled ? (
+                            <span className="badge ok">
+                              {w.volume} {w.unit}
+                            </span>
+                          ) : (
+                            <span className="badge warn">🟡 Введи</span>
+                          )}
+                        </button>
+                        {/* Хрестик лише в незаповнених.
+                            Роботу, яку додали й не встигли зробити, досі
+                            прибирали тільки через «✏️ Додати/змінити роботи»
+                            -- тобто виходом з екрана обсягів у пікер на сотні
+                            рядків. Заповнена робота хрестика не має навмисно:
+                            там уже є цифра, і зняти її одним тапом означало б
+                            стерти зроблене. Таку прибирають у пікері, свідомо. */}
+                        {!filled && (
+                          <button
+                            className="cell-action"
+                            title="Прибрати роботу"
+                            onClick={async () => {
+                              const ok = await confirmDialog(
+                                `Прибрати роботу «${w.workName}» з «${plan.objectName}»?\n\n` +
+                                  `Її не буде у звіті й за неї не нарахується.`,
+                              );
+                              if (!ok) return;
+                              removeWork(planObjectId, w.workId);
+                              logChange(`${plan.objectName}: прибрано роботу «${w.workName}»`);
+                            }}
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
                 {unfilled.length > 0 && (
                   <div className="hint" style={{ padding: "8px 16px" }}>
