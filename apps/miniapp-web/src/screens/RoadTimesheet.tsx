@@ -240,6 +240,11 @@ type DraftShape = {
   // screens render nothing without it, so an app-kill mid-edit would
   // otherwise restore to a blank screen with no way back except resetting.
   planObjectId: string | null;
+  // Куди веде «Зберегти» з екрана обсягів. Раніше не зберігалось, і після
+  // падіння застосунку повернення завжди йшло на обʼєкт -- поки єдиний вхід
+  // сюди був саме звідти, це майже завжди збігалось. З входом «У дорозі» вже
+  // ні: бригадир опинявся на обʼєкті, на який не прибував.
+  volumesReturnStep?: Step;
   coefs: Record<string, CoefPair>;
   // Which already-submitted trip this draft is mid-edit of, if any -- lost
   // without this, an interrupted edit (app killed before resubmitting) would
@@ -688,6 +693,7 @@ export function RoadTimesheet({
       setCarAtObjectId(draft.carAtObjectId ?? "");
       setAtObjectReturnStep(draft.atObjectReturnStep ?? "DRIVE");
       setPlanObjectId(draft.planObjectId ?? null);
+      setVolumesReturnStep(draft.volumesReturnStep ?? "AT_OBJECT");
       setCoefs(draft.coefs ?? {});
       setEditingTripSeq(draft.editingTripSeq ?? null);
       if (draft.fixingReturnedDate && stash) {
@@ -974,6 +980,7 @@ export function RoadTimesheet({
       carAtObjectId,
       atObjectReturnStep,
       planObjectId,
+      volumesReturnStep,
       coefs,
       editingTripSeq,
       planEditing,
@@ -1016,6 +1023,7 @@ export function RoadTimesheet({
     atObjectId,
     atObjectReturnStep,
     planObjectId,
+    volumesReturnStep,
     coefs,
     editingTripSeq,
     planEditing,
@@ -2641,6 +2649,13 @@ export function RoadTimesheet({
     setPlanObjectId(objectId);
     setVolumesReturnStep(returnTo);
     setStep("PLAN_VOLUMES");
+  }
+
+  /** Скільки обсягів обʼєкта вже введено — для лічильника на кнопках входу. */
+  function volumeStat(p: ObjPlan) {
+    const total = p.works.length;
+    const filled = p.works.filter((w) => w.volume && w.volume !== "?").length;
+    return { total, filled, left: total - filled };
   }
 
   // ---------- at object ----------
@@ -4520,6 +4535,28 @@ export function RoadTimesheet({
             return (
               <>
                 <div className="step-badge">{plan.objectName.toUpperCase()} · ОБСЯГИ</div>
+                {/* Перемикач обʼєктів поїздки.
+                    «До обіду зробили сім» часто стосується обʼєкта, з якого
+                    вже поїхали, а перемкнути обʼєкт на екрані обʼєкта -- це
+                    `switchAtObject`, тобто реальний перехід бригади, а не
+                    перегляд. Ці чіпи міняють лише те, чиї обсяги ти зараз
+                    вводиш, і не чіпають ані `atObjectId`, ані таймери. */}
+                {plans.length > 1 && (
+                  <div className="chip-row" style={{ padding: "0 16px 8px" }}>
+                    {plans.map((p) => {
+                      const stat = volumeStat(p);
+                      return (
+                        <button
+                          key={p.objectId}
+                          className={`chip ${p.objectId === planObjectId ? "selected" : ""}`}
+                          onClick={() => setPlanObjectId(p.objectId)}
+                        >
+                          {p.objectName} {stat.filled}/{stat.total}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 <div className="section-title row">
                   <span>Обсяги</span>
                   <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -4869,6 +4906,28 @@ export function RoadTimesheet({
                     <div className="hint" style={{ padding: "0 16px 8px" }}>Нікого немає в машині</div>
                   )}
                 </>
+              );
+            })()}
+
+          {/* Обід буває і в дорозі, і між обʼєктами. Без цього входу, щоб
+              записати обсяг зробленої вранці роботи, треба було кудись
+              «прибути» -- а це запис про те, де стоїть бригада, не перегляд.
+              Веде на обʼєкт, де ще лишились незаповнені; там нагорі чіпи, тож
+              з одного місця вводяться обсяги будь-якого обʼєкта поїздки. */}
+          {plans.some((p) => p.works.length > 0) &&
+            (() => {
+              const target = plans.find((p) => volumeStat(p).left > 0) ?? plans.find((p) => p.works.length > 0)!;
+              const left = plans.reduce((acc, p) => acc + volumeStat(p).left, 0);
+              const total = plans.reduce((acc, p) => acc + volumeStat(p).total, 0);
+              return (
+                <div className="list">
+                  <button className="cell" onClick={() => openVolumesForObject(target.objectId, "DRIVE")}>
+                    <span className="cell-title">📏 Ввести обсяги</span>
+                    <span className={`badge ${left ? "warn" : "ok"}`}>
+                      {total - left}/{total}
+                    </span>
+                  </button>
+                </div>
               );
             })()}
 
@@ -5471,6 +5530,22 @@ export function RoadTimesheet({
                         <span className="cell-sub">{nWorks(plan.works.length)}</span>
                       </button>
                     </div>
+                    {/* Обсяги посеред дня, не зупиняючи нічого.
+                        Досі єдиний шлях сюди з обʼєкта відкривався ПІСЛЯ
+                        «⏹ Завершити все», тобто щоб записати обсяг зробленої
+                        до обіду роботи, треба було зупинити всі інші. Тому їх
+                        і вводили ввечері на базі, по памʼяті. Таймери від
+                        цього входу не чіпаються взагалі. */}
+                    {plan.works.length > 0 && (
+                      <div className="list">
+                        <button className="cell" onClick={() => openVolumesForObject(plan.objectId, "AT_OBJECT")}>
+                          <span className="cell-title">📏 Ввести обсяги</span>
+                          <span className={`badge ${volumeStat(plan).left ? "warn" : "ok"}`}>
+                            {volumeStat(plan).filled}/{volumeStat(plan).total}
+                          </span>
+                        </button>
+                      </div>
+                    )}
                     {/* Три дії про склад людей, згорнуті в одне меню: кожна
                         трапляється кілька разів на день, а місце вгорі екрана
                         вони їли постійно. Дві з них не залежать від того, де
