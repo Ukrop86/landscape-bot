@@ -50,17 +50,30 @@ function splitMoneyByShares(total: number, shares: number[]): number[] {
 }
 
 /**
- * Обсяг для рядка «Доплата за виїзд»: скільки проїхали і скільки з того
- * оплачувано. Роз'їзди («машина вибула по справам») не входять у клас поїздки,
- * тож саме на цю різницю сума й не схожа на одометр.
+ * Обсяг для рядка «Доплата за виїзд»: скільки проїхали, скільки з того
+ * оплачувано і який це клас. Роз'їзди («машина вибула по справам») не входять
+ * у клас поїздки, тож саме на цю різницю сума й не схожа на одометр.
+ *
+ * Клас іде сюди, а не в колонку «Роботи»: там назва має лишатись рівно
+ * «Доплата за виїзд», бо бухгалтер фільтрує звіт саме по ній, а назва, що
+ * міняється від дня до дня, такий фільтр ламає. Формат той самий, що бачить
+ * бригадир у застосунку (`190 км · клас M`) — одна цифра не має виглядати
+ * двома різними способами в двох місцях.
  */
-function formatRoadKm(km?: number, billableKm?: number): string {
-  if (!Number.isFinite(km as number)) return "";
-  const total = Math.round(Number(km));
-  if (total <= 0) return "";
-  const billable = Number.isFinite(billableKm as number) ? Math.round(Number(billableKm)) : total;
-  const excluded = total - billable;
-  return excluded > 0 ? `${billable} км (проїхали ${total}, роз'їзди −${excluded})` : `${total} км`;
+function formatRoadKm(km?: number, billableKm?: number, tripClass?: string): string {
+  const parts: string[] = [];
+  const total = Number.isFinite(km as number) ? Math.round(Number(km)) : null;
+  if (total !== null && total > 0) {
+    const billable = Number.isFinite(billableKm as number) ? Math.round(Number(billableKm)) : total;
+    const excluded = total - billable;
+    parts.push(excluded > 0 ? `${billable} км` : `${total} км`);
+    if (tripClass) parts.push(`клас ${tripClass}`);
+    // Хвіст про роз'їзди — після класу: клас порахований саме з оплачуваних км.
+    return excluded > 0
+      ? `${parts.join(" · ")} (проїхали ${total}, роз'їзди −${excluded})`
+      : parts.join(" · ");
+  }
+  return tripClass ? `клас ${tripClass}` : "";
 }
 
 export type AccountingWork = { workId: string; workName: string; volume?: string | number; employeeIds?: string[] };
@@ -101,12 +114,14 @@ export function buildAccountingRows(params: {
    *  виглядає як раніше, з порожнім обсягом. */
   roadKm?: number;
   roadBillableKm?: number;
+  /** Клас поїздки (S/M/L/XL) — те, з чого й береться сума доплати. */
+  roadTripClass?: string;
   unionEmployeeIds: string[];
   employeeNameById: Map<string, string>;
   tariffByWorkId: Map<string, number>;
   unitByWorkId: Map<string, string>;
 }): AccountingRow[] {
-  const { date, foremanName, objects, salaryPacks, roadAllowancePerPerson, roadKm, roadBillableKm, unionEmployeeIds, employeeNameById, tariffByWorkId, unitByWorkId } = params;
+  const { date, foremanName, objects, salaryPacks, roadAllowancePerPerson, roadKm, roadBillableKm, roadTripClass, unionEmployeeIds, employeeNameById, tariffByWorkId, unitByWorkId } = params;
   const objectsById = new Map(objects.map((o) => [o.objectId, o]));
   const out: AccountingRow[] = [];
 
@@ -152,15 +167,20 @@ export function buildAccountingRows(params: {
     }
   }
 
-  if (roadAllowancePerPerson > 0) {
-    // Кілометри в колонці «Обсяг робіт»: для рядка доплати обсяг — це і є
-    // пробіг, і без нього сума ні з чого не виводиться (клас поїздки, від
-    // якого вона рахується, у звіті ніде не видно).
-    //
-    // Коли були роз'їзди, показуємо ОБИДВА числа: платять за меншу цифру, а
-    // бухгалтеру ще й треба бачити, чому вона менша за одометр. Одна цифра
-    // тут щоразу виглядала б як помилка — байдуже, яку з двох поставити.
-    const volume = formatRoadKm(roadKm, roadBillableKm);
+  // Кілометри й клас у колонці «Обсяг робіт»: для рядка доплати обсяг — це і є
+  // пробіг, і без нього сума ні з чого не виводиться.
+  //
+  // Коли були роз'їзди, показуємо ОБИДВА числа: платять за меншу цифру, а
+  // бухгалтеру ще й треба бачити, чому вона менша за одометр. Одна цифра
+  // тут щоразу виглядала б як помилка — байдуже, яку з двох поставити.
+  const volume = formatRoadKm(roadKm, roadBillableKm, roadTripClass);
+  // Рядок пишеться і при НУЛЬОВІЙ доплаті: поки тарифи класів у НАЛАШТУВАННЯХ
+  // стоять 0, звіт мовчки не мав жодного сліду виїзду — ні кілометрів, ні
+  // класу, і «доплату не нарахували» було не відрізнити від «день не
+  // експортувався». Нуль у грошах — це теж результат, і його видно.
+  // Умова тепер на ЗМІСТ, а не на суму: якщо ні пробігу, ні класу немає,
+  // показувати нічого й рядок не з'являється.
+  if (roadAllowancePerPerson > 0 || volume) {
     for (const empId of unionEmployeeIds) {
       out.push({
         date,

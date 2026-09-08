@@ -1913,6 +1913,7 @@ async function exportApprovedDayToAccounting(
       // розійтися з власною сумою.
       roadKm: combined.km,
       roadBillableKm: combined.billableKm,
+      roadTripClass: combined.tripClass,
       unionEmployeeIds: unionEmployeeIds.filter((id) => !unionSelfTransportIds.includes(id)),
       employeeNameById,
       tariffByWorkId,
