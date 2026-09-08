@@ -876,6 +876,24 @@ export function RoadTimesheet({
         const d = mirrored.payload;
         const hasWork = !!d.carId || d.employeeIds.length > 0 || d.plans.length > 0;
         if (!hasWork) return;
+        // Другий рубіж проти задвоєної поїздки. Дзеркало може пережити здачу
+        // (гонка з відкладеним знімком -- див. clearMirroredDraft), і тоді
+        // воно описує день, який УЖЕ в базі. Підняти його означає отримати
+        // конструктор без editingTripSeq, тобто кнопку «Відправити на
+        // підтвердження» замість «Оновити звіт»: один тап -- і в дні дві
+        // поїздки з тими самими сесіями, а mergeObjects складе їхні години й
+        // обсяги. Саме так 08.09 у звіті вийшло по 15.91 год на людину.
+        //
+        // Повернений день -- виняток: його для того й повернули, щоб правити.
+        try {
+          const st = await api.get<DayStatus>(`/api/road-timesheet/day-status?date=${d.date}`);
+          if (st.hasSubmission && !st.returned) {
+            clearMirroredDraft();
+            return;
+          }
+        } catch {
+          // Статус не дістали -- нехай вирішує людина, як і до цього.
+        }
         const when = new Date(mirrored.updatedAt).toLocaleString("uk-UA", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" });
         if (!(await confirmDialog(`На цьому телефоні незавершеного дня немає, але на сервері є — від ${when} (${d.date}).\n\nВідновити його?`))) return;
         restoreBuilder({
