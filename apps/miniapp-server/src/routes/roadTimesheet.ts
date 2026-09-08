@@ -1908,6 +1908,11 @@ async function exportApprovedDayToAccounting(
       objects: mergedObjects,
       salaryPacks: combined.salaryPacks,
       roadAllowancePerPerson: combined.roadAllowance.perPerson,
+      // Беремо з ТОГО САМОГО computePayroll, що дав суму доплати, а не
+      // рахуємо кілометри тут удруге: інакше рядок у БУХЗВІТі міг би з часом
+      // розійтися з власною сумою.
+      roadKm: combined.km,
+      roadBillableKm: combined.billableKm,
       unionEmployeeIds: unionEmployeeIds.filter((id) => !unionSelfTransportIds.includes(id)),
       employeeNameById,
       tariffByWorkId,

@@ -49,6 +49,20 @@ function splitMoneyByShares(total: number, shares: number[]): number[] {
   return cents.map((c) => c / 100);
 }
 
+/**
+ * Обсяг для рядка «Доплата за виїзд»: скільки проїхали і скільки з того
+ * оплачувано. Роз'їзди («машина вибула по справам») не входять у клас поїздки,
+ * тож саме на цю різницю сума й не схожа на одометр.
+ */
+function formatRoadKm(km?: number, billableKm?: number): string {
+  if (!Number.isFinite(km as number)) return "";
+  const total = Math.round(Number(km));
+  if (total <= 0) return "";
+  const billable = Number.isFinite(billableKm as number) ? Math.round(Number(billableKm)) : total;
+  const excluded = total - billable;
+  return excluded > 0 ? `${billable} км (проїхали ${total}, роз'їзди −${excluded})` : `${total} км`;
+}
+
 export type AccountingWork = { workId: string; workName: string; volume?: string | number; employeeIds?: string[] };
 export type AccountingObject = { objectId: string; objectName: string; works: AccountingWork[] };
 export type AccountingSalaryRow = { employeeId: string; employeeName: string; pay: number };
@@ -82,12 +96,17 @@ export function buildAccountingRows(params: {
   objects: AccountingObject[];
   salaryPacks: AccountingSalaryPack[];
   roadAllowancePerPerson: number;
+  /** Пробіг дня за одометром і та його частина, з якої рахувалась доплата
+   *  (різниця — роз'їзди). Обидва необов'язкові: без них рядок доплати
+   *  виглядає як раніше, з порожнім обсягом. */
+  roadKm?: number;
+  roadBillableKm?: number;
   unionEmployeeIds: string[];
   employeeNameById: Map<string, string>;
   tariffByWorkId: Map<string, number>;
   unitByWorkId: Map<string, string>;
 }): AccountingRow[] {
-  const { date, foremanName, objects, salaryPacks, roadAllowancePerPerson, unionEmployeeIds, employeeNameById, tariffByWorkId, unitByWorkId } = params;
+  const { date, foremanName, objects, salaryPacks, roadAllowancePerPerson, roadKm, roadBillableKm, unionEmployeeIds, employeeNameById, tariffByWorkId, unitByWorkId } = params;
   const objectsById = new Map(objects.map((o) => [o.objectId, o]));
   const out: AccountingRow[] = [];
 
@@ -134,13 +153,21 @@ export function buildAccountingRows(params: {
   }
 
   if (roadAllowancePerPerson > 0) {
+    // Кілометри в колонці «Обсяг робіт»: для рядка доплати обсяг — це і є
+    // пробіг, і без нього сума ні з чого не виводиться (клас поїздки, від
+    // якого вона рахується, у звіті ніде не видно).
+    //
+    // Коли були роз'їзди, показуємо ОБИДВА числа: платять за меншу цифру, а
+    // бухгалтеру ще й треба бачити, чому вона менша за одометр. Одна цифра
+    // тут щоразу виглядала б як помилка — байдуже, яку з двох поставити.
+    const volume = formatRoadKm(roadKm, roadBillableKm);
     for (const empId of unionEmployeeIds) {
       out.push({
         date,
         employeeName: employeeNameById.get(empId) ?? empId,
         objectName: "—",
         workName: "Доплата за виїзд",
-        volume: "",
+        volume,
         amount: money(roadAllowancePerPerson),
         foremanName,
       });
