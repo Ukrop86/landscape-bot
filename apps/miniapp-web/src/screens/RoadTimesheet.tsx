@@ -354,6 +354,11 @@ function fmtHMS(ms: number) {
   return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":");
 }
 
+/** Година:хвилина з ISO — для екранів, де час треба показати, а не рахувати. */
+function hhmmOf(iso: string) {
+  return new Date(iso).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" });
+}
+
 export function RoadTimesheet({
   onBack,
   onSaved,
@@ -606,6 +611,12 @@ export function RoadTimesheet({
   const [showAddPersonPicker, setShowAddPersonPicker] = useState(false);
   const [addPersonSelected, setAddPersonSelected] = useState<string[]>([]);
   const [addPersonArrival, setAddPersonArrival] = useState<"bus" | "own">("bus");
+  // З якого часу рахувати години доданій людині. Свідомо БЕЗ значення за
+  // замовчуванням: обидві відповіді правдоподібні, і кожна прямо міняє гроші.
+  // Дефолт «як бригада» вже коштував дня 08.09 -- бригадир додав пʼятьох, які
+  // щойно приїхали, і всім підтягнулись його 39 хвилин.
+  const [addPersonStart, setAddPersonStart] = useState<"crew" | "now" | null>(null);
+  const [addPersonStartHint, setAddPersonStartHint] = useState(false);
   const [addPersonSearch, setAddPersonSearch] = useState("");
   const [expandedAddBrigadeId, setExpandedAddBrigadeId] = useState<string | null>(null);
   // Меню «Редагувати людей» на екрані обʼєкта -- згорнуте, бо всі три дії
@@ -3088,18 +3099,34 @@ export function RoadTimesheet({
    * робилось через «прибули самі» -- і мовчки коштувало людині доплати за
    * виїзд, бо та кнопка ставить прапорець self-transport.
    *
-   * Тому питаємо прямо, як вона тут опинилась, і даємо їй ГОДИНИ БРИГАДИ:
-   * сесія від найранішого старту на цьому обʼєкті, відкрита, поки бригада
-   * працює. Не з моменту додавання -- інакше людина, яка працює з 08:00,
-   * втрачала б усе до тієї хвилини, коли її помітили.
+   * Тому питаємо прямо, як вона тут опинилась -- і, окремо, З ЯКОГО ЧАСУ
+   * рахувати їй години:
+   *   - «з бригадою» -- сесія від найранішого старту на цьому обʼєкті. Це для
+   *     того, кого забули внести: він працює з ранку, і час з моменту, коли
+   *     його помітили, вкрав би в нього все до тієї хвилини.
+   *   - «зараз» -- сесія від поточної хвилини. Це для того, хто справді
+   *     щойно доїхав: своїм ходом, після поломки, з іншого обʼєкта.
+   * Вибір обовʼязковий і без замовчування: раніше кнопка мовчки давала перший
+   * варіант, і день 08.09 приписав пʼятьом по 39 хвилин, яких вони не
+   * працювали.
    *
-   * Якщо бригада ще не починала, сесії немає: людина просто стоїть і піде в
-   * роботу разом з усіма.
+   * Якщо бригада ще не починала, питання не ставиться і сесії немає: людина
+   * просто стоїть і піде в роботу разом з усіма.
    */
   async function confirmAddPeople() {
     if (!atObjectId || !addPersonSelected.length) return;
     const ids = [...addPersonSelected];
-    const objectName = currentAtPlan()?.objectName ?? "";
+    const atPlan = currentAtPlan();
+    const objectName = atPlan?.objectName ?? "";
+    const crewWindow = atPlan ? crewWindowAt(atPlan, ids) : null;
+    // Питаємо тільки тоді, коли є з чого вибирати: без відкритої роботи на
+    // обʼєкті обидві відповіді означали б одне й те саме.
+    if (crewWindow && !addPersonStart) {
+      setAddPersonStartHint(true);
+      haptic("error");
+      return;
+    }
+    const window = crewWindow && addPersonStart === "now" ? { startedAt: new Date().toISOString() } : crewWindow;
     const mergedEmployeeIds = [...new Set([...employeeIds, ...ids])];
     try {
       await api.post("/api/road-timesheet/reserve", { date, carId, employeeIds: mergedEmployeeIds });
@@ -3117,7 +3144,6 @@ export function RoadTimesheet({
       prev.map((p) => {
         if (p.objectId !== atObjectId) return p;
         const crew = p.sessions.filter((x) => !ids.includes(x.employeeId));
-        const window = crewWindowAt(p, ids);
         if (!window) return { ...p, sessions: crew };
         const joined = ids.map((employeeId) => ({ employeeId, ...window }));
         return { ...p, sessions: [...crew, ...joined] };
@@ -3125,10 +3151,13 @@ export function RoadTimesheet({
     );
     logChange(
       `${objectName}: додано ${ids.map(employeeName).join(", ")} ` +
-        `(${addPersonArrival === "own" ? "приїхали самі" : "привезли бусом"}, години бригади)`,
+        `(${addPersonArrival === "own" ? "приїхали самі" : "привезли бусом"}, ` +
+        `${window ? `години з ${hhmmOf(window.startedAt)}` : "роботи ще не починались"})`,
     );
     haptic("success");
     setAddPersonSelected([]);
+    setAddPersonStart(null);
+    setAddPersonStartHint(false);
     setShowAddPersonPicker(false);
   }
 
@@ -3493,6 +3522,8 @@ export function RoadTimesheet({
       }
       if (showAddPersonPicker) {
         setAddPersonSelected([]);
+        setAddPersonStart(null);
+        setAddPersonStartHint(false);
         setShowAddPersonPicker(false);
         return;
       }
@@ -5764,12 +5795,14 @@ export function RoadTimesheet({
                             onClick={() => {
                               setAddPersonSelected([]);
                               setAddPersonArrival("bus");
+                              setAddPersonStart(null);
+                              setAddPersonStartHint(false);
                               setAddPersonSearch("");
                               setShowAddPersonPicker(true);
                             }}
                           >
                             <span className="cell-title">➕ Додати людину</span>
-                            <span className="cell-sub">з годинами бригади</span>
+                            <span className="cell-sub">яку забули внести або яка щойно приїхала</span>
                           </button>
                           {plans.length > 1 && (
                             <button
@@ -6069,26 +6102,64 @@ export function RoadTimesheet({
 
                 {showAddPersonPicker && (
                   <>
-                    {/* Показуємо конкретний час ДО підтвердження: правило
-                        «як бригада» звучить просто, поки всі стартували
-                        разом, і перестає, коли бригадир запускав кожного
-                        окремо. Хай бачить число, а не формулювання. */}
+                    {/* Обидва варіанти підписані КОНКРЕТНИМ часом, а не
+                        правилом: «як бригада» звучить просто, поки всі
+                        стартували разом, і перестає, коли бригадир запускав
+                        кожного окремо. Хай бачить число, а не формулювання. */}
                     {(() => {
                       const w = crewWindowAt(plan, addPersonSelected);
-                      const hhmm = (iso: string) =>
-                        new Date(iso).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" });
+                      if (!w) {
+                        return (
+                          <div className="hint" style={{ padding: "0 16px 8px" }}>
+                            Роботи тут ще не починались — людина просто стане на обʼєкт і піде в роботу разом з усіма.
+                          </div>
+                        );
+                      }
                       return (
-                        <div className="hint" style={{ padding: "0 16px 8px" }}>
-                          {w ? (
-                            <>
-                              Отримає години бригади: <b>з {hhmm(w.startedAt)}</b>
-                              {w.endedAt ? <> до <b>{hhmm(w.endedAt)}</b></> : " і далі, поки бригада працює"}. Це
-                              найраніший старт серед тих, хто працює тут зараз.
-                            </>
-                          ) : (
-                            "Роботи тут ще не починались — людина просто стане на обʼєкт і піде в роботу разом з усіма."
-                          )}
-                        </div>
+                        <>
+                          <div className="section-title">З якого часу рахувати години</div>
+                          <div className="chip-row split">
+                            <button
+                              className={`chip ${addPersonStart === "crew" ? "selected" : ""}`}
+                              onClick={() => {
+                                setAddPersonStart("crew");
+                                setAddPersonStartHint(false);
+                              }}
+                            >
+                              🕓 З бригадою · {hhmmOf(w.startedAt)}
+                            </button>
+                            <button
+                              className={`chip ${addPersonStart === "now" ? "selected" : ""}`}
+                              onClick={() => {
+                                setAddPersonStart("now");
+                                setAddPersonStartHint(false);
+                              }}
+                            >
+                              ▶️ Зараз · {hhmmOf(new Date().toISOString())}
+                            </button>
+                          </div>
+                          <div className="hint" style={{ padding: "6px 16px 0" }}>
+                            {addPersonStart === "crew" ? (
+                              <>
+                                Працювала тут з бригадою, її просто забули внести. Отримає години{" "}
+                                <b>з {hhmmOf(w.startedAt)}</b>
+                                {w.endedAt ? (
+                                  <> до <b>{hhmmOf(w.endedAt)}</b></>
+                                ) : (
+                                  " і далі, поки бригада працює"
+                                )}
+                                . Це найраніший старт серед тих, хто працює тут зараз.
+                              </>
+                            ) : addPersonStart === "now" ? (
+                              <>
+                                Щойно приїхала — своїм ходом, після поломки, з іншого обʼєкта. Години підуть{" "}
+                                <b>з цієї хвилини</b>, за те, що було раніше, їй не платять.
+                              </>
+                            ) : (
+                              "Оберіть одне з двох — від цього прямо залежать її години, а отже й гроші."
+                            )}
+                          </div>
+                        </>
                       );
                     })()}
                     <div className="section-title">Як вона тут опинилась</div>
@@ -6168,11 +6239,19 @@ export function RoadTimesheet({
                         );
                       })}
                     </div>
+                    {addPersonStartHint && (
+                      <div className="empty-state" style={{ textAlign: "left", color: "#d70015" }}>
+                        Не обрано, з якого часу рахувати години. Натисніть «🕓 З бригадою» або «▶️ Зараз» угорі — це
+                        різні гроші, тому за вас цього ніхто не вирішує.
+                      </div>
+                    )}
                     <div className="chip-row">
                       <button
                         className="chip"
                         onClick={() => {
                           setAddPersonSelected([]);
+                          setAddPersonStart(null);
+                          setAddPersonStartHint(false);
                           setShowAddPersonPicker(false);
                         }}
                       >
