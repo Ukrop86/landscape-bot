@@ -589,6 +589,225 @@ function mergeObjects(objectsByLeg: ObjectInput[][]): ObjectInput[] {
  * overwrites the same date's rows and reconciles anything removed since the
  * last submission.
  */
+/**
+ * Перерахунок ДНЯ після будь-якої зміни складу його поїздок.
+ *
+ * reports / timesheet_entries / allowances не мають виміру «поїздка» -- туди
+ * пишуться обʼєднані по дню значення (mergeObjects). Тому і здача поїздки, і
+ * її видалення означають одне й те саме: взяти день, яким він був, день, яким
+ * він став, і звести різницю -- дописати нове, а зникле погасити (СКАСОВАНО /
+ * нуль годин), ніколи не видаляючи фізично.
+ *
+ * Винесено спільним саме тому, що шляхів стало два. Копія цієї логіки в
+ * ендпоінті видалення розійшлася б із оригіналом на першій же правці, а
+ * розходяться тут не рядки таблиці, а суми в людей.
+ */
+async function reconcileDayTotals(
+  tx: LockedTx,
+  params: { date: string; foremanTgId: number; allTripsBefore: StoredTrip[]; tripsAfter: Array<Pick<StoredTrip, "employeeIds" | "selfTransportIds" | "objects" | "odoStart" | "odoEnd" | "errands">> },
+) {
+  const { date, foremanTgId, allTripsBefore, tripsAfter } = params;
+
+  const oldMergedObjects = mergeObjects(allTripsBefore.map((t) => t.objects));
+  const newMergedObjects = mergeObjects(tripsAfter.map((t) => t.objects));
+  const unionEmployeeIds = [...new Set(tripsAfter.flatMap((t) => t.employeeIds))];
+  const unionSelfTransportIds = [...new Set(tripsAfter.flatMap((t) => t.selfTransportIds ?? []))];
+  const totalKm = tripsAfter.reduce((acc, t) => {
+    const legKm = typeof t.odoStart === "number" && typeof t.odoEnd === "number" ? t.odoEnd - t.odoStart : 0;
+    return acc + (Number.isFinite(legKm) ? legKm : 0);
+  }, 0);
+  // Errand km summed across every leg of the day -- excluded from the
+  // combined trip class / allowance below (but NOT from totalKm, which
+  // stays the real odometer distance shown in the report).
+  const totalExcludedKm = tripsAfter.reduce((acc, t) => acc + sumErrandKm(t.errands), 0);
+  // Day-combined totals: what actually gets written to reports/timesheet/
+  // allowances below, since those tables have no per-trip dimension.
+  const combined = await computePayroll({
+    odoStart: 0,
+    odoEnd: totalKm,
+    employeeIds: unionEmployeeIds,
+    objects: newMergedObjects,
+    selfTransportIds: unionSelfTransportIds,
+    excludedKm: totalExcludedKm,
+    foremanTgId,
+  });
+
+    const currentObjectIds = new Set(newMergedObjects.map((o) => o.objectId));
+
+    for (const obj of newMergedObjects) {
+      if (obj.works?.length) {
+        await writeReports(
+          obj.works.map((w) => ({
+            date,
+            objectId: obj.objectId,
+            foremanTgId,
+            workId: w.workId,
+            workName: w.workName,
+            volume: w.volume,
+            volumeStatus: w.volume === undefined || w.volume === "" || w.volume === "?" ? "НЕ_ЗАПОВНЕНО" : "ЗАПОВНЕНО",
+            dayStatus: "ЗДАНО",
+          })),
+          tx,
+        );
+      }
+
+      const hoursByEmployee = combined.perObjectHours.find((h) => h.objectId === obj.objectId)?.hoursByEmployee ?? new Map();
+      if (hoursByEmployee.size) {
+        await writeTimesheetRows(
+          [...hoursByEmployee.entries()].map(([employeeId, v]) => ({
+            date,
+            objectId: obj.objectId,
+            employeeId,
+            employeeName: v.name,
+            hours: Math.round((v.ms / 3_600_000) * 100) / 100,
+            source: "ROAD",
+          })),
+          tx,
+        );
+      }
+
+      const allVolumesFilled = (obj.works ?? []).every((w) => w.volume !== undefined && w.volume !== "" && w.volume !== "?");
+      await writeDayStatus(
+        {
+          date,
+          objectId: obj.objectId,
+          foremanTgId,
+          status: "ЗДАНО",
+          hasReports: (obj.works ?? []).length > 0,
+          hasReportsVolumeOk: allVolumesFilled,
+          hasTimesheet: hoursByEmployee.size > 0,
+          hasRoad: true,
+          hasOdoStart: true,
+          hasOdoEnd: true,
+        },
+        tx,
+      );
+    }
+
+    // Reconcile at the day level: anything reported by ANY leg before this
+    // write but missing from the new day-total gets soft-cancelled (status
+    // set to СКАСОВАНО / hours zeroed), never physically deleted, so
+    // admin-side views can still see what happened but stop counting it --
+    // editing-and-resubmitting must not leave stale "ghost" data behind.
+    for (const prevObj of oldMergedObjects) {
+      const currentObj = newMergedObjects.find((o) => o.objectId === prevObj.objectId);
+      const currentWorkIds = new Set((currentObj?.works ?? []).map((w) => w.workId));
+      const removedWorks = (prevObj.works ?? []).filter((w) => !currentWorkIds.has(w.workId));
+
+      if (removedWorks.length) {
+        await writeReports(
+          removedWorks.map((w) => ({
+            date,
+            objectId: prevObj.objectId,
+            foremanTgId,
+            workId: w.workId,
+            workName: w.workName,
+            volume: w.volume,
+            volumeStatus: "НЕ_ЗАПОВНЕНО",
+            dayStatus: "СКАСОВАНО",
+          })),
+          tx,
+        );
+      }
+
+      if (!currentObjectIds.has(prevObj.objectId)) {
+        const prevEmployeeIds = [...new Set((prevObj.sessions ?? []).map((s) => s.employeeId))];
+        if (prevEmployeeIds.length) {
+          await writeTimesheetRows(
+            prevEmployeeIds.map((employeeId) => ({
+              date,
+              objectId: prevObj.objectId,
+              employeeId,
+              employeeName: combined.employeeById.get(employeeId)?.name ?? employeeId,
+              hours: 0,
+              source: "ROAD_СКАСОВАНО",
+            })),
+            tx,
+          );
+        }
+        await writeDayStatus({ date, objectId: prevObj.objectId, foremanTgId, status: "СКАСОВАНО" }, tx);
+      } else {
+        // The object itself is still in the day, but an employee who had
+        // hours there before might have been dropped from it in this
+        // resubmit (their session removed while others at the same object
+        // stayed) -- the main write loop above only writes hours for
+        // employees CURRENTLY at the object, so a removed one's old row
+        // would otherwise never get zeroed and would keep inflating their
+        // pay/hours forever.
+        const currentHoursByEmployee = combined.perObjectHours.find((h) => h.objectId === prevObj.objectId)?.hoursByEmployee ?? new Map();
+        const prevEmployeeIds = new Set((prevObj.sessions ?? []).map((s) => s.employeeId));
+        const droppedEmployeeIds = [...prevEmployeeIds].filter((id) => !currentHoursByEmployee.has(id));
+        if (droppedEmployeeIds.length) {
+          await writeTimesheetRows(
+            droppedEmployeeIds.map((employeeId) => ({
+              date,
+              objectId: prevObj.objectId,
+              employeeId,
+              employeeName: combined.employeeById.get(employeeId)?.name ?? employeeId,
+              hours: 0,
+              source: "ROAD_СКАСОВАНО",
+            })),
+            tx,
+          );
+        }
+      }
+    }
+
+    // Road allowance: ONE combined amount for the whole day (not per leg),
+    // based on the day's total km across every car used, split evenly
+    // among everyone who rode along in ANY leg today (not just those who
+    // worked) -- matches the bot's single-allowance-per-day model.
+    // Anyone who showed up under their own transport doesn't get a travel
+    // allowance row at all (not even a zero one) -- they still get their
+    // work pay via the reports/timesheet writes above.
+    const allowanceEligibleIds = unionEmployeeIds.filter((id) => !unionSelfTransportIds.includes(id));
+    if (allowanceEligibleIds.length) {
+      await writeAllowanceRows(
+        allowanceEligibleIds.map((employeeId) => ({
+          date,
+          foremanTgId,
+          type: "ROAD_TRIP",
+          employeeId,
+          employeeName: combined.employeeById.get(employeeId)?.name ?? employeeId,
+          objectId: "ROAD",
+          amount: combined.roadAllowance.perPerson,
+          meta: JSON.stringify({ km: totalKm, excludedKm: totalExcludedKm, billableKm: combined.billableKm, tripClass: combined.tripClass }),
+          dayStatus: "ЧЕРНЕТКА",
+        })),
+        tx,
+      );
+    }
+
+    // Anyone who WAS allowance-eligible before this write (rode along in an
+    // earlier leg, not self-transport) but isn't anymore -- dropped from
+    // the day entirely, or reclassified as self-transport -- keeps a
+    // stale, nonzero ROAD_TRIP row otherwise: the write above only ever
+    // touches CURRENTLY eligible people, the same gap the reports/
+    // timesheet reconciliation above this already closes for volumes/hours.
+    const oldUnionEmployeeIds = [...new Set(allTripsBefore.flatMap((t) => t.employeeIds))];
+    const oldUnionSelfTransportIds = [...new Set(allTripsBefore.flatMap((t) => t.selfTransportIds ?? []))];
+    const oldAllowanceEligibleIds = oldUnionEmployeeIds.filter((id) => !oldUnionSelfTransportIds.includes(id));
+    const droppedFromAllowance = oldAllowanceEligibleIds.filter((id) => !allowanceEligibleIds.includes(id));
+    if (droppedFromAllowance.length) {
+      await writeAllowanceRows(
+        droppedFromAllowance.map((employeeId) => ({
+          date,
+          foremanTgId,
+          type: "ROAD_TRIP",
+          employeeId,
+          employeeName: combined.employeeById.get(employeeId)?.name ?? employeeId,
+          objectId: "ROAD",
+          amount: 0,
+          meta: JSON.stringify({ km: totalKm, excludedKm: totalExcludedKm, billableKm: combined.billableKm, tripClass: combined.tripClass }),
+          dayStatus: "СКАСОВАНО",
+        })),
+        tx,
+      );
+    }
+
+  return { combined, totalKm, totalExcludedKm, newMergedObjects };
+}
+
 roadTimesheetRouter.post("/", async (req, res) => {
   const {
     date,
@@ -741,7 +960,6 @@ roadTimesheetRouter.post("/", async (req, res) => {
         throw new ReservationConflictError("Цей день уже затверджено -- редагування недоступне без запиту на редагування");
       }
 
-      const oldMergedObjects = mergeObjects(allTripsBefore.map((t) => t.objects));
       const tripsAfter = [
         ...allTripsBefore.filter((t) => t.tripSeq !== effectiveTripSeq),
         {
@@ -756,30 +974,6 @@ roadTimesheetRouter.post("/", async (req, res) => {
           errands: errands ?? [],
         },
       ];
-      const newMergedObjects = mergeObjects(tripsAfter.map((t) => t.objects));
-      const unionEmployeeIds = [...new Set(tripsAfter.flatMap((t) => t.employeeIds))];
-      const unionSelfTransportIds = [...new Set(tripsAfter.flatMap((t) => t.selfTransportIds ?? []))];
-      totalKm = tripsAfter.reduce((acc, t) => {
-        const legKm = typeof t.odoStart === "number" && typeof t.odoEnd === "number" ? t.odoEnd - t.odoStart : 0;
-        return acc + (Number.isFinite(legKm) ? legKm : 0);
-      }, 0);
-      // Errand km summed across every leg of the day -- excluded from the
-      // combined trip class / allowance below (but NOT from totalKm, which
-      // stays the real odometer distance shown in the report).
-      totalExcludedKm = tripsAfter.reduce((acc, t) => acc + sumErrandKm(t.errands), 0);
-      // Day-combined totals: what actually gets written to reports/timesheet/
-      // allowances below, since those tables have no per-trip dimension.
-      combined = await computePayroll({
-        odoStart: 0,
-        odoEnd: totalKm,
-        employeeIds: unionEmployeeIds,
-        objects: newMergedObjects,
-        selfTransportIds: unionSelfTransportIds,
-        excludedKm: totalExcludedKm,
-        foremanTgId,
-      });
-      newMergedObjectsForNotify = newMergedObjects;
-
       await writeOdometerDay(
         { date, carId, foremanTgId, startValue: odoStart, startPhoto: odoStartPhoto, endValue: odoEnd, endPhoto: odoEndPhoto },
         tx,
@@ -795,178 +989,12 @@ roadTimesheetRouter.post("/", async (req, res) => {
           .where(and(eq(schema.odometerDays.date, date), eq(schema.odometerDays.carId, legPrevious.carId)));
       }
 
-      const currentObjectIds = new Set(newMergedObjects.map((o) => o.objectId));
-
-      for (const obj of newMergedObjects) {
-        if (obj.works?.length) {
-          await writeReports(
-            obj.works.map((w) => ({
-              date,
-              objectId: obj.objectId,
-              foremanTgId,
-              workId: w.workId,
-              workName: w.workName,
-              volume: w.volume,
-              volumeStatus: w.volume === undefined || w.volume === "" || w.volume === "?" ? "НЕ_ЗАПОВНЕНО" : "ЗАПОВНЕНО",
-              dayStatus: "ЗДАНО",
-            })),
-            tx,
-          );
-        }
-
-        const hoursByEmployee = combined.perObjectHours.find((h) => h.objectId === obj.objectId)?.hoursByEmployee ?? new Map();
-        if (hoursByEmployee.size) {
-          await writeTimesheetRows(
-            [...hoursByEmployee.entries()].map(([employeeId, v]) => ({
-              date,
-              objectId: obj.objectId,
-              employeeId,
-              employeeName: v.name,
-              hours: Math.round((v.ms / 3_600_000) * 100) / 100,
-              source: "ROAD",
-            })),
-            tx,
-          );
-        }
-
-        const allVolumesFilled = (obj.works ?? []).every((w) => w.volume !== undefined && w.volume !== "" && w.volume !== "?");
-        await writeDayStatus(
-          {
-            date,
-            objectId: obj.objectId,
-            foremanTgId,
-            status: "ЗДАНО",
-            hasReports: (obj.works ?? []).length > 0,
-            hasReportsVolumeOk: allVolumesFilled,
-            hasTimesheet: hoursByEmployee.size > 0,
-            hasRoad: true,
-            hasOdoStart: true,
-            hasOdoEnd: true,
-          },
-          tx,
-        );
-      }
-
-      // Reconcile at the day level: anything reported by ANY leg before this
-      // write but missing from the new day-total gets soft-cancelled (status
-      // set to СКАСОВАНО / hours zeroed), never physically deleted, so
-      // admin-side views can still see what happened but stop counting it --
-      // editing-and-resubmitting must not leave stale "ghost" data behind.
-      for (const prevObj of oldMergedObjects) {
-        const currentObj = newMergedObjects.find((o) => o.objectId === prevObj.objectId);
-        const currentWorkIds = new Set((currentObj?.works ?? []).map((w) => w.workId));
-        const removedWorks = (prevObj.works ?? []).filter((w) => !currentWorkIds.has(w.workId));
-
-        if (removedWorks.length) {
-          await writeReports(
-            removedWorks.map((w) => ({
-              date,
-              objectId: prevObj.objectId,
-              foremanTgId,
-              workId: w.workId,
-              workName: w.workName,
-              volume: w.volume,
-              volumeStatus: "НЕ_ЗАПОВНЕНО",
-              dayStatus: "СКАСОВАНО",
-            })),
-            tx,
-          );
-        }
-
-        if (!currentObjectIds.has(prevObj.objectId)) {
-          const prevEmployeeIds = [...new Set((prevObj.sessions ?? []).map((s) => s.employeeId))];
-          if (prevEmployeeIds.length) {
-            await writeTimesheetRows(
-              prevEmployeeIds.map((employeeId) => ({
-                date,
-                objectId: prevObj.objectId,
-                employeeId,
-                employeeName: combined.employeeById.get(employeeId)?.name ?? employeeId,
-                hours: 0,
-                source: "ROAD_СКАСОВАНО",
-              })),
-              tx,
-            );
-          }
-          await writeDayStatus({ date, objectId: prevObj.objectId, foremanTgId, status: "СКАСОВАНО" }, tx);
-        } else {
-          // The object itself is still in the day, but an employee who had
-          // hours there before might have been dropped from it in this
-          // resubmit (their session removed while others at the same object
-          // stayed) -- the main write loop above only writes hours for
-          // employees CURRENTLY at the object, so a removed one's old row
-          // would otherwise never get zeroed and would keep inflating their
-          // pay/hours forever.
-          const currentHoursByEmployee = combined.perObjectHours.find((h) => h.objectId === prevObj.objectId)?.hoursByEmployee ?? new Map();
-          const prevEmployeeIds = new Set((prevObj.sessions ?? []).map((s) => s.employeeId));
-          const droppedEmployeeIds = [...prevEmployeeIds].filter((id) => !currentHoursByEmployee.has(id));
-          if (droppedEmployeeIds.length) {
-            await writeTimesheetRows(
-              droppedEmployeeIds.map((employeeId) => ({
-                date,
-                objectId: prevObj.objectId,
-                employeeId,
-                employeeName: combined.employeeById.get(employeeId)?.name ?? employeeId,
-                hours: 0,
-                source: "ROAD_СКАСОВАНО",
-              })),
-              tx,
-            );
-          }
-        }
-      }
-
-      // Road allowance: ONE combined amount for the whole day (not per leg),
-      // based on the day's total km across every car used, split evenly
-      // among everyone who rode along in ANY leg today (not just those who
-      // worked) -- matches the bot's single-allowance-per-day model.
-      // Anyone who showed up under their own transport doesn't get a travel
-      // allowance row at all (not even a zero one) -- they still get their
-      // work pay via the reports/timesheet writes above.
-      const allowanceEligibleIds = unionEmployeeIds.filter((id) => !unionSelfTransportIds.includes(id));
-      if (allowanceEligibleIds.length) {
-        await writeAllowanceRows(
-          allowanceEligibleIds.map((employeeId) => ({
-            date,
-            foremanTgId,
-            type: "ROAD_TRIP",
-            employeeId,
-            employeeName: combined.employeeById.get(employeeId)?.name ?? employeeId,
-            objectId: "ROAD",
-            amount: combined.roadAllowance.perPerson,
-            meta: JSON.stringify({ km: totalKm, excludedKm: totalExcludedKm, billableKm: combined.billableKm, tripClass: combined.tripClass }),
-            dayStatus: "ЧЕРНЕТКА",
-          })),
-          tx,
-        );
-      }
-
-      // Anyone who WAS allowance-eligible before this write (rode along in an
-      // earlier leg, not self-transport) but isn't anymore -- dropped from
-      // the day entirely, or reclassified as self-transport -- keeps a
-      // stale, nonzero ROAD_TRIP row otherwise: the write above only ever
-      // touches CURRENTLY eligible people, the same gap the reports/
-      // timesheet reconciliation above this already closes for volumes/hours.
-      const oldUnionEmployeeIds = [...new Set(allTripsBefore.flatMap((t) => t.employeeIds))];
-      const oldUnionSelfTransportIds = [...new Set(allTripsBefore.flatMap((t) => t.selfTransportIds ?? []))];
-      const oldAllowanceEligibleIds = oldUnionEmployeeIds.filter((id) => !oldUnionSelfTransportIds.includes(id));
-      const droppedFromAllowance = oldAllowanceEligibleIds.filter((id) => !allowanceEligibleIds.includes(id));
-      if (droppedFromAllowance.length) {
-        await writeAllowanceRows(
-          droppedFromAllowance.map((employeeId) => ({
-            date,
-            foremanTgId,
-            type: "ROAD_TRIP",
-            employeeId,
-            employeeName: combined.employeeById.get(employeeId)?.name ?? employeeId,
-            objectId: "ROAD",
-            amount: 0,
-            meta: JSON.stringify({ km: totalKm, excludedKm: totalExcludedKm, billableKm: combined.billableKm, tripClass: combined.tripClass }),
-            dayStatus: "СКАСОВАНО",
-          })),
-          tx,
-        );
-      }
+      const { combined: dayCombined, totalKm: dayKm, totalExcludedKm: dayExcludedKm, newMergedObjects } =
+        await reconcileDayTotals(tx, { date, foremanTgId, allTripsBefore, tripsAfter });
+      combined = dayCombined;
+      totalKm = dayKm;
+      totalExcludedKm = dayExcludedKm;
+      newMergedObjectsForNotify = newMergedObjects;
 
       await writeEvent(
         {
@@ -2102,6 +2130,110 @@ roadTimesheetRouter.post("/pending/return", async (req, res) => {
  * should never have existed (a test run, a duplicate, the wrong foreman).
  * It cannot be undone, so the client asks twice.
  */
+/**
+ * POST /api/road-timesheet/trip/delete — { date, tripSeq, foremanTgId? }
+ *
+ * Прибирає ОДНУ поїздку дня. Доти єдиним способом позбутися зайвої була
+ * `/pending/delete`, тобто знесення всього дня — а зайва поїздка зʼявляється
+ * саме тоді, коли решта дня правильна й переробляти її нема за чим.
+ *
+ * Задвоєна поїздка не просто зайва картка: mergeObjects складає сесії та
+ * обсяги всіх поїздок дня, тож дубль того самого обʼєкта подвоює і години
+ * людей, і фонд обʼєкта. Тому видалення — це перерахунок дня (спільний
+ * reconcileDayTotals), а не DELETE рядка.
+ *
+ * Бригадир видаляє свою поїздку, адмін — будь-чию (`foremanTgId` у тілі).
+ * Затверджену не видаляє ніхто: вона вже в БУХЗВІТі. Останню поїздку дня теж
+ * ні — «день не потрібен зовсім» це інша дія, вона в адміна.
+ */
+roadTimesheetRouter.post("/trip/delete", async (req, res) => {
+  const { date, tripSeq, foremanTgId: bodyForemanTgId } = req.body as {
+    date: string;
+    tripSeq: number;
+    foremanTgId?: number;
+  };
+  if (!date || !Number.isFinite(tripSeq)) {
+    res.status(400).json({ error: "date and tripSeq are required" });
+    return;
+  }
+  // Чужий день чіпає тільки адмін; бригадиру foremanTgId з тіла не вірять.
+  const isAdmin = req.user!.role === "ADMIN";
+  const foremanTgId = isAdmin && bodyForemanTgId ? Number(bodyForemanTgId) : req.user!.tgId;
+
+  try {
+    await withLock(`reserve:${date}`, async (tx) => {
+      const allTripsBefore = await fetchAllTrips(date, foremanTgId, tx);
+      const target = allTripsBefore.find((t) => t.tripSeq === tripSeq);
+      if (!target) throw new ReservationConflictError("Такої поїздки в цьому дні немає");
+      if (target.status === "ЗАТВЕРДЖЕНО") {
+        throw new ReservationConflictError("Затверджену поїздку видалити не можна — спершу поверніть день на редагування");
+      }
+      if (allTripsBefore.length < 2) {
+        throw new ReservationConflictError("Це єдина поїздка дня. Щоб прибрати день цілком, зверніться до адміна");
+      }
+
+      const tripsAfter = allTripsBefore.filter((t) => t.tripSeq !== tripSeq);
+      await reconcileDayTotals(tx, { date, foremanTgId, allTripsBefore, tripsAfter });
+
+      // Одометр авто звільняємо, лише якщо ним не їхала жодна інша поїздка
+      // дня: та сама обережність, що й при зміні авто в межах поїздки.
+      if (target.carId && !tripsAfter.some((t) => t.carId === target.carId)) {
+        await writeOdometerDay({ date, carId: target.carId, foremanTgId }, tx);
+        await tx
+          .delete(schema.odometerDays)
+          .where(and(eq(schema.odometerDays.date, date), eq(schema.odometerDays.carId, target.carId)));
+      }
+
+      // Події цієї поїздки -- усі, а не лише останню: fetchAllTrips бере на
+      // tripSeq найсвіжішу, тож лишена стара повернула б поїздку назад.
+      const rows = await tx
+        .select()
+        .from(schema.events)
+        .where(and(eq(schema.events.date, date), eq(schema.events.foremanTgId, BigInt(foremanTgId)), eq(schema.events.type, "RTS_SAVE")));
+      const doomed = rows.filter((r) => {
+        try {
+          return (JSON.parse(r.payload ?? "{}").tripSeq ?? 0) === tripSeq;
+        } catch {
+          return false;
+        }
+      });
+      if (doomed.length) {
+        await tx.delete(schema.events).where(inArray(schema.events.eventId, doomed.map((r) => r.eventId)));
+      }
+
+      // Слід у журналі: це видалення грошових даних, і за півдня ніхто не
+      // згадає, чому в дні стало на поїздку менше.
+      await writeEvent(
+        {
+          eventId: makeEventId("RTSDEL"),
+          status: "АКТИВНА",
+          date,
+          foremanTgId,
+          type: "RTS_TRIP_DELETE",
+          carId: target.carId ?? "",
+          employeeIds: JSON.stringify(target.employeeIds ?? []),
+          payload: JSON.stringify({
+            tripSeq,
+            deletedBy: req.user!.tgId,
+            odoStart: target.odoStart,
+            odoEnd: target.odoEnd,
+            objects: target.objects,
+          }),
+        },
+        tx,
+      );
+    });
+  } catch (e) {
+    if (e instanceof ReservationConflictError) {
+      res.status(409).json({ error: e.message });
+      return;
+    }
+    throw e;
+  }
+
+  res.json({ ok: true });
+});
+
 roadTimesheetRouter.post("/pending/delete", async (req, res) => {
   if (blockNonAdmin(req, res)) return;
   const { date, foremanTgId } = req.body as { date: string; foremanTgId: number };

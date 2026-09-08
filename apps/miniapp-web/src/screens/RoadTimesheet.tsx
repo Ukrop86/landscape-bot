@@ -1704,6 +1704,46 @@ export function RoadTimesheet({
     );
   }
 
+  /**
+   * Прибрати зайву поїздку дня.
+   *
+   * Питаємо двічі не з обережності заради обережності: сервер перерахує день
+   * без неї, і години з обсягами цієї поїздки зникнуть із нарахувань. Для
+   * дубля це саме те, що треба, для переплутаної -- ні.
+   */
+  async function deleteTrip(trip: SubmittedTrip) {
+    const car = cars.find((c) => c.id === trip.carId)?.name ?? "Поїздка";
+    const km = typeof trip.km === "number" ? `${trip.km} км` : "";
+    if (
+      !(await confirmDialog(
+        `Видалити поїздку ${[car, km].filter(Boolean).join(" · ")}?\n\n` +
+          `Її обʼєкти, роботи й години зникнуть із дня. Решта поїздок лишиться, підсумок перерахується.`,
+      ))
+    ) {
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.post("/api/road-timesheet/trip/delete", { date, tripSeq: trip.tripSeq });
+      setSubmittedTrips((prev) => prev.filter((t) => t.tripSeq !== trip.tripSeq));
+      logChange(`Видалено поїздку #${trip.tripSeq + 1}`);
+      haptic("success");
+      // Підсумок дня рахує сервер -- перечитуємо, а не віднімаємо на око.
+      try {
+        const res = await api.get<SubmittedTodayResponse>(`/api/road-timesheet/submitted-today?date=${date}`);
+        setSubmittedTrips(res.trips);
+        setDayCombined(res.combined);
+      } catch {
+        // Не оновилось -- картка вже прибрана, решту покаже наступний вхід.
+      }
+    } catch (e) {
+      setError((e as Error).message);
+      haptic("error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   // One trip card on the DONE screen. editable=false for an already-approved
   // trip -- no edit button (an approved trip is locked; "Запросити
   // редагування" is the escape hatch for the whole day, not per-trip).
@@ -1803,11 +1843,22 @@ export function RoadTimesheet({
             })}
           </div>
         )}
-        <div style={{ padding: "8px 16px 12px" }}>
+        <div style={{ padding: "8px 16px 12px", display: "flex", gap: 8, flexWrap: "wrap" }}>
           {editable ? (
-            <button className="chip" onClick={() => editTrip(trip)}>
-              ✏️ Редагувати цей виїзд
-            </button>
+            <>
+              <button className="chip" onClick={() => editTrip(trip)}>
+                ✏️ Редагувати цей виїзд
+              </button>
+              {/* Тільки коли поїздок кілька: прибрати ЄДИНУ означало б
+                  «дня не було», а це не дія бригадира -- сервер таке теж
+                  не пропускає. Зайва ж поїздка не просто зайва картка:
+                  дубль обʼєкта подвоює людям години й фонд. */}
+              {submittedTrips.length > 1 && (
+                <button className="chip" onClick={() => deleteTrip(trip)} style={{ color: "#d70015" }}>
+                  🗑 Видалити цю поїздку
+                </button>
+              )}
+            </>
           ) : (
             <span className="hint">🔒 Затверджено адміністратором</span>
           )}
