@@ -1942,6 +1942,13 @@ async function exportApprovedDayToAccounting(
       roadKm: combined.km,
       roadBillableKm: combined.billableKm,
       roadTripClass: combined.tripClass,
+      // Години з того самого розрахунку, що дав суми: обʼєкт -> людина -> год.
+      hoursByObject: new Map(
+        combined.perObjectHours.map((h) => [
+          h.objectId,
+          new Map([...h.hoursByEmployee].map(([id, v]) => [id, Math.round((v.ms / 3_600_000) * 100) / 100])),
+        ]),
+      ),
       unionEmployeeIds: unionEmployeeIds.filter((id) => !unionSelfTransportIds.includes(id)),
       employeeNameById,
       tariffByWorkId,

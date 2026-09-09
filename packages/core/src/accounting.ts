@@ -13,7 +13,11 @@ export const ACCOUNTING_SHEET = "БУХЗВІТ";
  * the one-time import below and so maintenance can still clear a leftover tab.
  */
 export const ACCOUNTING_META_SHEET = "БУХЗВІТ_META";
-const ACCOUNTING_HEADERS = ["№", "Дата", "Працівник", "Об'єкт", "Роботи", "Обсяг робіт", "Нарахування", "Примітки"] as const;
+// Порядок КОЛОНОК тут позиційний, а не по заголовках: appendAccountingReportRows
+// складає масив значень і кладе його в A:Z. Тому нову колонку можна додавати
+// ЛИШЕ В КІНЕЦЬ -- вставлена посередині зсунула б кожен наступний стовпець,
+// а старі рядки в аркуші лишились би зі старим порядком.
+const ACCOUNTING_HEADERS = ["№", "Дата", "Працівник", "Об'єкт", "Роботи", "Обсяг робіт", "Нарахування", "Примітки", "Години"] as const;
 
 function money(n: number) {
   return Math.round(Number(n || 0) * 100) / 100;
@@ -88,6 +92,8 @@ export type AccountingRow = {
   volume: string;
   amount: number;
   foremanName: string;
+  /** Години людини, віднесені до цього рядка (див. buildAccountingRows). */
+  hours: number;
 };
 
 /**
@@ -120,8 +126,11 @@ export function buildAccountingRows(params: {
   employeeNameById: Map<string, string>;
   tariffByWorkId: Map<string, number>;
   unitByWorkId: Map<string, string>;
+  /** Години на обʼєкті: objectId -> employeeId -> годин. З того самого
+   *  computePayroll, що дав суми, щоб години й гроші не розходились. */
+  hoursByObject?: Map<string, Map<string, number>>;
 }): AccountingRow[] {
-  const { date, foremanName, objects, salaryPacks, roadAllowancePerPerson, roadKm, roadBillableKm, roadTripClass, unionEmployeeIds, employeeNameById, tariffByWorkId, unitByWorkId } = params;
+  const { date, foremanName, objects, salaryPacks, roadAllowancePerPerson, roadKm, roadBillableKm, roadTripClass, unionEmployeeIds, employeeNameById, tariffByWorkId, unitByWorkId, hoursByObject } = params;
   const objectsById = new Map(objects.map((o) => [o.objectId, o]));
   const out: AccountingRow[] = [];
 
@@ -150,6 +159,13 @@ export function buildAccountingRows(params: {
       const totalValue = values.reduce((a, v) => a + v, 0);
       const shares = totalValue > 0 ? values : pool.map(() => 1);
       const amounts = splitMoneyByShares(row.pay, shares);
+      // Години діляться ТИМИ САМИМИ частками, що й гроші, а не повторюються
+      // в кожному рядку. Одна людина на одному обʼєкті дає стільки рядків,
+      // скільки в неї робіт, тож повторене число бухгалтер просумував би й
+      // отримав години × кількість робіт. Так сума колонки по людині за день
+      // дорівнює її реальним годинам -- цифру можна складати не думаючи.
+      const personHours = hoursByObject?.get(pack.objectId)?.get(row.employeeId) ?? 0;
+      const hoursSplit = personHours > 0 ? splitMoneyByShares(personHours, shares) : pool.map(() => 0);
 
       pool.forEach((w, i) => {
         const amount = amounts[i];
@@ -162,6 +178,7 @@ export function buildAccountingRows(params: {
           volume: formatVolume(w),
           amount,
           foremanName,
+          hours: hoursSplit[i],
         });
       });
     }
@@ -190,6 +207,9 @@ export function buildAccountingRows(params: {
         volume,
         amount: money(roadAllowancePerPerson),
         foremanName,
+        // Доплата за виїзд -- не робота, годин у ній немає. Нуль, а не
+        // порожнє: колонка числова, і текст у ній ламає суму.
+        hours: 0,
       });
     }
   }
@@ -199,7 +219,7 @@ export function buildAccountingRows(params: {
 
 async function loadAccountingSheet() {
   await ensureSheet(ACCOUNTING_SHEET, ACCOUNTING_HEADERS);
-  return loadSheet(ACCOUNTING_SHEET, "A:H");
+  return loadSheet(ACCOUNTING_SHEET, "A:I");
 }
 
 async function hasAccountingRowsForKey(key: string) {
@@ -268,7 +288,17 @@ async function appendAccountingReportRows(rows: AccountingRow[]) {
 
   await appendRows(
     ACCOUNTING_SHEET,
-    rows.map((row) => [nextNo++, row.date, row.employeeName, row.objectName, row.workName, row.volume, row.amount, row.foremanName]),
+    rows.map((row) => [
+      nextNo++,
+      row.date,
+      row.employeeName,
+      row.objectName,
+      row.workName,
+      row.volume,
+      row.amount,
+      row.foremanName,
+      row.hours,
+    ]),
   );
 }
 
