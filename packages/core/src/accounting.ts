@@ -16,8 +16,9 @@ export const ACCOUNTING_META_SHEET = "БУХЗВІТ_META";
 // Порядок КОЛОНОК тут позиційний, а не по заголовках: appendAccountingReportRows
 // складає масив значень і кладе його в A:Z. Тому нову колонку можна додавати
 // ЛИШЕ В КІНЕЦЬ -- вставлена посередині зсунула б кожен наступний стовпець,
-// а старі рядки в аркуші лишились би зі старим порядком.
-const ACCOUNTING_HEADERS = ["№", "Дата", "Працівник", "Об'єкт", "Роботи", "Обсяг робіт", "Нарахування", "Примітки", "Години"] as const;
+// а старі рядки в аркуші лишились би зі старим порядком. Саме тому години
+// приходять окремим РЯДКОМ, а не дев'ятою колонкою.
+const ACCOUNTING_HEADERS = ["№", "Дата", "Працівник", "Об'єкт", "Роботи", "Обсяг робіт", "Нарахування", "Примітки"] as const;
 
 function money(n: number) {
   return Math.round(Number(n || 0) * 100) / 100;
@@ -92,8 +93,6 @@ export type AccountingRow = {
   volume: string;
   amount: number;
   foremanName: string;
-  /** Години людини, віднесені до цього рядка (див. buildAccountingRows). */
-  hours: number;
 };
 
 /**
@@ -159,13 +158,6 @@ export function buildAccountingRows(params: {
       const totalValue = values.reduce((a, v) => a + v, 0);
       const shares = totalValue > 0 ? values : pool.map(() => 1);
       const amounts = splitMoneyByShares(row.pay, shares);
-      // Години діляться ТИМИ САМИМИ частками, що й гроші, а не повторюються
-      // в кожному рядку. Одна людина на одному обʼєкті дає стільки рядків,
-      // скільки в неї робіт, тож повторене число бухгалтер просумував би й
-      // отримав години × кількість робіт. Так сума колонки по людині за день
-      // дорівнює її реальним годинам -- цифру можна складати не думаючи.
-      const personHours = hoursByObject?.get(pack.objectId)?.get(row.employeeId) ?? 0;
-      const hoursSplit = personHours > 0 ? splitMoneyByShares(personHours, shares) : pool.map(() => 0);
 
       pool.forEach((w, i) => {
         const amount = amounts[i];
@@ -178,7 +170,6 @@ export function buildAccountingRows(params: {
           volume: formatVolume(w),
           amount,
           foremanName,
-          hours: hoursSplit[i],
         });
       });
     }
@@ -197,6 +188,42 @@ export function buildAccountingRows(params: {
   // експортувався». Нуль у грошах — це теж результат, і його видно.
   // Умова тепер на ЗМІСТ, а не на суму: якщо ні пробігу, ні класу немає,
   // показувати нічого й рядок не з'являється.
+  // Години -- окремим рядком на людину за день, тим самим прийомом, що й
+  // доплата за виїзд. Колонкою їх зробити не можна: колонки тут позиційні, а
+  // рядок = людина × робота, тож те саме число повторилось би стільки разів,
+  // скільки в людини робіт, і будь-яка сума по колонці була б неправильною.
+  //
+  // Один рядок на ДЕНЬ, а не на обʼєкт: бухгалтеру години потрібні для табеля,
+  // тобто «скільки людина відпрацювала». Розбивка по обʼєктах уже є вище, у
+  // рядках робіт.
+  //
+  // Годин може не бути в грошових рядках зовсім: людина, що не дотягла до
+  // MIN_PAID_HOURS, отримує 0 грн і в БУХЗВІТ не потрапляє. Тут вона
+  // зʼявиться зі своїми реальними хвилинами -- саме так помилку й видно.
+  if (hoursByObject?.size) {
+    const totalByEmployee = new Map<string, number>();
+    for (const byEmployee of hoursByObject.values()) {
+      for (const [employeeId, hours] of byEmployee) {
+        if (!(hours > 0)) continue;
+        totalByEmployee.set(employeeId, (totalByEmployee.get(employeeId) ?? 0) + hours);
+      }
+    }
+    for (const [employeeId, hours] of totalByEmployee) {
+      out.push({
+        date,
+        employeeName: employeeNameById.get(employeeId) ?? employeeId,
+        objectName: "—",
+        workName: "Відпрацьовано годин",
+        // Число, а не «7.96 год»: відфільтрувавши колонку «Роботи» по цій
+        // назві, бухгалтер має змогу просто просумувати обсяг. Текст із
+        // одиницею читався б краще і не сумувався б зовсім.
+        volume: String(Math.round(hours * 100) / 100),
+        amount: 0,
+        foremanName,
+      });
+    }
+  }
+
   if (roadAllowancePerPerson > 0 || volume) {
     for (const empId of unionEmployeeIds) {
       out.push({
@@ -207,9 +234,6 @@ export function buildAccountingRows(params: {
         volume,
         amount: money(roadAllowancePerPerson),
         foremanName,
-        // Доплата за виїзд -- не робота, годин у ній немає. Нуль, а не
-        // порожнє: колонка числова, і текст у ній ламає суму.
-        hours: 0,
       });
     }
   }
@@ -219,7 +243,7 @@ export function buildAccountingRows(params: {
 
 async function loadAccountingSheet() {
   await ensureSheet(ACCOUNTING_SHEET, ACCOUNTING_HEADERS);
-  return loadSheet(ACCOUNTING_SHEET, "A:I");
+  return loadSheet(ACCOUNTING_SHEET, "A:H");
 }
 
 async function hasAccountingRowsForKey(key: string) {
@@ -288,17 +312,7 @@ async function appendAccountingReportRows(rows: AccountingRow[]) {
 
   await appendRows(
     ACCOUNTING_SHEET,
-    rows.map((row) => [
-      nextNo++,
-      row.date,
-      row.employeeName,
-      row.objectName,
-      row.workName,
-      row.volume,
-      row.amount,
-      row.foremanName,
-      row.hours,
-    ]),
+    rows.map((row) => [nextNo++, row.date, row.employeeName, row.objectName, row.workName, row.volume, row.amount, row.foremanName]),
   );
 }
 
